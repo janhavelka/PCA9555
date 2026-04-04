@@ -1,0 +1,46 @@
+{
+  "name": "PCA9555",
+  "version": "1.0.0",
+  "description": "Production-grade PCA9555 16-bit I/O expander driver.",
+  "keywords": [
+    "pca9555",
+    "io-expander",
+    "gpio",
+    "i2c",
+    "esp32",
+    "arduino",
+    "platformio"
+  ],
+  "authors": [
+    {
+      "name": "Thymos Solution s.r.o",
+      "email": "info@thymos.cz",
+      "url": "https://www.thymos.cz"
+    },
+    {
+      "name": "Jan Havelka",
+      "email": "info@thymos.cz",
+      "url": "https://www.thymos.cz",
+      "maintainer": true
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/janhavelka/PCA9555.git"
+  },
+  "license": "MIT",
+  "homepage": "https://www.thymos.cz",
+  "frameworks": [
+    "arduino"
+  ],
+  "platforms": [
+    "espressif32"
+  ],
+  "headers": [
+    "PCA9555/PCA9555.h"
+  ],
+  "build": {
+    "includeDir": "include",
+    "srcDir": "src"
+  }
+}

@@ -3,13 +3,17 @@
 /// @note This is an EXAMPLE, not part of the library
 
 #include <Arduino.h>
+#include <cctype>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 #include "examples/common/Log.h"
 #include "examples/common/BoardConfig.h"
 #include "examples/common/BusDiag.h"
+#include "examples/common/CliShell.h"
 #include "examples/common/I2cTransport.h"
 #include "examples/common/I2cScanner.h"
-#include "examples/common/CommandHandler.h"
 
 #include "PCA9555/PCA9555.h"
 
@@ -96,6 +100,115 @@ const char* onOffColor(bool on) {
   return on ? LOG_COLOR_GREEN : LOG_COLOR_YELLOW;
 }
 
+const char* skipWhitespace(const char* text) {
+  while (*text != '\0' && std::isspace(static_cast<unsigned char>(*text)) != 0) {
+    ++text;
+  }
+  return text;
+}
+
+bool hasTrailingArgs(const char* text) {
+  return *skipWhitespace(text) != '\0';
+}
+
+bool tokenEqualsIgnoreCase(const char* token, size_t len, const char* expected) {
+  if (std::strlen(expected) != len) {
+    return false;
+  }
+
+  for (size_t i = 0; i < len; ++i) {
+    if (std::tolower(static_cast<unsigned char>(token[i])) !=
+        std::tolower(static_cast<unsigned char>(expected[i]))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool parseLongToken(const char*& text, long& value) {
+  text = skipWhitespace(text);
+  if (*text == '\0') {
+    return false;
+  }
+
+  errno = 0;
+  char* end = nullptr;
+  const long parsed = strtol(text, &end, 0);
+  if (end == text || errno == ERANGE) {
+    return false;
+  }
+
+  text = skipWhitespace(end);
+  value = parsed;
+  return true;
+}
+
+bool parsePinToken(const char*& text, PCA9555::Pin& pin) {
+  long value = 0;
+  if (!parseLongToken(text, value) || value < 0 || value >= PCA9555::cmd::TOTAL_PINS) {
+    return false;
+  }
+
+  pin = static_cast<PCA9555::Pin>(value);
+  return true;
+}
+
+bool parsePortToken(const char*& text, PCA9555::Port& port) {
+  long value = 0;
+  if (!parseLongToken(text, value) || (value != 0 && value != 1)) {
+    return false;
+  }
+
+  port = (value == 0) ? PCA9555::Port::PORT_0 : PCA9555::Port::PORT_1;
+  return true;
+}
+
+bool parseByteToken(const char*& text, uint8_t& value) {
+  long parsed = 0;
+  if (!parseLongToken(text, parsed) || parsed < 0 || parsed > 0xFFL) {
+    return false;
+  }
+
+  value = static_cast<uint8_t>(parsed);
+  return true;
+}
+
+bool parseBinaryToken(const char*& text, bool& value) {
+  long parsed = 0;
+  if (!parseLongToken(text, parsed) || (parsed != 0 && parsed != 1)) {
+    return false;
+  }
+
+  value = (parsed != 0);
+  return true;
+}
+
+bool parseDirectionToken(const char*& text, bool& input) {
+  text = skipWhitespace(text);
+  if (*text == '\0') {
+    return false;
+  }
+
+  const char* start = text;
+  while (*text != '\0' && std::isspace(static_cast<unsigned char>(*text)) == 0) {
+    ++text;
+  }
+  const size_t len = static_cast<size_t>(text - start);
+  text = skipWhitespace(text);
+
+  if (tokenEqualsIgnoreCase(start, len, "in")) {
+    input = true;
+    return true;
+  }
+  if (tokenEqualsIgnoreCase(start, len, "out")) {
+    input = false;
+    return true;
+  }
+
+  return false;
+}
+
 void printStatus(const PCA9555::Status& st) {
   Serial.printf("  Status: %s%s%s (code=%u, detail=%ld)\n",
                 LOG_COLOR_RESULT(st.ok()),
@@ -119,7 +232,7 @@ void printDriverHealth() {
   const uint32_t now = millis();
   const uint32_t totalOk = device.totalSuccess();
   const uint32_t totalFail = device.totalFailures();
-  const uint32_t total = totalOk + totalFail;
+  const uint64_t total = static_cast<uint64_t>(totalOk) + static_cast<uint64_t>(totalFail);
   const float successRate = (total > 0U)
                                 ? (100.0f * static_cast<float>(totalOk) / static_cast<float>(total))
                                 : 0.0f;
@@ -202,6 +315,41 @@ void printVersionInfo() {
   Serial.printf("  PCA9555 library full: %s\n", PCA9555::VERSION_FULL);
   Serial.printf("  PCA9555 library build: %s\n", PCA9555::BUILD_TIMESTAMP);
   Serial.printf("  PCA9555 library commit: %s (%s)\n", PCA9555::GIT_COMMIT, PCA9555::GIT_STATUS);
+}
+
+void printSettings() {
+  const PCA9555::Config& cfg = device.getConfig();
+
+  Serial.println("=== Settings Snapshot ===");
+  Serial.printf("  Initialized: %s%s%s\n",
+                onOffColor(device.isInitialized()),
+                device.isInitialized() ? "YES" : "NO",
+                LOG_COLOR_RESET);
+  Serial.printf("  State: %s%s%s\n",
+                stateColor(device.state(), device.isOnline(), device.consecutiveFailures()),
+                stateToStr(device.state()),
+                LOG_COLOR_RESET);
+  Serial.printf("  I2C address: 0x%02X\n", cfg.i2cAddress);
+  Serial.printf("  Timeout: %lu ms\n", static_cast<unsigned long>(cfg.i2cTimeoutMs));
+  Serial.printf("  Offline threshold: %u\n", cfg.offlineThreshold);
+  Serial.printf("  Require POR config defaults: %s%s%s\n",
+                onOffColor(cfg.requireConfigPortDefaults),
+                cfg.requireConfigPortDefaults ? "YES" : "NO",
+                LOG_COLOR_RESET);
+  Serial.printf("  Interrupt errata workaround: %s%s%s\n",
+                onOffColor(cfg.applyInterruptErrata),
+                cfg.applyInterruptErrata ? "ENABLED" : "DISABLED",
+                LOG_COLOR_RESET);
+  Serial.printf("  nowMs hook: %s%s%s\n",
+                onOffColor(cfg.nowMs != nullptr),
+                (cfg.nowMs != nullptr) ? "SET" : "NONE",
+                LOG_COLOR_RESET);
+  printPortBinary("Desired Out P0", cfg.outputPort0);
+  printPortBinary("Desired Out P1", cfg.outputPort1);
+  printPortBinary("Desired Cfg P0", cfg.configPort0);
+  printPortBinary("Desired Cfg P1", cfg.configPort1);
+  printPortBinary("Desired Pol P0", cfg.polarityPort0);
+  printPortBinary("Desired Pol P1", cfg.polarityPort1);
 }
 
 // ============================================================================
@@ -292,154 +440,383 @@ void cmdReadPolarity() {
   printPortBinary("Port 1", data.port1);
 }
 
+void cmdReadOutputPort(const String& args) {
+  const char* cursor = args.c_str();
+  PCA9555::Port port = PCA9555::Port::PORT_0;
+  if (!parsePortToken(cursor, port) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: read output port <0|1>");
+    return;
+  }
+
+  uint8_t value = 0;
+  PCA9555::Status st = device.readOutput(port, value);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  Serial.printf("=== Output Port %u Latch ===\n", static_cast<unsigned>(port));
+  printPortBinary("Value", value);
+}
+
+void cmdReadConfigPort(const String& args) {
+  const char* cursor = args.c_str();
+  PCA9555::Port port = PCA9555::Port::PORT_0;
+  if (!parsePortToken(cursor, port) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: read config port <0|1>");
+    return;
+  }
+
+  uint8_t value = 0;
+  PCA9555::Status st = device.getPortConfiguration(port, value);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  Serial.printf("=== Config Port %u (1=input, 0=output) ===\n", static_cast<unsigned>(port));
+  printPortBinary("Value", value);
+}
+
+void cmdReadPolarityPort(const String& args) {
+  const char* cursor = args.c_str();
+  PCA9555::Port port = PCA9555::Port::PORT_0;
+  if (!parsePortToken(cursor, port) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: read polarity port <0|1>");
+    return;
+  }
+
+  uint8_t value = 0;
+  PCA9555::Status st = device.getPortPolarity(port, value);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  Serial.printf("=== Polarity Port %u (1=inverted) ===\n", static_cast<unsigned>(port));
+  printPortBinary("Value", value);
+}
+
 // ============================================================================
 // Pin/Port Write Commands
 // ============================================================================
 
 void cmdWritePin(const String& args) {
-  const int pin = args.toInt();
-  const int spaceIdx = args.indexOf(' ');
-  if (spaceIdx < 0 || pin < 0 || pin > 15) {
+  const char* cursor = args.c_str();
+  PCA9555::Pin pin = 0;
+  bool high = false;
+  if (!parsePinToken(cursor, pin) ||
+      !parseBinaryToken(cursor, high) ||
+      hasTrailingArgs(cursor)) {
     LOGE("Usage: wpin <pin 0-15> <0|1>");
     return;
   }
-  const int val = args.substring(spaceIdx + 1).toInt();
-  if (val != 0 && val != 1) {
-    LOGE("Usage: wpin <pin 0-15> <0|1>");
-    return;
-  }
-  PCA9555::Status st = device.writePin(static_cast<PCA9555::Pin>(pin), val != 0);
+  PCA9555::Status st = device.writePin(pin, high);
   if (!st.ok()) {
     printStatus(st);
     return;
   }
-  LOGI("Pin %d set to %d", pin, val);
+  LOGI("Pin %u set to %d", static_cast<unsigned>(pin), high ? 1 : 0);
 }
 
 void cmdReadPin(const String& args) {
-  const int pin = args.toInt();
-  if (pin < 0 || pin > 15) {
+  const char* cursor = args.c_str();
+  PCA9555::Pin pin = 0;
+  if (!parsePinToken(cursor, pin) || hasTrailingArgs(cursor)) {
     LOGE("Usage: rpin <pin 0-15>");
     return;
   }
   bool state = false;
-  PCA9555::Status st = device.readPin(static_cast<PCA9555::Pin>(pin), state);
+  PCA9555::Status st = device.readPin(pin, state);
   if (!st.ok()) {
     printStatus(st);
     return;
   }
-  LOGI("Pin %d = %d", pin, state ? 1 : 0);
+  LOGI("Pin %u input = %d", static_cast<unsigned>(pin), state ? 1 : 0);
+}
+
+void cmdReadInputPort(const String& args) {
+  const char* cursor = args.c_str();
+  PCA9555::Port port = PCA9555::Port::PORT_0;
+  if (!parsePortToken(cursor, port) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: rin <port 0|1>");
+    return;
+  }
+
+  uint8_t value = 0;
+  PCA9555::Status st = device.readInput(port, value);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  Serial.printf("=== Input Port %u ===\n", static_cast<unsigned>(port));
+  printPortBinary("Value", value);
+}
+
+void cmdReadOutputPin(const String& args) {
+  const char* cursor = args.c_str();
+  PCA9555::Pin pin = 0;
+  if (!parsePinToken(cursor, pin) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: rout <pin 0-15>");
+    return;
+  }
+
+  bool high = false;
+  PCA9555::Status st = device.readOutputPin(pin, high);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  LOGI("Output latch pin %u = %d", static_cast<unsigned>(pin), high ? 1 : 0);
+}
+
+void cmdReadDirectionPin(const String& args) {
+  const char* cursor = args.c_str();
+  PCA9555::Pin pin = 0;
+  if (!parsePinToken(cursor, pin) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: rdir <pin 0-15>");
+    return;
+  }
+
+  bool input = false;
+  PCA9555::Status st = device.getPinDirection(pin, input);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  LOGI("Pin %u direction = %s", static_cast<unsigned>(pin), input ? "INPUT" : "OUTPUT");
+}
+
+void cmdReadPolarityPin(const String& args) {
+  const char* cursor = args.c_str();
+  PCA9555::Pin pin = 0;
+  if (!parsePinToken(cursor, pin) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: rpol <pin 0-15>");
+    return;
+  }
+
+  bool inverted = false;
+  PCA9555::Status st = device.getPinPolarity(pin, inverted);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  LOGI("Pin %u polarity = %s", static_cast<unsigned>(pin), inverted ? "INVERTED" : "NORMAL");
+}
+
+void cmdPinInfo(const String& args) {
+  const char* cursor = args.c_str();
+  PCA9555::Pin pin = 0;
+  if (!parsePinToken(cursor, pin) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: pininfo <pin 0-15>");
+    return;
+  }
+
+  bool inputState = false;
+  bool outputHigh = false;
+  bool directionInput = false;
+  bool polarityInverted = false;
+
+  PCA9555::Status st = device.readPin(pin, inputState);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.readOutputPin(pin, outputHigh);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.getPinDirection(pin, directionInput);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.getPinPolarity(pin, polarityInverted);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  Serial.printf("=== Pin %u ===\n", static_cast<unsigned>(pin));
+  Serial.printf("  Actual level: %d\n", inputState ? 1 : 0);
+  Serial.printf("  Output latch: %d\n", outputHigh ? 1 : 0);
+  Serial.printf("  Direction: %s\n", directionInput ? "INPUT" : "OUTPUT");
+  Serial.printf("  Polarity: %s\n", polarityInverted ? "INVERTED" : "NORMAL");
+}
+
+void cmdPins() {
+  PCA9555::PortData inputs;
+  PCA9555::PortData outputs;
+  PCA9555::PortData config;
+  PCA9555::PortData polarity;
+
+  PCA9555::Status st = device.readInputs(inputs);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.readOutputs(outputs);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.getConfiguration(config);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.getPolarity(polarity);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  Serial.println("=== Pin Summary ===");
+  Serial.println("  Pin  In  Out  Dir  Pol");
+  for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
+    const bool port1 = pin >= PCA9555::cmd::PINS_PER_PORT;
+    const uint8_t shift = static_cast<uint8_t>(pin % PCA9555::cmd::PINS_PER_PORT);
+    const uint8_t inputPort = port1 ? inputs.port1 : inputs.port0;
+    const uint8_t outputPort = port1 ? outputs.port1 : outputs.port0;
+    const uint8_t configPort = port1 ? config.port1 : config.port0;
+    const uint8_t polarityPort = port1 ? polarity.port1 : polarity.port0;
+    const bool inputLevel = ((inputPort >> shift) & 0x01U) != 0U;
+    const bool outputLevel = ((outputPort >> shift) & 0x01U) != 0U;
+    const bool inputDir = ((configPort >> shift) & 0x01U) != 0U;
+    const bool inverted = ((polarityPort >> shift) & 0x01U) != 0U;
+
+    Serial.printf("  P%02u   %d   %d   %-3s  %s\n",
+                  static_cast<unsigned>(pin),
+                  inputLevel ? 1 : 0,
+                  outputLevel ? 1 : 0,
+                  inputDir ? "IN" : "OUT",
+                  inverted ? "INV" : "NOR");
+  }
 }
 
 void cmdTogglePin(const String& args) {
-  const int pin = args.toInt();
-  if (pin < 0 || pin > 15) {
+  const char* cursor = args.c_str();
+  PCA9555::Pin pin = 0;
+  if (!parsePinToken(cursor, pin) || hasTrailingArgs(cursor)) {
     LOGE("Usage: toggle <pin 0-15>");
     return;
   }
-  // Read current output state
-  PCA9555::PortData data;
-  PCA9555::Status st = device.readOutputs(data);
+
+  bool currentState = false;
+  PCA9555::Status st = device.readOutputPin(pin, currentState);
   if (!st.ok()) {
     printStatus(st);
     return;
   }
-  const bool isPort1 = (pin >= 8);
-  const uint8_t bit = isPort1 ? (pin - 8) : pin;
-  const uint8_t portVal = isPort1 ? data.port1 : data.port0;
-  const bool currentState = (portVal >> bit) & 1;
-  st = device.writePin(static_cast<PCA9555::Pin>(pin), !currentState);
+
+  st = device.writePin(pin, !currentState);
   if (!st.ok()) {
     printStatus(st);
     return;
   }
-  LOGI("Pin %d toggled: %d -> %d", pin, currentState ? 1 : 0, currentState ? 0 : 1);
+  LOGI("Pin %u toggled: %d -> %d",
+       static_cast<unsigned>(pin),
+       currentState ? 1 : 0,
+       currentState ? 0 : 1);
 }
 
 void cmdSetDirection(const String& args) {
-  const int pin = args.toInt();
-  const int spaceIdx = args.indexOf(' ');
-  if (spaceIdx < 0 || pin < 0 || pin > 15) {
+  const char* cursor = args.c_str();
+  PCA9555::Pin pin = 0;
+  bool input = true;
+  if (!parsePinToken(cursor, pin) ||
+      !parseDirectionToken(cursor, input) ||
+      hasTrailingArgs(cursor)) {
     LOGE("Usage: dir <pin 0-15> <in|out>");
     return;
   }
-  const String dir = args.substring(spaceIdx + 1);
-  bool input = true;
-  if (dir.equalsIgnoreCase("out")) {
-    input = false;
-  } else if (!dir.equalsIgnoreCase("in")) {
-    LOGE("Direction must be 'in' or 'out'");
-    return;
-  }
-  PCA9555::Status st = device.setPinDirection(static_cast<PCA9555::Pin>(pin), input);
+  PCA9555::Status st = device.setPinDirection(pin, input);
   if (!st.ok()) {
     printStatus(st);
     return;
   }
-  LOGI("Pin %d set to %s", pin, input ? "INPUT" : "OUTPUT");
+  LOGI("Pin %u set to %s", static_cast<unsigned>(pin), input ? "INPUT" : "OUTPUT");
 }
 
 void cmdWritePort(const String& args) {
-  const int port = args.toInt();
-  const int spaceIdx = args.indexOf(' ');
-  if (spaceIdx < 0 || (port != 0 && port != 1)) {
+  const char* cursor = args.c_str();
+  PCA9555::Port port = PCA9555::Port::PORT_0;
+  uint8_t value = 0;
+  if (!parsePortToken(cursor, port) ||
+      !parseByteToken(cursor, value) ||
+      hasTrailingArgs(cursor)) {
     LOGE("Usage: wport <0|1> <0x00-0xFF>");
     return;
   }
-  const long val = strtol(args.substring(spaceIdx + 1).c_str(), nullptr, 0);
-  if (val < 0 || val > 255) {
-    LOGE("Value must be 0x00-0xFF");
-    return;
-  }
-  PCA9555::Port p = (port == 0) ? PCA9555::Port::PORT_0 : PCA9555::Port::PORT_1;
-  PCA9555::Status st = device.writeOutput(p, static_cast<uint8_t>(val));
+  PCA9555::Status st = device.writeOutput(port, value);
   if (!st.ok()) {
     printStatus(st);
     return;
   }
-  LOGI("Port %d output set to 0x%02X", port, static_cast<int>(val));
+  LOGI("Port %u output set to 0x%02X", static_cast<unsigned>(port), value);
 }
 
 void cmdSetPortDirection(const String& args) {
-  const int port = args.toInt();
-  const int spaceIdx = args.indexOf(' ');
-  if (spaceIdx < 0 || (port != 0 && port != 1)) {
+  const char* cursor = args.c_str();
+  PCA9555::Port port = PCA9555::Port::PORT_0;
+  uint8_t value = 0;
+  if (!parsePortToken(cursor, port) ||
+      !parseByteToken(cursor, value) ||
+      hasTrailingArgs(cursor)) {
     LOGE("Usage: dport <0|1> <0x00-0xFF> (1=input, 0=output)");
     return;
   }
-  const long val = strtol(args.substring(spaceIdx + 1).c_str(), nullptr, 0);
-  if (val < 0 || val > 255) {
-    LOGE("Value must be 0x00-0xFF");
-    return;
-  }
-  PCA9555::Port p = (port == 0) ? PCA9555::Port::PORT_0 : PCA9555::Port::PORT_1;
-  PCA9555::Status st = device.setPortConfiguration(p, static_cast<uint8_t>(val));
+  PCA9555::Status st = device.setPortConfiguration(port, value);
   if (!st.ok()) {
     printStatus(st);
     return;
   }
-  LOGI("Port %d config set to 0x%02X", port, static_cast<int>(val));
+  LOGI("Port %u config set to 0x%02X", static_cast<unsigned>(port), value);
 }
 
 void cmdSetPortPolarity(const String& args) {
-  const int port = args.toInt();
-  const int spaceIdx = args.indexOf(' ');
-  if (spaceIdx < 0 || (port != 0 && port != 1)) {
+  const char* cursor = args.c_str();
+  PCA9555::Port port = PCA9555::Port::PORT_0;
+  uint8_t value = 0;
+  if (!parsePortToken(cursor, port) ||
+      !parseByteToken(cursor, value) ||
+      hasTrailingArgs(cursor)) {
     LOGE("Usage: wpol <0|1> <0x00-0xFF> (1=inverted)");
     return;
   }
-  const long val = strtol(args.substring(spaceIdx + 1).c_str(), nullptr, 0);
-  if (val < 0 || val > 255) {
-    LOGE("Value must be 0x00-0xFF");
-    return;
-  }
-  PCA9555::Port p = (port == 0) ? PCA9555::Port::PORT_0 : PCA9555::Port::PORT_1;
-  PCA9555::Status st = device.setPortPolarity(p, static_cast<uint8_t>(val));
+  PCA9555::Status st = device.setPortPolarity(port, value);
   if (!st.ok()) {
     printStatus(st);
     return;
   }
-  LOGI("Port %d polarity set to 0x%02X", port, static_cast<int>(val));
+  LOGI("Port %u polarity set to 0x%02X", static_cast<unsigned>(port), value);
+}
+
+void cmdSetPinPolarity(const String& args) {
+  const char* cursor = args.c_str();
+  PCA9555::Pin pin = 0;
+  bool inverted = false;
+  if (!parsePinToken(cursor, pin) ||
+      !parseBinaryToken(cursor, inverted) ||
+      hasTrailingArgs(cursor)) {
+    LOGE("Usage: pol <pin 0-15> <0|1>");
+    return;
+  }
+
+  PCA9555::Status st = device.setPinPolarity(pin, inverted);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  LOGI("Pin %u polarity set to %s",
+       static_cast<unsigned>(pin),
+       inverted ? "INVERTED" : "NORMAL");
 }
 
 // ============================================================================
@@ -447,8 +824,9 @@ void cmdSetPortPolarity(const String& args) {
 // ============================================================================
 
 void cmdRegRead(const String& args) {
-  const long reg = strtol(args.c_str(), nullptr, 0);
-  if (reg < 0 || reg > 7) {
+  const char* cursor = args.c_str();
+  long reg = 0;
+  if (!parseLongToken(cursor, reg) || reg < 0 || reg > 7 || hasTrailingArgs(cursor)) {
     LOGE("Usage: rreg <0-7>");
     return;
   }
@@ -464,23 +842,22 @@ void cmdRegRead(const String& args) {
 }
 
 void cmdRegWrite(const String& args) {
-  const long reg = strtol(args.c_str(), nullptr, 0);
-  const int spaceIdx = args.indexOf(' ');
-  if (spaceIdx < 0 || reg < 2 || reg > 7) {
+  const char* cursor = args.c_str();
+  long reg = 0;
+  uint8_t value = 0;
+  if (!parseLongToken(cursor, reg) ||
+      reg < 2 || reg > 7 ||
+      !parseByteToken(cursor, value) ||
+      hasTrailingArgs(cursor)) {
     LOGE("Usage: wreg <2-7> <0x00-0xFF>");
     return;
   }
-  const long val = strtol(args.substring(spaceIdx + 1).c_str(), nullptr, 0);
-  if (val < 0 || val > 255) {
-    LOGE("Value must be 0x00-0xFF");
-    return;
-  }
-  PCA9555::Status st = device.writeRegister(static_cast<uint8_t>(reg), static_cast<uint8_t>(val));
+  PCA9555::Status st = device.writeRegister(static_cast<uint8_t>(reg), value);
   if (!st.ok()) {
     printStatus(st);
     return;
   }
-  LOGI("Reg 0x%02X set to 0x%02X", static_cast<int>(reg), static_cast<int>(val));
+  LOGI("Reg 0x%02X set to 0x%02X", static_cast<int>(reg), value);
 }
 
 // ============================================================================
@@ -522,20 +899,41 @@ void runSelfTest() {
   PCA9555::PortData data;
   st = device.readInputs(data);
   report("readInputs() OK", st.ok());
+  uint8_t inputPort = 0;
+  st = device.readInput(PCA9555::Port::PORT_0, inputPort);
+  report("readInput(P0) OK", st.ok());
 
   // --- readOutputs ---
   st = device.readOutputs(data);
   report("readOutputs() OK", st.ok());
+  uint8_t outputPort = 0;
+  st = device.readOutput(PCA9555::Port::PORT_0, outputPort);
+  report("readOutput(P0) OK", st.ok());
+  bool outputPin = false;
+  st = device.readOutputPin(0, outputPin);
+  report("readOutputPin(0) OK", st.ok());
 
   // --- getConfiguration ---
   PCA9555::PortData configData;
   st = device.getConfiguration(configData);
   report("getConfiguration() OK", st.ok());
+  uint8_t configPort = 0;
+  st = device.getPortConfiguration(PCA9555::Port::PORT_0, configPort);
+  report("getPortConfiguration(P0) OK", st.ok());
+  bool pinDirection = false;
+  st = device.getPinDirection(0, pinDirection);
+  report("getPinDirection(0) OK", st.ok());
 
   // --- getPolarity ---
   PCA9555::PortData polData;
   st = device.getPolarity(polData);
   report("getPolarity() OK", st.ok());
+  uint8_t polarityPort = 0;
+  st = device.getPortPolarity(PCA9555::Port::PORT_0, polarityPort);
+  report("getPortPolarity(P0) OK", st.ok());
+  bool pinPolarity = false;
+  st = device.getPinPolarity(0, pinPolarity);
+  report("getPinPolarity(0) OK", st.ok());
 
   // --- writeOutput + readback ---
   // Save current outputs
@@ -586,6 +984,14 @@ void runSelfTest() {
     report("setPortPolarity(P0, 0x0F) + readback", readback.port0 == 0x0F);
   } else {
     report("setPortPolarity(P0, 0x0F)", false);
+  }
+  st = device.setPinPolarity(8, true);
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    device.getPolarity(readback);
+    report("setPinPolarity(8, 1) + readback", (readback.port1 & 0x01U) != 0U);
+  } else {
+    report("setPinPolarity(8, 1)", false);
   }
   // Restore polarity
   device.setPortPolarity(PCA9555::Port::PORT_0, savedPol.port0);
@@ -771,24 +1177,35 @@ void printHelp() {
   helpItem("scan", "Scan I2C bus");
 
   helpSection("Read");
-  helpItem("inputs", "Read both input ports");
-  helpItem("outputs", "Read output registers");
-  helpItem("config", "Read configuration (direction) registers");
-  helpItem("polarity", "Read polarity inversion registers");
-  helpItem("rpin <N>", "Read input pin N (0-15)");
+  helpItem("read / inputs", "Read both input ports");
+  helpItem("read input port <P> / rin <P>", "Read one input port");
+  helpItem("read outputs / outputs", "Read output registers");
+  helpItem("read output port <P>", "Read one output-port latch register");
+  helpItem("read config / config", "Read configuration (direction) registers");
+  helpItem("read config port <P>", "Read one configuration register");
+  helpItem("read polarity / polarity", "Read polarity inversion registers");
+  helpItem("read polarity port <P>", "Read one polarity register");
+  helpItem("read pin <N> / rpin <N>", "Read input pin N (0-15)");
+  helpItem("read outpin <N> / rout <N>", "Read output latch bit for pin N");
+  helpItem("read dirpin <N> / rdir <N>", "Read pin direction for pin N");
+  helpItem("read polpin <N> / rpol <N>", "Read pin polarity inversion for pin N");
+  helpItem("pininfo <N>", "Show actual level, latch, direction, and polarity");
+  helpItem("pins", "Show a 16-pin summary table");
+  helpItem("cfg / settings", "Print active driver settings snapshot");
   helpItem("dump", "Dump all 8 registers");
 
   helpSection("Write");
-  helpItem("wpin <N> <0|1>", "Set output pin N to 0 or 1");
+  helpItem("write pin <N> <0|1> / wpin <N> <0|1>", "Set output pin N to 0 or 1");
   helpItem("toggle <N>", "Toggle output pin N");
-  helpItem("dir <N> <in|out>", "Set pin N direction");
-  helpItem("wport <P> <V>", "Write port P (0/1) output to V (hex/dec)");
-  helpItem("dport <P> <V>", "Set port direction (1=in, 0=out)");
-  helpItem("wpol <P> <V>", "Set port polarity inversion");
+  helpItem("dir pin <N> <in|out> / dir <N> <in|out>", "Set pin N direction");
+  helpItem("write port <P> <V> / wport <P> <V>", "Write port P (0/1) output to V");
+  helpItem("dir port <P> <V> / dport <P> <V>", "Set port direction (1=in, 0=out)");
+  helpItem("polarity pin <N> <0|1> / pol <N> <0|1>", "Set single-pin polarity inversion");
+  helpItem("polarity port <P> <V> / wpol <P> <V>", "Set port polarity inversion");
 
   helpSection("Raw Register");
-  helpItem("rreg <R>", "Read register R (0-7)");
-  helpItem("wreg <R> <V>", "Write register R (2-7) to V");
+  helpItem("read reg <R> / rreg <R>", "Read register R (0-7)");
+  helpItem("write reg <R> <V> / wreg <R> <V>", "Write register R (2-7) to V");
 
   helpSection("Diagnostics");
   helpItem("drv", "Show driver state and health");
@@ -826,28 +1243,108 @@ void processCommand(const String& cmdLine) {
   }
 
   // ---- Read ----
-  if (cmd == "inputs") {
+  if (cmd == "read" || cmd == "inputs" || cmd == "read inputs") {
     cmdReadInputs();
     return;
   }
 
-  if (cmd == "outputs") {
+  if (cmd.startsWith("read input port ")) {
+    cmdReadInputPort(cmd.substring(16));
+    return;
+  }
+
+  if (cmd.startsWith("rin ")) {
+    cmdReadInputPort(cmd.substring(4));
+    return;
+  }
+
+  if (cmd == "outputs" || cmd == "read outputs") {
     cmdReadOutputs();
     return;
   }
 
-  if (cmd == "config") {
+  if (cmd.startsWith("read output port ")) {
+    cmdReadOutputPort(cmd.substring(17));
+    return;
+  }
+
+  if (cmd == "config" || cmd == "read config") {
     cmdReadConfig();
     return;
   }
 
-  if (cmd == "polarity") {
+  if (cmd.startsWith("read config port ")) {
+    cmdReadConfigPort(cmd.substring(17));
+    return;
+  }
+
+  if (cmd == "polarity" || cmd == "read polarity") {
     cmdReadPolarity();
+    return;
+  }
+
+  if (cmd.startsWith("read polarity port ")) {
+    cmdReadPolarityPort(cmd.substring(19));
+    return;
+  }
+
+  if (cmd == "cfg" || cmd == "settings") {
+    printSettings();
+    return;
+  }
+
+  if (cmd.startsWith("read pin ")) {
+    cmdReadPin(cmd.substring(9));
     return;
   }
 
   if (cmd.startsWith("rpin ")) {
     cmdReadPin(cmd.substring(5));
+    return;
+  }
+
+  if (cmd.startsWith("read outpin ")) {
+    cmdReadOutputPin(cmd.substring(12));
+    return;
+  }
+
+  if (cmd.startsWith("rout ")) {
+    cmdReadOutputPin(cmd.substring(5));
+    return;
+  }
+
+  if (cmd.startsWith("read dirpin ")) {
+    cmdReadDirectionPin(cmd.substring(12));
+    return;
+  }
+
+  if (cmd.startsWith("rdir ")) {
+    cmdReadDirectionPin(cmd.substring(5));
+    return;
+  }
+
+  if (cmd.startsWith("read polpin ")) {
+    cmdReadPolarityPin(cmd.substring(12));
+    return;
+  }
+
+  if (cmd.startsWith("rpol ")) {
+    cmdReadPolarityPin(cmd.substring(5));
+    return;
+  }
+
+  if (cmd.startsWith("pininfo ")) {
+    cmdPinInfo(cmd.substring(8));
+    return;
+  }
+
+  if (cmd == "pins") {
+    cmdPins();
+    return;
+  }
+
+  if (cmd.startsWith("read reg ")) {
+    cmdRegRead(cmd.substring(9));
     return;
   }
 
@@ -857,6 +1354,11 @@ void processCommand(const String& cmdLine) {
   }
 
   // ---- Write ----
+  if (cmd.startsWith("write pin ")) {
+    cmdWritePin(cmd.substring(10));
+    return;
+  }
+
   if (cmd.startsWith("wpin ")) {
     cmdWritePin(cmd.substring(5));
     return;
@@ -867,8 +1369,18 @@ void processCommand(const String& cmdLine) {
     return;
   }
 
+  if (cmd.startsWith("dir pin ")) {
+    cmdSetDirection(cmd.substring(8));
+    return;
+  }
+
   if (cmd.startsWith("dir ")) {
     cmdSetDirection(cmd.substring(4));
+    return;
+  }
+
+  if (cmd.startsWith("write port ")) {
+    cmdWritePort(cmd.substring(11));
     return;
   }
 
@@ -877,8 +1389,28 @@ void processCommand(const String& cmdLine) {
     return;
   }
 
+  if (cmd.startsWith("dir port ")) {
+    cmdSetPortDirection(cmd.substring(9));
+    return;
+  }
+
   if (cmd.startsWith("dport ")) {
     cmdSetPortDirection(cmd.substring(6));
+    return;
+  }
+
+  if (cmd.startsWith("polarity pin ")) {
+    cmdSetPinPolarity(cmd.substring(13));
+    return;
+  }
+
+  if (cmd.startsWith("pol ")) {
+    cmdSetPinPolarity(cmd.substring(4));
+    return;
+  }
+
+  if (cmd.startsWith("polarity port ")) {
+    cmdSetPortPolarity(cmd.substring(14));
     return;
   }
 
@@ -888,6 +1420,11 @@ void processCommand(const String& cmdLine) {
   }
 
   // ---- Raw Register ----
+  if (cmd.startsWith("write reg ")) {
+    cmdRegWrite(cmd.substring(10));
+    return;
+  }
+
   if (cmd.startsWith("rreg ")) {
     cmdRegRead(cmd.substring(5));
     return;
@@ -922,8 +1459,13 @@ void processCommand(const String& cmdLine) {
   }
 
   if (cmd.startsWith("verbose ")) {
-    const int val = cmd.substring(8).toInt();
-    verboseMode = (val != 0);
+    const char* cursor = cmd.c_str() + 8;
+    bool enabled = false;
+    if (!parseBinaryToken(cursor, enabled) || hasTrailingArgs(cursor)) {
+      LOGW("Usage: verbose <0|1>");
+      return;
+    }
+    verboseMode = enabled;
     LOGI("Verbose mode: %s%s%s",
          onOffColor(verboseMode),
          verboseMode ? "ON" : "OFF",
@@ -942,11 +1484,16 @@ void processCommand(const String& cmdLine) {
   }
 
   if (cmd.startsWith("stress_mix ")) {
-    const int count = cmd.substring(11).toInt();
-    if (count <= 0) {
-      LOGW("Invalid count");
+    const char* cursor = cmd.c_str() + 11;
+    long parsedCount = 0;
+    if (!parseLongToken(cursor, parsedCount) ||
+        hasTrailingArgs(cursor) ||
+        parsedCount <= 0 ||
+        parsedCount > std::numeric_limits<int>::max()) {
+      LOGW("Usage: stress_mix <positive count>");
       return;
     }
+    const int count = static_cast<int>(parsedCount);
     runStressMix(count);
     return;
   }
@@ -959,11 +1506,16 @@ void processCommand(const String& cmdLine) {
   }
 
   if (cmd.startsWith("stress ")) {
-    const int count = cmd.substring(7).toInt();
-    if (count <= 0) {
-      LOGW("Invalid stress count");
+    const char* cursor = cmd.c_str() + 7;
+    long parsedCount = 0;
+    if (!parseLongToken(cursor, parsedCount) ||
+        hasTrailingArgs(cursor) ||
+        parsedCount <= 0 ||
+        parsedCount > std::numeric_limits<int>::max()) {
+      LOGW("Usage: stress <positive count>");
       return;
     }
+    const int count = static_cast<int>(parsedCount);
     stressRemaining = count;
     resetStressStats(count);
     LOGI("Starting stress test: %d cycles", count);
@@ -1006,7 +1558,6 @@ void setup() {
   cfg.polarityPort0 = 0x00;
   cfg.polarityPort1 = 0x00;
   cfg.applyInterruptErrata = true;
-
   PCA9555::Status st = device.begin(cfg);
   if (!st.ok()) {
     LOGE("Init failed!");
@@ -1039,18 +1590,9 @@ void loop() {
     }
   }
 
-  // Command input (Arduino String pattern matching reference repos)
-  static String inputBuffer;
-  while (Serial.available()) {
-    const char c = static_cast<char>(Serial.read());
-    if (c == '\n' || c == '\r') {
-      if (inputBuffer.length() > 0) {
-        processCommand(inputBuffer);
-        inputBuffer = "";
-        Serial.print("> ");
-      }
-    } else {
-      inputBuffer += c;
-    }
+  String inputLine;
+  if (cli_shell::readLine(inputLine)) {
+    processCommand(inputLine);
+    Serial.print("> ");
   }
 }

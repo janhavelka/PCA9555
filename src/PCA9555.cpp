@@ -12,14 +12,26 @@
 namespace PCA9555 {
 namespace {
 
-static constexpr size_t MAX_WRITE_LEN = 4;
+static constexpr size_t MAX_WRITE_LEN = 2;
 
 static bool isValidAddress(uint8_t addr) {
   return addr >= cmd::BASE_ADDRESS && addr <= cmd::MAX_ADDRESS;
 }
 
+static bool isValidRegister(uint8_t reg) {
+  return reg < cmd::NUM_REGISTERS;
+}
+
 static bool isValidPin(Pin pin) {
   return pin < cmd::TOTAL_PINS;
+}
+
+static bool isValidPort(Port port) {
+  return port == Port::PORT_0 || port == Port::PORT_1;
+}
+
+static bool isInputRegister(uint8_t reg) {
+  return reg == cmd::REG_INPUT_PORT_0 || reg == cmd::REG_INPUT_PORT_1;
 }
 
 static uint8_t bitMaskForPin(Pin pin) {
@@ -63,11 +75,20 @@ Status PCA9555::begin(const Config& config) {
     _config.offlineThreshold = 1;
   }
 
-  // Verify device presence by reading Configuration Port 0 (expect 0xFF after POR)
-  uint8_t configVal = 0;
-  Status st = _readRegisterRaw(cmd::REG_CONFIG_PORT_0, configVal);
+  // Verify device presence and, by default, require POR configuration defaults.
+  uint8_t configRegs[2] = {};
+  uint8_t startReg = cmd::REG_CONFIG_PORT_0;
+  Status st = _i2cWriteReadRaw(&startReg, 1, configRegs, sizeof(configRegs));
   if (!st.ok()) {
     return Status::Error(Err::DEVICE_NOT_FOUND, "Device not responding", st.detail);
+  }
+  if (_config.requireConfigPortDefaults &&
+      (configRegs[0] != cmd::DEFAULT_CONFIG || configRegs[1] != cmd::DEFAULT_CONFIG)) {
+    const int32_t detail =
+        static_cast<int32_t>((static_cast<uint16_t>(configRegs[1]) << 8) | configRegs[0]);
+    return Status::Error(Err::CONFIG_REG_MISMATCH,
+                         "Configuration registers not at POR defaults",
+                         detail);
   }
 
   st = _applyConfig();
@@ -127,7 +148,7 @@ Status PCA9555::recover() {
 
   // Use tracked read to update health counters
   uint8_t configVal = 0;
-  Status st = readRegister(cmd::REG_CONFIG_PORT_0, configVal);
+  Status st = readRegs(cmd::REG_CONFIG_PORT_0, &configVal, 1);
   if (!st.ok()) {
     return st;
   }
@@ -175,6 +196,9 @@ Status PCA9555::readInputs(PortData& data) {
 Status PCA9555::readInput(Port port, uint8_t& value) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPort(port)) {
+    return Status::Error(Err::INVALID_PARAM, "Port out of range");
   }
 
   const uint8_t reg = (port == Port::PORT_0)
@@ -234,12 +258,17 @@ Status PCA9555::writeOutputs(const PortData& data) {
 
   _cachedOutput0 = data.port0;
   _cachedOutput1 = data.port1;
+  _config.outputPort0 = data.port0;
+  _config.outputPort1 = data.port1;
   return Status::Ok();
 }
 
 Status PCA9555::writeOutput(Port port, uint8_t value) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPort(port)) {
+    return Status::Error(Err::INVALID_PARAM, "Port out of range");
   }
 
   const uint8_t reg = (port == Port::PORT_0)
@@ -253,9 +282,32 @@ Status PCA9555::writeOutput(Port port, uint8_t value) {
 
   if (port == Port::PORT_0) {
     _cachedOutput0 = value;
+    _config.outputPort0 = value;
   } else {
     _cachedOutput1 = value;
+    _config.outputPort1 = value;
   }
+  return Status::Ok();
+}
+
+Status PCA9555::readOutput(Port port, uint8_t& value) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPort(port)) {
+    return Status::Error(Err::INVALID_PARAM, "Port out of range");
+  }
+
+  const uint8_t reg = (port == Port::PORT_0)
+    ? cmd::REG_OUTPUT_PORT_0
+    : cmd::REG_OUTPUT_PORT_1;
+
+  Status st = readRegs(reg, &value, 1);
+  if (!st.ok()) {
+    return st;
+  }
+
+  _syncShadowRegister(reg, value);
   return Status::Ok();
 }
 
@@ -286,6 +338,25 @@ Status PCA9555::writePin(Pin pin, bool high) {
   return writeOutput(port, newVal);
 }
 
+Status PCA9555::readOutputPin(Pin pin, bool& high) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPin(pin)) {
+    return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
+  }
+
+  const Port port = (pin < cmd::PINS_PER_PORT) ? Port::PORT_0 : Port::PORT_1;
+  uint8_t value = 0;
+  Status st = readOutput(port, value);
+  if (!st.ok()) {
+    return st;
+  }
+
+  high = (value & bitMaskForPin(pin)) != 0;
+  return Status::Ok();
+}
+
 Status PCA9555::readOutputs(PortData& data) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
@@ -303,6 +374,8 @@ Status PCA9555::readOutputs(PortData& data) {
   // Update cache from actual device state
   _cachedOutput0 = buf[0];
   _cachedOutput1 = buf[1];
+  _config.outputPort0 = buf[0];
+  _config.outputPort1 = buf[1];
 
   return Status::Ok();
 }
@@ -324,12 +397,17 @@ Status PCA9555::setConfiguration(const PortData& data) {
 
   _cachedConfig0 = data.port0;
   _cachedConfig1 = data.port1;
+  _config.configPort0 = data.port0;
+  _config.configPort1 = data.port1;
   return Status::Ok();
 }
 
 Status PCA9555::setPortConfiguration(Port port, uint8_t value) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPort(port)) {
+    return Status::Error(Err::INVALID_PARAM, "Port out of range");
   }
 
   const uint8_t reg = (port == Port::PORT_0)
@@ -343,9 +421,32 @@ Status PCA9555::setPortConfiguration(Port port, uint8_t value) {
 
   if (port == Port::PORT_0) {
     _cachedConfig0 = value;
+    _config.configPort0 = value;
   } else {
     _cachedConfig1 = value;
+    _config.configPort1 = value;
   }
+  return Status::Ok();
+}
+
+Status PCA9555::getPortConfiguration(Port port, uint8_t& value) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPort(port)) {
+    return Status::Error(Err::INVALID_PARAM, "Port out of range");
+  }
+
+  const uint8_t reg = (port == Port::PORT_0)
+    ? cmd::REG_CONFIG_PORT_0
+    : cmd::REG_CONFIG_PORT_1;
+
+  Status st = readRegs(reg, &value, 1);
+  if (!st.ok()) {
+    return st;
+  }
+
+  _syncShadowRegister(reg, value);
   return Status::Ok();
 }
 
@@ -365,6 +466,8 @@ Status PCA9555::getConfiguration(PortData& data) {
 
   _cachedConfig0 = buf[0];
   _cachedConfig1 = buf[1];
+  _config.configPort0 = buf[0];
+  _config.configPort1 = buf[1];
 
   return Status::Ok();
 }
@@ -375,19 +478,60 @@ Status PCA9555::setPolarity(const PortData& data) {
   }
 
   const uint8_t buf[2] = {data.port0, data.port1};
-  return writeRegs(cmd::REG_POLARITY_INV_0, buf, 2);
+  Status st = writeRegs(cmd::REG_POLARITY_INV_0, buf, 2);
+  if (!st.ok()) {
+    return st;
+  }
+
+  _config.polarityPort0 = data.port0;
+  _config.polarityPort1 = data.port1;
+  return Status::Ok();
 }
 
 Status PCA9555::setPortPolarity(Port port, uint8_t value) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
+  if (!isValidPort(port)) {
+    return Status::Error(Err::INVALID_PARAM, "Port out of range");
+  }
 
   const uint8_t reg = (port == Port::PORT_0)
     ? cmd::REG_POLARITY_INV_0
     : cmd::REG_POLARITY_INV_1;
 
-  return writeRegs(reg, &value, 1);
+  Status st = writeRegs(reg, &value, 1);
+  if (!st.ok()) {
+    return st;
+  }
+
+  if (port == Port::PORT_0) {
+    _config.polarityPort0 = value;
+  } else {
+    _config.polarityPort1 = value;
+  }
+  return Status::Ok();
+}
+
+Status PCA9555::getPortPolarity(Port port, uint8_t& value) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPort(port)) {
+    return Status::Error(Err::INVALID_PARAM, "Port out of range");
+  }
+
+  const uint8_t reg = (port == Port::PORT_0)
+    ? cmd::REG_POLARITY_INV_0
+    : cmd::REG_POLARITY_INV_1;
+
+  Status st = readRegs(reg, &value, 1);
+  if (!st.ok()) {
+    return st;
+  }
+
+  _syncShadowRegister(reg, value);
+  return Status::Ok();
 }
 
 Status PCA9555::getPolarity(PortData& data) {
@@ -403,6 +547,54 @@ Status PCA9555::getPolarity(PortData& data) {
 
   data.port0 = buf[0];
   data.port1 = buf[1];
+  _config.polarityPort0 = buf[0];
+  _config.polarityPort1 = buf[1];
+  return Status::Ok();
+}
+
+Status PCA9555::setPinPolarity(Pin pin, bool inverted) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPin(pin)) {
+    return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
+  }
+
+  const uint8_t mask = bitMaskForPin(pin);
+  const bool isPort0 = (pin < cmd::PINS_PER_PORT);
+
+  uint8_t current = isPort0 ? _config.polarityPort0 : _config.polarityPort1;
+  uint8_t newVal = current;
+  if (inverted) {
+    newVal |= mask;
+  } else {
+    newVal &= static_cast<uint8_t>(~mask);
+  }
+
+  if (newVal == current) {
+    return Status::Ok();
+  }
+
+  const Port port = isPort0 ? Port::PORT_0 : Port::PORT_1;
+  return setPortPolarity(port, newVal);
+}
+
+Status PCA9555::getPinPolarity(Pin pin, bool& inverted) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPin(pin)) {
+    return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
+  }
+
+  const Port port = (pin < cmd::PINS_PER_PORT) ? Port::PORT_0 : Port::PORT_1;
+  uint8_t value = 0;
+  Status st = getPortPolarity(port, value);
+  if (!st.ok()) {
+    return st;
+  }
+
+  inverted = (value & bitMaskForPin(pin)) != 0;
   return Status::Ok();
 }
 
@@ -433,6 +625,25 @@ Status PCA9555::setPinDirection(Pin pin, bool input) {
   return setPortConfiguration(port, newVal);
 }
 
+Status PCA9555::getPinDirection(Pin pin, bool& input) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPin(pin)) {
+    return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
+  }
+
+  const Port port = (pin < cmd::PINS_PER_PORT) ? Port::PORT_0 : Port::PORT_1;
+  uint8_t value = 0;
+  Status st = getPortConfiguration(port, value);
+  if (!st.ok()) {
+    return st;
+  }
+
+  input = (value & bitMaskForPin(pin)) != 0;
+  return Status::Ok();
+}
+
 // ===========================================================================
 // Register Access (Public)
 // ===========================================================================
@@ -441,10 +652,22 @@ Status PCA9555::readRegister(uint8_t reg, uint8_t& value) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
-  if (reg > cmd::REG_CONFIG_PORT_1) {
+  if (!isValidRegister(reg)) {
     return Status::Error(Err::INVALID_PARAM, "Register address out of range");
   }
-  return readRegs(reg, &value, 1);
+  Status st = readRegs(reg, &value, 1);
+  if (!st.ok()) {
+    return st;
+  }
+
+  _syncShadowRegister(reg, value);
+  if (isInputRegister(reg) && _config.applyInterruptErrata) {
+    st = _applyInterruptErrata();
+    if (!st.ok()) {
+      return st;
+    }
+  }
+  return Status::Ok();
 }
 
 Status PCA9555::writeRegister(uint8_t reg, uint8_t value) {
@@ -454,7 +677,13 @@ Status PCA9555::writeRegister(uint8_t reg, uint8_t value) {
   if (reg < cmd::REG_OUTPUT_PORT_0 || reg > cmd::REG_CONFIG_PORT_1) {
     return Status::Error(Err::INVALID_PARAM, "Register not writable or out of range");
   }
-  return writeRegs(reg, &value, 1);
+  Status st = writeRegs(reg, &value, 1);
+  if (!st.ok()) {
+    return st;
+  }
+
+  _syncShadowRegister(reg, value);
+  return Status::Ok();
 }
 
 // ===========================================================================
@@ -517,6 +746,13 @@ Status PCA9555::readRegs(uint8_t startReg, uint8_t* buf, size_t len) {
   if (buf == nullptr || len == 0) {
     return Status::Error(Err::INVALID_PARAM, "Invalid read buffer");
   }
+  if (!isValidRegister(startReg)) {
+    return Status::Error(Err::INVALID_PARAM, "Register address out of range");
+  }
+  const size_t pairRemaining = 2U - static_cast<size_t>(startReg & 0x01U);
+  if (len > pairRemaining) {
+    return Status::Error(Err::INVALID_PARAM, "Read crosses register pair boundary");
+  }
 
   uint8_t reg = startReg;
   return _i2cWriteReadTracked(&reg, 1, buf, len);
@@ -526,8 +762,15 @@ Status PCA9555::writeRegs(uint8_t startReg, const uint8_t* buf, size_t len) {
   if (buf == nullptr || len == 0) {
     return Status::Error(Err::INVALID_PARAM, "Invalid write buffer");
   }
+  if (!isValidRegister(startReg)) {
+    return Status::Error(Err::INVALID_PARAM, "Register address out of range");
+  }
   if (len > MAX_WRITE_LEN) {
     return Status::Error(Err::INVALID_PARAM, "Write length too large");
+  }
+  const size_t pairRemaining = 2U - static_cast<size_t>(startReg & 0x01U);
+  if (len > pairRemaining) {
+    return Status::Error(Err::INVALID_PARAM, "Write crosses register pair boundary");
   }
 
   uint8_t payload[MAX_WRITE_LEN + 1] = {};
@@ -639,6 +882,35 @@ Status PCA9555::_applyInterruptErrata() {
   // We send just the command byte (register pointer) without data.
   const uint8_t safeCmd = cmd::ERRATA_SAFE_CMD;
   return _i2cWriteTracked(&safeCmd, 1);
+}
+
+void PCA9555::_syncShadowRegister(uint8_t reg, uint8_t value) {
+  switch (reg) {
+    case cmd::REG_OUTPUT_PORT_0:
+      _cachedOutput0 = value;
+      _config.outputPort0 = value;
+      break;
+    case cmd::REG_OUTPUT_PORT_1:
+      _cachedOutput1 = value;
+      _config.outputPort1 = value;
+      break;
+    case cmd::REG_POLARITY_INV_0:
+      _config.polarityPort0 = value;
+      break;
+    case cmd::REG_POLARITY_INV_1:
+      _config.polarityPort1 = value;
+      break;
+    case cmd::REG_CONFIG_PORT_0:
+      _cachedConfig0 = value;
+      _config.configPort0 = value;
+      break;
+    case cmd::REG_CONFIG_PORT_1:
+      _cachedConfig1 = value;
+      _config.configPort1 = value;
+      break;
+    default:
+      break;
+  }
 }
 
 uint32_t PCA9555::_nowMs() const {

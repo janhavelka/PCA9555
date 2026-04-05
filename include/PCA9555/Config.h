@@ -68,6 +68,7 @@ struct Config {
   uint8_t outputPort1 = 0xFF;            ///< Initial output value Port 1. Default: all high
   uint8_t polarityPort0 = 0x00;          ///< Polarity inversion Port 0. Default: no inversion
   uint8_t polarityPort1 = 0x00;          ///< Polarity inversion Port 1. Default: no inversion
+  bool requireConfigPortDefaults = true; ///< Require Configuration Port 0/1 = 0xFF at begin()
 
   // === Interrupt Errata Workaround ===
   bool applyInterruptErrata = true;      ///< Write safe cmd byte after input reads (recommended)

@@ -151,6 +151,7 @@ void test_config_defaults() {
   TEST_ASSERT_EQUAL_HEX8(0xFF, cfg.outputPort1);
   TEST_ASSERT_EQUAL_HEX8(0x00, cfg.polarityPort0);
   TEST_ASSERT_EQUAL_HEX8(0x00, cfg.polarityPort1);
+  TEST_ASSERT_TRUE(cfg.requireConfigPortDefaults);
   TEST_ASSERT_TRUE(cfg.applyInterruptErrata);
 }
 
@@ -194,6 +195,32 @@ void test_begin_success_sets_ready_and_health() {
                           static_cast<uint8_t>(dev.state()));
   TEST_ASSERT_TRUE(dev.isOnline());
   TEST_ASSERT_EQUAL_UINT8(0u, dev.consecutiveFailures());
+}
+
+void test_begin_rejects_non_default_config_ports_by_default() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  bus.regs[cmd::REG_CONFIG_PORT_0] = 0xFE;
+
+  Status st = dev.begin(makeConfig(bus));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::CONFIG_REG_MISMATCH),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
+                          static_cast<uint8_t>(dev.state()));
+}
+
+void test_begin_allows_non_default_config_ports_when_check_disabled() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.requireConfigPortDefaults = false;
+  bus.regs[cmd::REG_CONFIG_PORT_0] = 0xFE;
+  bus.regs[cmd::REG_CONFIG_PORT_1] = 0xEF;
+
+  Status st = dev.begin(cfg);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(cfg.configPort0, bus.regs[cmd::REG_CONFIG_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(cfg.configPort1, bus.regs[cmd::REG_CONFIG_PORT_1]);
 }
 
 void test_begin_applies_config_to_device() {
@@ -407,6 +434,51 @@ void test_read_inputs_returns_port_data() {
   TEST_ASSERT_EQUAL_HEX16(0xCDAB, data.combined());
 }
 
+void test_read_inputs_applies_errata_workaround_when_enabled() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.applyInterruptErrata = true;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  const uint32_t writesBefore = bus.writeCalls;
+  const uint32_t readsBefore = bus.readCalls;
+
+  PortData data;
+  TEST_ASSERT_TRUE(dev.readInputs(data).ok());
+
+  TEST_ASSERT_EQUAL_UINT32(writesBefore + 1u, bus.writeCalls);
+  TEST_ASSERT_EQUAL_UINT32(readsBefore + 1u, bus.readCalls);
+}
+
+void test_read_inputs_skips_errata_workaround_when_disabled() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.applyInterruptErrata = false;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  const uint32_t writesBefore = bus.writeCalls;
+  const uint32_t readsBefore = bus.readCalls;
+
+  PortData data;
+  TEST_ASSERT_TRUE(dev.readInputs(data).ok());
+
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
+  TEST_ASSERT_EQUAL_UINT32(readsBefore + 1u, bus.readCalls);
+}
+
+void test_read_register_input_port_applies_errata_workaround() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  const uint32_t writesBefore = bus.writeCalls;
+  uint8_t value = 0;
+  TEST_ASSERT_TRUE(dev.readRegister(cmd::REG_INPUT_PORT_0, value).ok());
+  TEST_ASSERT_EQUAL_UINT32(writesBefore + 1u, bus.writeCalls);
+}
+
 void test_read_pin_returns_correct_bit() {
   FakeBus bus;
   PCA9555::PCA9555 dev;
@@ -432,6 +504,25 @@ void test_read_pin_rejects_invalid_pin() {
 
   bool state = false;
   Status st = dev.readPin(16, state);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(st.code));
+}
+
+void test_single_pin_helpers_reject_invalid_pin() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  bool flag = false;
+  Status st = dev.readOutputPin(16, flag);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.getPinPolarity(16, flag);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.getPinDirection(16, flag);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
                           static_cast<uint8_t>(st.code));
 }
@@ -482,6 +573,29 @@ void test_write_pin_port1() {
   TEST_ASSERT_EQUAL_HEX8(0x01, bus.regs[cmd::REG_OUTPUT_PORT_1]);
 }
 
+void test_read_output_and_output_pin_return_latched_state() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  bus.regs[cmd::REG_OUTPUT_PORT_0] = 0xA5;
+  bus.regs[cmd::REG_OUTPUT_PORT_1] = 0x5A;
+  Config cfg = makeConfig(bus);
+  cfg.requireConfigPortDefaults = false;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.regs[cmd::REG_OUTPUT_PORT_0] = 0xA5;
+  bus.regs[cmd::REG_OUTPUT_PORT_1] = 0x5A;
+
+  uint8_t value = 0;
+  TEST_ASSERT_TRUE(dev.readOutput(Port::PORT_0, value).ok());
+  TEST_ASSERT_EQUAL_HEX8(0xA5, value);
+
+  bool high = false;
+  TEST_ASSERT_TRUE(dev.readOutputPin(15, high).ok());
+  TEST_ASSERT_FALSE(high);
+  TEST_ASSERT_TRUE(dev.readOutputPin(14, high).ok());
+  TEST_ASSERT_TRUE(high);
+}
+
 void test_write_pin_no_op_if_already_set() {
   FakeBus bus;
   PCA9555::PCA9555 dev;
@@ -529,6 +643,29 @@ void test_set_pin_direction() {
   TEST_ASSERT_EQUAL_HEX8(0xFF, bus.regs[cmd::REG_CONFIG_PORT_0]);
 }
 
+void test_get_port_configuration_and_pin_direction() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.requireConfigPortDefaults = false;
+  bus.regs[cmd::REG_CONFIG_PORT_0] = 0xF0;
+  bus.regs[cmd::REG_CONFIG_PORT_1] = 0x0F;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.regs[cmd::REG_CONFIG_PORT_0] = 0xF0;
+  bus.regs[cmd::REG_CONFIG_PORT_1] = 0x0F;
+
+  uint8_t value = 0;
+  TEST_ASSERT_TRUE(dev.getPortConfiguration(Port::PORT_1, value).ok());
+  TEST_ASSERT_EQUAL_HEX8(0x0F, value);
+
+  bool input = false;
+  TEST_ASSERT_TRUE(dev.getPinDirection(2, input).ok());
+  TEST_ASSERT_FALSE(input);
+  TEST_ASSERT_TRUE(dev.getPinDirection(11, input).ok());
+  TEST_ASSERT_TRUE(input);
+}
+
 void test_set_polarity() {
   FakeBus bus;
   PCA9555::PCA9555 dev;
@@ -544,16 +681,54 @@ void test_set_polarity() {
   TEST_ASSERT_EQUAL_HEX8(0x0F, bus.regs[cmd::REG_POLARITY_INV_1]);
 }
 
+void test_set_pin_polarity() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  Status st = dev.setPinPolarity(9, true);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x02, bus.regs[cmd::REG_POLARITY_INV_1]);
+
+  st = dev.setPinPolarity(9, false);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x00, bus.regs[cmd::REG_POLARITY_INV_1]);
+}
+
+void test_get_port_polarity_and_pin_polarity() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.requireConfigPortDefaults = false;
+  bus.regs[cmd::REG_POLARITY_INV_0] = 0x11;
+  bus.regs[cmd::REG_POLARITY_INV_1] = 0x88;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.regs[cmd::REG_POLARITY_INV_0] = 0x11;
+  bus.regs[cmd::REG_POLARITY_INV_1] = 0x88;
+
+  uint8_t value = 0;
+  TEST_ASSERT_TRUE(dev.getPortPolarity(Port::PORT_0, value).ok());
+  TEST_ASSERT_EQUAL_HEX8(0x11, value);
+
+  bool inverted = false;
+  TEST_ASSERT_TRUE(dev.getPinPolarity(15, inverted).ok());
+  TEST_ASSERT_TRUE(inverted);
+  TEST_ASSERT_TRUE(dev.getPinPolarity(4, inverted).ok());
+  TEST_ASSERT_TRUE(inverted);
+  TEST_ASSERT_TRUE(dev.getPinPolarity(5, inverted).ok());
+  TEST_ASSERT_FALSE(inverted);
+}
+
 void test_read_register_public() {
   FakeBus bus;
   PCA9555::PCA9555 dev;
-  bus.regs[cmd::REG_CONFIG_PORT_0] = 0xAB;
   TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
 
   uint8_t value = 0;
   Status st = dev.readRegister(cmd::REG_CONFIG_PORT_0, value);
-  // After begin() _applyConfig wrote configPort0=0xFF, so read via fake returns that
   TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_CONFIG, value);
 }
 
 void test_write_register_public_rejects_input_port() {
@@ -569,6 +744,80 @@ void test_write_register_public_rejects_input_port() {
   st = dev.writeRegister(0x01, 0x55);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
                           static_cast<uint8_t>(st.code));
+}
+
+void test_port_apis_reject_invalid_port_enum() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  const Port invalidPort = static_cast<Port>(2);
+  uint8_t value = 0;
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(dev.readInput(invalidPort, value).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(dev.writeOutput(invalidPort, 0x55).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(dev.readOutput(invalidPort, value).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(dev.setPortConfiguration(invalidPort, 0xAA).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(dev.getPortConfiguration(invalidPort, value).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(dev.setPortPolarity(invalidPort, 0x0F).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(dev.getPortPolarity(invalidPort, value).code));
+}
+
+void test_write_register_updates_output_shadow_for_write_pin() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  TEST_ASSERT_TRUE(dev.writeRegister(cmd::REG_OUTPUT_PORT_0, 0x00).ok());
+  TEST_ASSERT_TRUE(dev.writePin(0, true).ok());
+  TEST_ASSERT_EQUAL_HEX8(0x01, bus.regs[cmd::REG_OUTPUT_PORT_0]);
+}
+
+void test_write_register_updates_config_shadow_for_set_pin_direction() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  TEST_ASSERT_TRUE(dev.writeRegister(cmd::REG_CONFIG_PORT_0, 0x00).ok());
+  TEST_ASSERT_TRUE(dev.setPinDirection(0, true).ok());
+  TEST_ASSERT_EQUAL_HEX8(0x01, bus.regs[cmd::REG_CONFIG_PORT_0]);
+}
+
+void test_recover_reapplies_runtime_configuration() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  PortData outputs = PortData::fromCombined(0x55AA);
+  PortData config = PortData::fromCombined(0xF00F);
+  PortData polarity = PortData::fromCombined(0x2211);
+
+  TEST_ASSERT_TRUE(dev.writeOutputs(outputs).ok());
+  TEST_ASSERT_TRUE(dev.setConfiguration(config).ok());
+  TEST_ASSERT_TRUE(dev.setPolarity(polarity).ok());
+
+  bus.regs[cmd::REG_OUTPUT_PORT_0] = cmd::DEFAULT_OUTPUT;
+  bus.regs[cmd::REG_OUTPUT_PORT_1] = cmd::DEFAULT_OUTPUT;
+  bus.regs[cmd::REG_POLARITY_INV_0] = cmd::DEFAULT_POLARITY;
+  bus.regs[cmd::REG_POLARITY_INV_1] = cmd::DEFAULT_POLARITY;
+  bus.regs[cmd::REG_CONFIG_PORT_0] = cmd::DEFAULT_CONFIG;
+  bus.regs[cmd::REG_CONFIG_PORT_1] = cmd::DEFAULT_CONFIG;
+
+  TEST_ASSERT_TRUE(dev.recover().ok());
+
+  TEST_ASSERT_EQUAL_HEX8(outputs.port0, bus.regs[cmd::REG_OUTPUT_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(outputs.port1, bus.regs[cmd::REG_OUTPUT_PORT_1]);
+  TEST_ASSERT_EQUAL_HEX8(polarity.port0, bus.regs[cmd::REG_POLARITY_INV_0]);
+  TEST_ASSERT_EQUAL_HEX8(polarity.port1, bus.regs[cmd::REG_POLARITY_INV_1]);
+  TEST_ASSERT_EQUAL_HEX8(config.port0, bus.regs[cmd::REG_CONFIG_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(config.port1, bus.regs[cmd::REG_CONFIG_PORT_1]);
 }
 
 void test_register_out_of_range() {
@@ -611,6 +860,7 @@ void test_operations_reject_before_begin() {
   PCA9555::PCA9555 dev;
   PortData data;
   bool state;
+  bool flag;
   uint8_t val;
 
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
@@ -624,15 +874,27 @@ void test_operations_reject_before_begin() {
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
                           static_cast<uint8_t>(dev.writeOutput(Port::PORT_0, 0).code));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.readOutput(Port::PORT_0, val).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
                           static_cast<uint8_t>(dev.writePin(0, false).code));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.readOutputPin(0, flag).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
                           static_cast<uint8_t>(dev.setConfiguration(data).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.getPortConfiguration(Port::PORT_0, val).code));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
                           static_cast<uint8_t>(dev.getConfiguration(data).code));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
                           static_cast<uint8_t>(dev.setPolarity(data).code));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.getPortPolarity(Port::PORT_0, val).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
                           static_cast<uint8_t>(dev.getPolarity(data).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.getPinPolarity(0, flag).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.getPinDirection(0, flag).code));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
                           static_cast<uint8_t>(dev.readRegister(0, val).code));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
@@ -641,6 +903,22 @@ void test_operations_reject_before_begin() {
                           static_cast<uint8_t>(dev.probe().code));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
                           static_cast<uint8_t>(dev.recover().code));
+}
+
+void test_end_sets_safe_input_state() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.configPort0 = 0x00;
+  cfg.configPort1 = 0x00;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  dev.end();
+
+  TEST_ASSERT_EQUAL_HEX8(0xFF, bus.regs[cmd::REG_CONFIG_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(0xFF, bus.regs[cmd::REG_CONFIG_PORT_1]);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
+                          static_cast<uint8_t>(dev.state()));
 }
 
 // ===========================================================================
@@ -662,6 +940,8 @@ int main() {
   RUN_TEST(test_begin_rejects_invalid_address);
   RUN_TEST(test_begin_rejects_zero_timeout);
   RUN_TEST(test_begin_success_sets_ready_and_health);
+  RUN_TEST(test_begin_rejects_non_default_config_ports_by_default);
+  RUN_TEST(test_begin_allows_non_default_config_ports_when_check_disabled);
   RUN_TEST(test_begin_applies_config_to_device);
 
   // millis fallback
@@ -680,18 +960,30 @@ int main() {
 
   // Input/Output/Config API
   RUN_TEST(test_read_inputs_returns_port_data);
+  RUN_TEST(test_read_inputs_applies_errata_workaround_when_enabled);
+  RUN_TEST(test_read_inputs_skips_errata_workaround_when_disabled);
+  RUN_TEST(test_read_register_input_port_applies_errata_workaround);
   RUN_TEST(test_read_pin_returns_correct_bit);
   RUN_TEST(test_read_pin_rejects_invalid_pin);
+  RUN_TEST(test_single_pin_helpers_reject_invalid_pin);
+  RUN_TEST(test_port_apis_reject_invalid_port_enum);
   RUN_TEST(test_write_outputs_updates_device);
   RUN_TEST(test_write_pin_modifies_single_bit);
   RUN_TEST(test_write_pin_port1);
+  RUN_TEST(test_read_output_and_output_pin_return_latched_state);
   RUN_TEST(test_write_pin_no_op_if_already_set);
   RUN_TEST(test_set_configuration_updates_device);
   RUN_TEST(test_set_pin_direction);
+  RUN_TEST(test_get_port_configuration_and_pin_direction);
   RUN_TEST(test_set_polarity);
+  RUN_TEST(test_set_pin_polarity);
+  RUN_TEST(test_get_port_polarity_and_pin_polarity);
   RUN_TEST(test_read_register_public);
   RUN_TEST(test_write_register_public_rejects_input_port);
+  RUN_TEST(test_write_register_updates_output_shadow_for_write_pin);
+  RUN_TEST(test_write_register_updates_config_shadow_for_set_pin_direction);
   RUN_TEST(test_register_out_of_range);
+  RUN_TEST(test_recover_reapplies_runtime_configuration);
 
   // PortData
   RUN_TEST(test_port_data_combined);
@@ -699,6 +991,7 @@ int main() {
 
   // Not-initialized guards
   RUN_TEST(test_operations_reject_before_begin);
+  RUN_TEST(test_end_sets_safe_input_state);
 
   return UNITY_END();
 }

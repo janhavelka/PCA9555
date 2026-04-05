@@ -9,6 +9,10 @@
 
 #include <Arduino.h>
 
+#include <cerrno>
+#include <cstdlib>
+#include <limits>
+
 #include "examples/common/Log.h"
 
 namespace cmd {
@@ -22,6 +26,10 @@ namespace cmd {
 inline bool readLine(char* buffer, size_t bufSize) {
   static char cmdBuf[128];
   static size_t cmdLen = 0;
+
+  if (buffer == nullptr || bufSize == 0) {
+    return false;
+  }
 
   while (LOG_SERIAL.available()) {
     int c = LOG_SERIAL.read();
@@ -51,6 +59,10 @@ inline bool readLine(char* buffer, size_t bufSize) {
  * @return true if keyword matched and value parsed.
  */
 inline bool parseInt(const char* cmd, const char* keyword, int* outValue) {
+  if (cmd == nullptr || keyword == nullptr || outValue == nullptr) {
+    return false;
+  }
+
   size_t kwLen = strlen(keyword);
   if (strncmp(cmd, keyword, kwLen) != 0) return false;
 
@@ -59,7 +71,24 @@ inline bool parseInt(const char* cmd, const char* keyword, int* outValue) {
 
   if (*valueStr == '\0') return false;
 
-  *outValue = atoi(valueStr);
+  errno = 0;
+  char* endPtr = nullptr;
+  const long parsed = strtol(valueStr, &endPtr, 10);
+  if (endPtr == valueStr || errno == ERANGE) {
+    return false;
+  }
+  while (*endPtr == ' ' || *endPtr == '\t') {
+    endPtr++;
+  }
+  if (*endPtr != '\0') {
+    return false;
+  }
+  if (parsed < std::numeric_limits<int>::min() ||
+      parsed > std::numeric_limits<int>::max()) {
+    return false;
+  }
+
+  *outValue = static_cast<int>(parsed);
   return true;
 }
 

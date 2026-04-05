@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `setPinPolarity()` for single-pin polarity inversion with the same cached read-modify-write ergonomics as `writePin()` and `setPinDirection()`.
+- Symmetric single-pin and single-port readback helpers: `readOutput()`, `readOutputPin()`, `getPortConfiguration()`, `getPortPolarity()`, `getPinDirection()`, and `getPinPolarity()`.
+- Standardized example helpers: `CliShell.h`, `HealthView.h`, and `TransportAdapter.h`.
+- Repo validation scripts: `tools/check_cli_contract.py` and `tools/check_core_timing_guard.py`.
+- `Config::requireConfigPortDefaults` to make the strict POR-default check in `begin()` explicit and configurable.
+
+### Changed
+- Standardized the bringup CLI with descriptive aliases such as `read inputs`, `write pin`, `read reg`, and `cfg/settings`, while preserving the existing short commands.
+- Expanded the CLI with single-pin inspection/readback commands (`rout`, `rdir`, `rpol`, `pininfo`), full `pins` summaries, per-port semantic readback commands, and stricter numeric parsing for interactive safety.
+- Expanded README coverage for runtime recovery behavior, helper layout, and validation commands.
+
+### Fixed
+- `recover()` now reapplies the latest runtime output, polarity, and direction state instead of reverting to the original `begin()` configuration.
+- Direct register reads/writes now synchronize the driver's cached state so later single-pin operations stay coherent.
+- Public APIs now reject invalid `Port` enum values instead of silently treating them as Port 1.
+- Overlong CLI input lines are now discarded instead of executing truncated commands.
+- Example helper parsers now reject malformed numeric input and zero-length destination buffers instead of silently coercing values.
+
 ## [1.0.0] - 2026-06-04
 
 ### Added

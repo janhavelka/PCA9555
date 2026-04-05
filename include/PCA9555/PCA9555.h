@@ -68,7 +68,8 @@ public:
   // =========================================================================
   
   /// Check if device is present on the bus (no health tracking).
-  /// Reads configuration register and expects 0xFF if device is in known-good state.
+  /// Reads a configuration register via the raw transport path without enforcing
+  /// the POR-default contents.
   /// @return Status::Ok() if device responds, error otherwise
   Status probe();
   
@@ -84,6 +85,10 @@ public:
   /// Get current driver state
   /// @return Current DriverState
   DriverState state() const { return _driverState; }
+
+  /// Check if begin() has completed successfully.
+  /// @return true after begin() succeeds and before end() is called
+  bool isInitialized() const { return _initialized; }
   
   /// Check if driver is ready for operations
   /// @return true if READY or DEGRADED
@@ -91,6 +96,11 @@ public:
     return _driverState == DriverState::READY || 
            _driverState == DriverState::DEGRADED; 
   }
+
+  /// Get a copy of the active configuration.
+  /// Runtime mutators update this configuration so recover() re-applies the
+  /// current desired state rather than the original power-on settings.
+  const Config& getConfig() const { return _config; }
   
   // =========================================================================
   // Health Tracking
@@ -158,12 +168,32 @@ public:
   /// @return Status::Ok() on success
   Status writeOutput(Port port, uint8_t value);
 
+  /// @param port Port to read (PORT_0 or PORT_1)
+  /// @param[out] value 8-bit output latch value
+  /// @return Status::Ok() on success
+  /// Read back a single output port register value.
+  /// Returns the latched output flip-flop state, not the sampled pin level.
+  /// @param port Port to read (PORT_0 or PORT_1)
+  /// @param[out] value 8-bit output latch value
+  /// @return Status::Ok() on success
+  Status readOutput(Port port, uint8_t& value);
+
   /// Set a single output pin high or low.
   /// Uses read-modify-write on the output register.
   /// @param pin Pin number 0–15
   /// @param high true = drive high, false = drive low
   /// @return Status::Ok() on success
   Status writePin(Pin pin, bool high);
+
+  /// @param pin Pin number 0–15
+  /// @param[out] high true if the output latch bit is set
+  /// @return Status::Ok() on success
+  /// Read back a single output pin latch state.
+  /// Returns the stored output-register bit, not the sampled pin level.
+  /// @param pin Pin number 0-15
+  /// @param[out] high true if the output latch bit is 1
+  /// @return Status::Ok() on success
+  Status readOutputPin(Pin pin, bool& high);
 
   /// Read back the output port register values (flip-flop, not actual pin state).
   /// @param[out] data Port 0 and Port 1 output register values
@@ -186,6 +216,15 @@ public:
   /// @return Status::Ok() on success
   Status setPortConfiguration(Port port, uint8_t value);
 
+  /// @param port Port to read (PORT_0 or PORT_1)
+  /// @param[out] value Direction bits (1=input, 0=output)
+  /// @return Status::Ok() on success
+  /// Read back a single port configuration register.
+  /// @param port Port to read (PORT_0 or PORT_1)
+  /// @param[out] value Direction bits (1=input, 0=output)
+  /// @return Status::Ok() on success
+  Status getPortConfiguration(Port port, uint8_t& value);
+
   /// Read current pin direction configuration.
   /// @param[out] data Port 0 and Port 1 configuration values  
   /// @return Status::Ok() on success
@@ -203,10 +242,35 @@ public:
   /// @return Status::Ok() on success
   Status setPortPolarity(Port port, uint8_t value);
 
+  /// @param port Port to read (PORT_0 or PORT_1)
+  /// @param[out] value Polarity inversion bits
+  /// @return Status::Ok() on success
+  /// Read back a single port polarity inversion register.
+  /// @param port Port to read (PORT_0 or PORT_1)
+  /// @param[out] value Polarity inversion bits
+  /// @return Status::Ok() on success
+  Status getPortPolarity(Port port, uint8_t& value);
+
   /// Read current polarity inversion settings.
   /// @param[out] data Port 0 and Port 1 polarity values
   /// @return Status::Ok() on success
   Status getPolarity(PortData& data);
+
+  /// Configure polarity inversion for a single pin.
+  /// Uses read-modify-write on the cached polarity register state.
+  /// @param pin Pin number 0-15
+  /// @param inverted true = invert input sense, false = normal polarity
+  /// @return Status::Ok() on success
+  Status setPinPolarity(Pin pin, bool inverted);
+
+  /// @param pin Pin number 0-15
+  /// @param[out] inverted true if input polarity is inverted
+  /// @return Status::Ok() on success
+  /// Read back the configured polarity inversion for a single pin.
+  /// @param pin Pin number 0-15
+  /// @param[out] inverted true if the pin input is inverted
+  /// @return Status::Ok() on success
+  Status getPinPolarity(Pin pin, bool& inverted);
 
   /// Configure a single pin as input or output.
   /// Uses read-modify-write on the configuration register.
@@ -214,6 +278,15 @@ public:
   /// @param input true = configure as input, false = output
   /// @return Status::Ok() on success
   Status setPinDirection(Pin pin, bool input);
+
+  /// @param pin Pin number 0–15
+  /// @param[out] input true if configured as input, false if configured as output
+  /// @return Status::Ok() on success
+  /// Read back the configured direction for a single pin.
+  /// @param pin Pin number 0-15
+  /// @param[out] input true if the pin is configured as input
+  /// @return Status::Ok() on success
+  Status getPinDirection(Pin pin, bool& input);
 
   // =========================================================================
   // Register Access (Direct)
@@ -281,6 +354,9 @@ private:
 
   /// Apply interrupt errata workaround: write a safe command byte after input reads.
   Status _applyInterruptErrata();
+
+  /// Synchronize cached runtime state after direct register access.
+  void _syncShadowRegister(uint8_t reg, uint8_t value);
 
   /// Get current timestamp in milliseconds
   uint32_t _nowMs() const;

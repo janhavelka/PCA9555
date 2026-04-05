@@ -10,7 +10,8 @@ Production-grade PCA9555 16-bit I/O expander I2C driver for ESP32 (Arduino/Platf
 - **Managed synchronous lifecycle** - blocking I2C ops with clean begin/tick/end
 - **16-bit I/O** - two independent 8-bit ports (Port 0 and Port 1)
 - **Interrupt errata workaround** - configurable automatic errata mitigation
-- **Cached output/config** - atomic read-modify-write for single pin operations
+- **Single-pin helpers** - pin-level readback plus atomic read-modify-write for output, direction, and polarity
+- **Recoverable runtime state** - `recover()` reapplies the latest live output/config/polarity state
 
 ## Installation
 
@@ -113,7 +114,7 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 ### Diagnostics
 
 - `Status probe()` - Check device presence via raw I2C (no health tracking)
-- `Status recover()` - Attempt recovery with health tracking + re-apply config
+- `Status recover()` - Attempt recovery with health tracking + re-apply the current runtime config
 
 ### Input API
 
@@ -125,18 +126,25 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 
 - `Status writeOutputs(const PortData& data)` - Write both output ports
 - `Status writeOutput(Port port, uint8_t value)` - Write single output port
+- `Status readOutput(Port port, uint8_t& value)` - Read single output latch register
 - `Status writePin(Pin pin, bool high)` - Write single output pin (uses cached value)
+- `Status readOutputPin(Pin pin, bool& high)` - Read single output latch bit
 - `Status readOutputs(PortData& data)` - Read back output register values
 
 ### Configuration API
 
 - `Status setConfiguration(const PortData& data)` - Set pin directions (1=input, 0=output)
 - `Status setPortConfiguration(Port port, uint8_t value)` - Set single port direction
+- `Status getPortConfiguration(Port port, uint8_t& value)` - Read single port direction
 - `Status getConfiguration(PortData& data)` - Read pin direction configuration
 - `Status setPolarity(const PortData& data)` - Set polarity inversion
 - `Status setPortPolarity(Port port, uint8_t value)` - Set single port polarity
+- `Status getPortPolarity(Port port, uint8_t& value)` - Read single port polarity
 - `Status getPolarity(PortData& data)` - Read polarity inversion
+- `Status setPinPolarity(Pin pin, bool inverted)` - Set single pin polarity (uses cached value)
+- `Status getPinPolarity(Pin pin, bool& inverted)` - Read single pin polarity
 - `Status setPinDirection(Pin pin, bool input)` - Set single pin direction (uses cached value)
+- `Status getPinDirection(Pin pin, bool& input)` - Read single pin direction
 
 ### Register Access
 
@@ -146,7 +154,9 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 ### Health
 
 - `DriverState state()` - Current driver state
+- `bool isInitialized()` - True after `begin()` succeeds and before `end()`
 - `bool isOnline()` - True if READY or DEGRADED
+- `const Config& getConfig()` - Current recoverable runtime configuration snapshot
 - `uint32_t lastOkMs()` / `lastErrorMs()` - Timestamps
 - `Status lastError()` - Most recent error
 - `uint8_t consecutiveFailures()` - Failures since last success
@@ -164,26 +174,37 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 | `configPort0/1` | `0xFF` | Pin direction (1=input, 0=output) |
 | `outputPort0/1` | `0xFF` | Initial output values |
 | `polarityPort0/1` | `0x00` | Polarity inversion (1=inverted) |
+| `requireConfigPortDefaults` | `true` | Require Configuration Port 0/1 = `0xFF` at `begin()` |
 | `applyInterruptErrata` | `true` | Enable interrupt errata workaround |
 
 ### I2C Address Selection
 
-| ADDR Pin | Address |
-|----------|---------|
-| GND | 0x20 |
-| VCC | 0x21 |
-| SDA | 0x22 |
-| SCL | 0x23 |
+| A2 | A1 | A0 | Address |
+|----|----|----|---------|
+| L | L | L | `0x20` |
+| L | L | H | `0x21` |
+| L | H | L | `0x22` |
+| L | H | H | `0x23` |
+| H | L | L | `0x24` |
+| H | L | H | `0x25` |
+| H | H | L | `0x26` |
+| H | H | H | `0x27` |
 
-Up to 8 devices on one bus (A0-A2 pins).
+Up to 8 devices can share one bus. The address pins must be tied high or low and must not float.
 
 ## Behavioral Contracts
 
 1. **Threading model**: Single-threaded by default. Not thread-safe.
 2. **Timing model**: `tick()` bounded; all I2C operations are blocking.
 3. **Resource ownership**: Bus and pins provided by application via `Config`.
-4. **Memory behavior**: All allocation in `begin()`; zero heap allocations in steady state.
+4. **Memory behavior**: The library performs no dynamic allocation in `begin()` or steady state.
 5. **Error handling**: All fallible APIs return `Status`. Silent failure is not possible.
+
+`begin()` verifies presence by reading both Configuration Port registers. By default it requires the
+POR default `0xFF/0xFF` state and returns `CONFIG_REG_MISMATCH` if the expander is already
+configured. If your MCU can reset without power-cycling the PCA9555, set
+`Config::requireConfigPortDefaults = false` so `begin()` will accept the existing device state and
+immediately apply the requested runtime configuration.
 
 ## Interrupt Errata
 
@@ -194,13 +215,33 @@ clearing the interrupt output. Setting `Config::applyInterruptErrata = true` (de
 causes the driver to write a safe command byte (0x02) after every input read to move
 the register pointer away from 0x00.
 
+## Device Notes
+
+- Reading the **Output Port** register returns the output latch (flip-flop), not the actual pin voltage. Use `readInput()` / `readPin()` when you need the physical pin level.
+- The **Input Port** register reflects the real pin level even when a pin is configured as an output, which is useful for output verification and fault checks.
+- Each PCA9555 I/O has an internal ~100 kOhm pull-up when configured as an input. Inputs held low draw extra standby current, so unused inputs should be left high or configured as outputs driven high in low-power designs.
+
 ## Examples
 
 ### 01_basic_bringup_cli
 
 Interactive serial CLI for device bringup and testing. Supports reading/writing all
 ports and individual pins, register dump, direction and polarity configuration,
-self-test, stress tests, and driver health diagnostics.
+self-test, stress tests, driver health diagnostics, `cfg/settings` snapshots,
+single-pin latch/direction/polarity readback (`rout`, `rdir`, `rpol`), `pininfo`,
+full `pins` summaries, port-specific readback commands,
+and both terse and descriptive command aliases (`read inputs`, `write pin`, `read reg`, ...).
+
+Typical bring-up commands:
+
+```text
+scan
+cfg
+read input port 0
+read output port 1
+pininfo 12
+pins
+```
 
 ### Example Helpers (`examples/common/`)
 
@@ -210,9 +251,12 @@ self-test, stress tests, and driver health diagnostics.
 | `Log.h` | Colorized serial logging macros (`LOGI`, `LOGE`, `LOGV`, etc.) |
 | `BoardConfig.h` | Board-specific pin definitions and I2C init |
 | `I2cTransport.h` | Wire-based transport adapter mapping to `Status` |
+| `TransportAdapter.h` | Alias wrapper matching the standardized helper layout |
 | `I2cScanner.h` | I2C bus scanner utility |
 | `CommandHandler.h` | Serial command-line helpers |
+| `CliShell.h` | Serial line reader helper for CLI examples |
 | `BusDiag.h` | Bus diagnostic scan wrapper |
+| `HealthView.h` | Compact one-line health summary helper |
 
 These helpers are **not** part of the library — they exist only to keep examples self-contained.
 
@@ -227,6 +271,10 @@ pio run -e esp32s2dev
 
 # Run native unit tests (requires host GCC)
 pio test -e native
+
+# Check repo-standardized CLI/helper and timing contracts
+python tools/check_cli_contract.py
+python tools/check_core_timing_guard.py
 ```
 
 ## Documentation

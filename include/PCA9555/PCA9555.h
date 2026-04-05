@@ -41,6 +41,19 @@ struct PortData {
   }
 };
 
+/// Snapshot of the current driver settings and health state.
+struct SettingsSnapshot {
+  Config config;                 ///< Active runtime configuration snapshot
+  DriverState state = DriverState::UNINIT;
+  bool initialized = false;
+  uint32_t lastOkMs = 0;
+  uint32_t lastErrorMs = 0;
+  Status lastError = Status::Ok();
+  uint8_t consecutiveFailures = 0;
+  uint32_t totalFailures = 0;
+  uint32_t totalSuccess = 0;
+};
+
 /// PCA9555 driver class
 class PCA9555 {
 public:
@@ -101,6 +114,10 @@ public:
   /// Runtime mutators update this configuration so recover() re-applies the
   /// current desired state rather than the original power-on settings.
   const Config& getConfig() const { return _config; }
+
+  /// Get a snapshot of the active settings and health counters.
+  /// @return Copy of the current runtime settings and diagnostic state
+  SettingsSnapshot getSettings() const;
   
   // =========================================================================
   // Health Tracking
@@ -298,11 +315,29 @@ public:
   /// @return Status::Ok() on success
   Status readRegister(uint8_t reg, uint8_t& value);
 
+  /// Read multiple consecutive registers within a single register pair.
+  /// Bulk reads are limited to 1-2 bytes and must not cross a pair boundary.
+  /// The cached runtime state is synchronized for any writable registers read.
+  /// @param startReg Starting register address (0x00-0x07)
+  /// @param[out] buf Destination buffer
+  /// @param len Number of bytes to read
+  /// @return Status::Ok() on success
+  Status readRegisters(uint8_t startReg, uint8_t* buf, size_t len);
+
   /// Write a single register by command byte.
   /// @param reg Register address (0x02–0x07, input regs are read-only)
   /// @param value Value to write
   /// @return Status::Ok() on success
   Status writeRegister(uint8_t reg, uint8_t value);
+
+  /// Write multiple consecutive registers within a single register pair.
+  /// Bulk writes are limited to 1-2 bytes and must not cross a pair boundary.
+  /// The cached runtime state is synchronized after a successful write.
+  /// @param startReg Starting register address (0x02-0x07)
+  /// @param buf Source buffer
+  /// @param len Number of bytes to write
+  /// @return Status::Ok() on success
+  Status writeRegisters(uint8_t startReg, const uint8_t* buf, size_t len);
 
 private:
   // =========================================================================

@@ -12,6 +12,7 @@
 #include "examples/common/BoardConfig.h"
 #include "examples/common/BusDiag.h"
 #include "examples/common/CliShell.h"
+#include "examples/common/HealthDiag.h"
 #include "examples/common/I2cTransport.h"
 #include "examples/common/I2cScanner.h"
 
@@ -229,71 +230,7 @@ void printVerboseState() {
 }
 
 void printDriverHealth() {
-  const uint32_t now = millis();
-  const uint32_t totalOk = device.totalSuccess();
-  const uint32_t totalFail = device.totalFailures();
-  const uint64_t total = static_cast<uint64_t>(totalOk) + static_cast<uint64_t>(totalFail);
-  const float successRate = (total > 0U)
-                                ? (100.0f * static_cast<float>(totalOk) / static_cast<float>(total))
-                                : 0.0f;
-  const PCA9555::Status lastErr = device.lastError();
-  const PCA9555::DriverState st = device.state();
-  const bool online = device.isOnline();
-
-  Serial.println("=== Driver Health ===");
-  Serial.printf("  State: %s%s%s\n",
-                stateColor(st, online, device.consecutiveFailures()),
-                stateToStr(st),
-                LOG_COLOR_RESET);
-  Serial.printf("  Online: %s%s%s\n",
-                online ? LOG_COLOR_GREEN : LOG_COLOR_RED,
-                log_bool_str(online),
-                LOG_COLOR_RESET);
-  Serial.printf("  Consecutive failures: %s%u%s\n",
-                goodIfZeroColor(device.consecutiveFailures()),
-                device.consecutiveFailures(),
-                LOG_COLOR_RESET);
-  Serial.printf("  Total success: %s%lu%s\n",
-                goodIfNonZeroColor(totalOk),
-                static_cast<unsigned long>(totalOk),
-                LOG_COLOR_RESET);
-  Serial.printf("  Total failures: %s%lu%s\n",
-                goodIfZeroColor(totalFail),
-                static_cast<unsigned long>(totalFail),
-                LOG_COLOR_RESET);
-  Serial.printf("  Success rate: %s%.1f%%%s\n",
-                successRateColor(successRate),
-                successRate,
-                LOG_COLOR_RESET);
-
-  const uint32_t lastOkMs = device.lastOkMs();
-  if (lastOkMs > 0U) {
-    Serial.printf("  Last OK: %lu ms ago (at %lu ms)\n",
-                  static_cast<unsigned long>(now - lastOkMs),
-                  static_cast<unsigned long>(lastOkMs));
-  } else {
-    Serial.println("  Last OK: never");
-  }
-
-  const uint32_t lastErrorMs = device.lastErrorMs();
-  if (lastErrorMs > 0U) {
-    Serial.printf("  Last error: %lu ms ago (at %lu ms)\n",
-                  static_cast<unsigned long>(now - lastErrorMs),
-                  static_cast<unsigned long>(lastErrorMs));
-  } else {
-    Serial.println("  Last error: never");
-  }
-
-  if (!lastErr.ok()) {
-    Serial.printf("  Error code: %s%s%s\n",
-                  LOG_COLOR_RED,
-                  errToStr(lastErr.code),
-                  LOG_COLOR_RESET);
-    Serial.printf("  Error detail: %ld\n", static_cast<long>(lastErr.detail));
-    if (lastErr.msg && lastErr.msg[0]) {
-      Serial.printf("  Error msg: %s\n", lastErr.msg);
-    }
-  }
+  health_diag::printHealthDiag(device.getSettings(), millis());
 }
 
 void printPortBinary(const char* label, uint8_t value) {
@@ -318,16 +255,20 @@ void printVersionInfo() {
 }
 
 void printSettings() {
-  const PCA9555::Config& cfg = device.getConfig();
+  const PCA9555::SettingsSnapshot snapshot = device.getSettings();
+  const PCA9555::Config& cfg = snapshot.config;
 
   Serial.println("=== Settings Snapshot ===");
   Serial.printf("  Initialized: %s%s%s\n",
-                onOffColor(device.isInitialized()),
-                device.isInitialized() ? "YES" : "NO",
+                onOffColor(snapshot.initialized),
+                snapshot.initialized ? "YES" : "NO",
                 LOG_COLOR_RESET);
   Serial.printf("  State: %s%s%s\n",
-                stateColor(device.state(), device.isOnline(), device.consecutiveFailures()),
-                stateToStr(device.state()),
+                stateColor(snapshot.state,
+                           snapshot.state == PCA9555::DriverState::READY ||
+                               snapshot.state == PCA9555::DriverState::DEGRADED,
+                           snapshot.consecutiveFailures),
+                stateToStr(snapshot.state),
                 LOG_COLOR_RESET);
   Serial.printf("  I2C address: 0x%02X\n", cfg.i2cAddress);
   Serial.printf("  Timeout: %lu ms\n", static_cast<unsigned long>(cfg.i2cTimeoutMs));
@@ -860,6 +801,85 @@ void cmdRegWrite(const String& args) {
   LOGI("Reg 0x%02X set to 0x%02X", static_cast<int>(reg), value);
 }
 
+void cmdRegsRead(const String& args) {
+  const char* cursor = args.c_str();
+  long reg = 0;
+  long len = 0;
+  if (!parseLongToken(cursor, reg) ||
+      !parseLongToken(cursor, len) ||
+      reg < 0 || reg > 7 ||
+      len < 1 || len > 2 ||
+      hasTrailingArgs(cursor)) {
+    LOGE("Usage: rregs <0-7> <1-2>");
+    return;
+  }
+
+  uint8_t values[2] = {};
+  PCA9555::Status st = device.readRegisters(static_cast<uint8_t>(reg),
+                                            values,
+                                            static_cast<size_t>(len));
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  Serial.printf("  Regs 0x%02X..0x%02X =",
+                static_cast<unsigned>(reg),
+                static_cast<unsigned>(reg + len - 1));
+  for (long i = 0; i < len; ++i) {
+    Serial.printf(" 0x%02X", values[static_cast<size_t>(i)]);
+  }
+  Serial.print(" (");
+  for (long i = 0; i < len; ++i) {
+    for (int bit = 7; bit >= 0; --bit) {
+      Serial.print((values[static_cast<size_t>(i)] >> bit) & 1);
+    }
+    if (i + 1 < len) {
+      Serial.print(' ');
+    }
+  }
+  Serial.println(")");
+}
+
+void cmdRegsWrite(const String& args) {
+  const char* cursor = args.c_str();
+  long reg = 0;
+  uint8_t values[2] = {};
+  if (!parseLongToken(cursor, reg) ||
+      reg < 2 || reg > 7 ||
+      !parseByteToken(cursor, values[0])) {
+    LOGE("Usage: wregs <2-7> <0x00-0xFF> [0x00-0xFF]");
+    return;
+  }
+
+  size_t len = 1;
+  const char* afterFirst = skipWhitespace(cursor);
+  if (*afterFirst != '\0') {
+    cursor = afterFirst;
+    if (!parseByteToken(cursor, values[1]) || hasTrailingArgs(cursor)) {
+      LOGE("Usage: wregs <2-7> <0x00-0xFF> [0x00-0xFF]");
+      return;
+    }
+    len = 2;
+  }
+
+  PCA9555::Status st = device.writeRegisters(static_cast<uint8_t>(reg), values, len);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  if (len == 1) {
+    LOGI("Reg 0x%02X set to 0x%02X", static_cast<int>(reg), values[0]);
+  } else {
+    LOGI("Regs 0x%02X..0x%02X set to 0x%02X 0x%02X",
+         static_cast<int>(reg),
+         static_cast<int>(reg + 1),
+         values[0],
+         values[1]);
+  }
+}
+
 // ============================================================================
 // Self-Test
 // ============================================================================
@@ -1006,6 +1026,26 @@ void runSelfTest() {
     }
   }
   report("readRegister(0-7) all OK", allRegsOk);
+
+  // --- bulk register helpers ---
+  PCA9555::PortData savedBulkOut;
+  device.readOutputs(savedBulkOut);
+  const uint8_t bulkOut[2] = {0xA5, 0x5A};
+  st = device.writeRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, bulkOut, 2);
+  if (st.ok()) {
+    uint8_t bulkRead[2] = {};
+    st = device.readRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, bulkRead, 2);
+    report("writeRegisters(OUT, 2) + readback",
+           st.ok() && bulkRead[0] == bulkOut[0] && bulkRead[1] == bulkOut[1]);
+  } else {
+    report("writeRegisters(OUT, 2)", false);
+  }
+  const uint8_t restoreBulkOut[2] = {savedBulkOut.port0, savedBulkOut.port1};
+  device.writeRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, restoreBulkOut, 2);
+
+  uint8_t bulkCfg[2] = {};
+  st = device.readRegisters(PCA9555::cmd::REG_CONFIG_PORT_0, bulkCfg, 2);
+  report("readRegisters(CFG, 2) OK", st.ok());
 
   // --- writeRegister (writable range 2-7) ---
   uint8_t savedReg2 = 0;
@@ -1205,7 +1245,10 @@ void printHelp() {
 
   helpSection("Raw Register");
   helpItem("read reg <R> / rreg <R>", "Read register R (0-7)");
+  helpItem("read regs <R> <N> / rregs <R> <N>", "Read 1-2 registers in one pair");
   helpItem("write reg <R> <V> / wreg <R> <V>", "Write register R (2-7) to V");
+  helpItem("write regs <R> <V0> [V1] / wregs <R> <V0> [V1]",
+           "Write 1-2 registers in one pair");
 
   helpSection("Diagnostics");
   helpItem("drv", "Show driver state and health");
@@ -1343,6 +1386,16 @@ void processCommand(const String& cmdLine) {
     return;
   }
 
+  if (cmd.startsWith("read regs ")) {
+    cmdRegsRead(cmd.substring(10));
+    return;
+  }
+
+  if (cmd.startsWith("rregs ")) {
+    cmdRegsRead(cmd.substring(6));
+    return;
+  }
+
   if (cmd.startsWith("read reg ")) {
     cmdRegRead(cmd.substring(9));
     return;
@@ -1420,6 +1473,16 @@ void processCommand(const String& cmdLine) {
   }
 
   // ---- Raw Register ----
+  if (cmd.startsWith("write regs ")) {
+    cmdRegsWrite(cmd.substring(11));
+    return;
+  }
+
+  if (cmd.startsWith("wregs ")) {
+    cmdRegsWrite(cmd.substring(6));
+    return;
+  }
+
   if (cmd.startsWith("write reg ")) {
     cmdRegWrite(cmd.substring(10));
     return;

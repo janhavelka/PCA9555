@@ -8,9 +8,11 @@ Production-grade PCA9555 16-bit I/O expander I2C driver for ESP32 (Arduino/Platf
 - **Health monitoring** - automatic state tracking (READY/DEGRADED/OFFLINE)
 - **Deterministic behavior** - no unbounded loops, no heap allocations
 - **Managed synchronous lifecycle** - blocking I2C ops with clean begin/tick/end
+- **Settings snapshot** - access the active runtime config and health counters with `getSettings()`
 - **16-bit I/O** - two independent 8-bit ports (Port 0 and Port 1)
 - **Interrupt errata workaround** - configurable automatic errata mitigation
 - **Single-pin helpers** - pin-level readback plus atomic read-modify-write for output, direction, and polarity
+- **Bulk register helpers** - pair-bounded `readRegisters()` / `writeRegisters()` for low-level diagnostics
 - **Recoverable runtime state** - `recover()` reapplies the latest live output/config/polarity state
 
 ## Installation
@@ -150,6 +152,8 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 
 - `Status readRegister(uint8_t reg, uint8_t& value)` - Read any register (0-7)
 - `Status writeRegister(uint8_t reg, uint8_t value)` - Write writable register (2-7)
+- `Status readRegisters(uint8_t startReg, uint8_t* buf, size_t len)` - Read 1-2 registers in one pair
+- `Status writeRegisters(uint8_t startReg, const uint8_t* buf, size_t len)` - Write 1-2 registers in one pair
 
 ### Health
 
@@ -157,6 +161,7 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 - `bool isInitialized()` - True after `begin()` succeeds and before `end()`
 - `bool isOnline()` - True if READY or DEGRADED
 - `const Config& getConfig()` - Current recoverable runtime configuration snapshot
+- `SettingsSnapshot getSettings()` - Combined settings plus health snapshot
 - `uint32_t lastOkMs()` / `lastErrorMs()` - Timestamps
 - `Status lastError()` - Most recent error
 - `uint8_t consecutiveFailures()` - Failures since last success
@@ -229,7 +234,8 @@ Interactive serial CLI for device bringup and testing. Supports reading/writing 
 ports and individual pins, register dump, direction and polarity configuration,
 self-test, stress tests, driver health diagnostics, `cfg/settings` snapshots,
 single-pin latch/direction/polarity readback (`rout`, `rdir`, `rpol`), `pininfo`,
-full `pins` summaries, port-specific readback commands,
+full `pins` summaries, port-specific readback commands, and pair-bounded low-level
+register access (`read regs` / `write regs`),
 and both terse and descriptive command aliases (`read inputs`, `write pin`, `read reg`, ...).
 
 Typical bring-up commands:
@@ -256,6 +262,7 @@ pins
 | `CommandHandler.h` | Serial command-line helpers |
 | `CliShell.h` | Serial line reader helper for CLI examples |
 | `BusDiag.h` | Bus diagnostic scan wrapper |
+| `HealthDiag.h` | Driver health snapshot printer |
 | `HealthView.h` | Compact one-line health summary helper |
 
 These helpers are **not** part of the library — they exist only to keep examples self-contained.
@@ -281,6 +288,7 @@ python tools/check_core_timing_guard.py
 
 - [CHANGELOG](CHANGELOG.md)
 - [PCA9555 Implementation Manual](PCA9555_io_expander_implementation_manual.md)
+- [Register Reference](docs/register_reference.md)
 - [Auto-Increment Feature](docs/application_notes/auto_increment_feature.md)
 - [Contributing Guide](CONTRIBUTING.md)
 

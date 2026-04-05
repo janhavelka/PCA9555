@@ -10,12 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `setPinPolarity()` for single-pin polarity inversion with the same cached read-modify-write ergonomics as `writePin()` and `setPinDirection()`.
 - Symmetric single-pin and single-port readback helpers: `readOutput()`, `readOutputPin()`, `getPortConfiguration()`, `getPortPolarity()`, `getPinDirection()`, and `getPinPolarity()`.
+- `SettingsSnapshot` and `getSettings()` for a combined runtime configuration plus health snapshot.
+- Pair-bounded bulk register helpers: `readRegisters()` and `writeRegisters()`.
 - Standardized example helpers: `CliShell.h`, `HealthView.h`, and `TransportAdapter.h`.
+- `HealthDiag.h` and `docs/register_reference.md` for example and register-reference parity.
 - Repo validation scripts: `tools/check_cli_contract.py` and `tools/check_core_timing_guard.py`.
 - `Config::requireConfigPortDefaults` to make the strict POR-default check in `begin()` explicit and configurable.
 
 ### Changed
 - Standardized the bringup CLI with descriptive aliases such as `read inputs`, `write pin`, `read reg`, and `cfg/settings`, while preserving the existing short commands.
+- Extended the bringup CLI with bulk register commands (`read regs` / `rregs`, `write regs` / `wregs`) and snapshot-backed health output.
 - Expanded the CLI with single-pin inspection/readback commands (`rout`, `rdir`, `rpol`, `pininfo`), full `pins` summaries, per-port semantic readback commands, and stricter numeric parsing for interactive safety.
 - Expanded README coverage for runtime recovery behavior, helper layout, and validation commands.
 

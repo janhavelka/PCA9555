@@ -12,7 +12,7 @@
 namespace PCA9555 {
 namespace {
 
-static constexpr size_t MAX_WRITE_LEN = 2;
+static constexpr size_t MAX_BULK_LEN = 2;
 
 static bool isValidAddress(uint8_t addr) {
   return addr >= cmd::BASE_ADDRESS && addr <= cmd::MAX_ADDRESS;
@@ -121,6 +121,20 @@ void PCA9555::end() {
   _cachedOutput1 = 0xFF;
   _cachedConfig0 = 0xFF;
   _cachedConfig1 = 0xFF;
+}
+
+SettingsSnapshot PCA9555::getSettings() const {
+  SettingsSnapshot snapshot;
+  snapshot.config = _config;
+  snapshot.state = _driverState;
+  snapshot.initialized = _initialized;
+  snapshot.lastOkMs = _lastOkMs;
+  snapshot.lastErrorMs = _lastErrorMs;
+  snapshot.lastError = _lastError;
+  snapshot.consecutiveFailures = _consecutiveFailures;
+  snapshot.totalFailures = _totalFailures;
+  snapshot.totalSuccess = _totalSuccess;
+  return snapshot;
 }
 
 // ===========================================================================
@@ -649,19 +663,34 @@ Status PCA9555::getPinDirection(Pin pin, bool& input) {
 // ===========================================================================
 
 Status PCA9555::readRegister(uint8_t reg, uint8_t& value) {
+  return readRegisters(reg, &value, 1);
+}
+
+Status PCA9555::readRegisters(uint8_t startReg, uint8_t* buf, size_t len) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
-  if (!isValidRegister(reg)) {
+  if (buf == nullptr || len == 0) {
+    return Status::Error(Err::INVALID_PARAM, "Invalid read buffer");
+  }
+  if (!isValidRegister(startReg)) {
     return Status::Error(Err::INVALID_PARAM, "Register address out of range");
   }
-  Status st = readRegs(reg, &value, 1);
+  if (len > MAX_BULK_LEN) {
+    return Status::Error(Err::INVALID_PARAM, "Read length too large");
+  }
+
+  Status st = readRegs(startReg, buf, len);
   if (!st.ok()) {
     return st;
   }
 
-  _syncShadowRegister(reg, value);
-  if (isInputRegister(reg) && _config.applyInterruptErrata) {
+  for (size_t i = 0; i < len; ++i) {
+    _syncShadowRegister(static_cast<uint8_t>(startReg + static_cast<uint8_t>(i)),
+                       buf[i]);
+  }
+
+  if (isInputRegister(startReg) && _config.applyInterruptErrata) {
     st = _applyInterruptErrata();
     if (!st.ok()) {
       return st;
@@ -671,18 +700,28 @@ Status PCA9555::readRegister(uint8_t reg, uint8_t& value) {
 }
 
 Status PCA9555::writeRegister(uint8_t reg, uint8_t value) {
+  return writeRegisters(reg, &value, 1);
+}
+
+Status PCA9555::writeRegisters(uint8_t startReg, const uint8_t* buf, size_t len) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
-  if (reg < cmd::REG_OUTPUT_PORT_0 || reg > cmd::REG_CONFIG_PORT_1) {
+  if (buf == nullptr || len == 0) {
+    return Status::Error(Err::INVALID_PARAM, "Invalid write buffer");
+  }
+  if (startReg < cmd::REG_OUTPUT_PORT_0 || startReg > cmd::REG_CONFIG_PORT_1) {
     return Status::Error(Err::INVALID_PARAM, "Register not writable or out of range");
   }
-  Status st = writeRegs(reg, &value, 1);
+  Status st = writeRegs(startReg, buf, len);
   if (!st.ok()) {
     return st;
   }
 
-  _syncShadowRegister(reg, value);
+  for (size_t i = 0; i < len; ++i) {
+    _syncShadowRegister(static_cast<uint8_t>(startReg + static_cast<uint8_t>(i)),
+                       buf[i]);
+  }
   return Status::Ok();
 }
 
@@ -765,7 +804,7 @@ Status PCA9555::writeRegs(uint8_t startReg, const uint8_t* buf, size_t len) {
   if (!isValidRegister(startReg)) {
     return Status::Error(Err::INVALID_PARAM, "Register address out of range");
   }
-  if (len > MAX_WRITE_LEN) {
+  if (len > MAX_BULK_LEN) {
     return Status::Error(Err::INVALID_PARAM, "Write length too large");
   }
   const size_t pairRemaining = 2U - static_cast<size_t>(startReg & 0x01U);
@@ -773,7 +812,7 @@ Status PCA9555::writeRegs(uint8_t startReg, const uint8_t* buf, size_t len) {
     return Status::Error(Err::INVALID_PARAM, "Write crosses register pair boundary");
   }
 
-  uint8_t payload[MAX_WRITE_LEN + 1] = {};
+  uint8_t payload[MAX_BULK_LEN + 1] = {};
   payload[0] = startReg;
   std::memcpy(&payload[1], buf, len);
 

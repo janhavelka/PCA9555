@@ -1413,20 +1413,17 @@ void cmdSweep(const String& args) {
   if (!st.ok()) { printStatus(st); return; }
 
   // Set all pins to output, all low
-  st = device.setPortConfiguration(PCA9555::Port::PORT_0, 0x00);
+  st = device.writeOutputs({0x00, 0x00});
   if (!st.ok()) { printStatus(st); return; }
-  st = device.setPortConfiguration(PCA9555::Port::PORT_1, 0x00);
-  if (!st.ok()) { printStatus(st); return; }
-  st = device.writeOutput(PCA9555::Port::PORT_0, 0x00);
-  if (!st.ok()) { printStatus(st); return; }
-  st = device.writeOutput(PCA9555::Port::PORT_1, 0x00);
+  st = device.setConfiguration({0x00, 0x00});
   if (!st.ok()) { printStatus(st); return; }
 
   Serial.printf("=== Sweep Test (delay=%ld ms) ===\n", delayMs);
   int pass = 0, fail = 0;
 
+  // Phase 1: turn pins ON one-by-one (accumulating)
+  Serial.println("  -- ON sweep --");
   for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
-    // Turn pin ON
     st = device.writePin(pin, true);
     if (!st.ok()) {
       Serial.printf("  P%02u: %s[FAIL]%s set high - %s\n",
@@ -1437,29 +1434,56 @@ void cmdSweep(const String& args) {
 
     if (delayMs > 0) delay(static_cast<unsigned long>(delayMs));
 
-    // Verify via output latch readback
-    bool readback = false;
-    st = device.readOutputPin(pin, readback);
-    if (!st.ok() || !readback) {
-      Serial.printf("  P%02u: %s[FAIL]%s readback mismatch\n",
-                    pin, LOG_COLOR_RED, LOG_COLOR_RESET);
+    // Verify: all pins 0..pin should be HIGH
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    const uint16_t expected = static_cast<uint16_t>((1U << (pin + 1)) - 1U);
+    if (!st.ok() || readback.combined() != expected) {
+      Serial.printf("  P%02u: %s[FAIL]%s ON readback 0x%04X != 0x%04X\n",
+                    pin, LOG_COLOR_RED, LOG_COLOR_RESET,
+                    readback.combined(), expected);
       fail++;
     } else {
-      Serial.printf("  P%02u: %s[OK]%s ON\n",
-                    pin, LOG_COLOR_GREEN, LOG_COLOR_RESET);
+      Serial.printf("  P%02u: %s[OK]%s ON (0x%04X)\n",
+                    pin, LOG_COLOR_GREEN, LOG_COLOR_RESET, expected);
       pass++;
     }
+  }
 
-    // Turn pin OFF
-    device.writePin(pin, false);
+  // Phase 2: turn pins OFF one-by-one (draining)
+  Serial.println("  -- OFF sweep --");
+  for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
+    st = device.writePin(pin, false);
+    if (!st.ok()) {
+      Serial.printf("  P%02u: %s[FAIL]%s set low - %s\n",
+                    pin, LOG_COLOR_RED, LOG_COLOR_RESET, errToStr(st.code));
+      fail++;
+      continue;
+    }
+
     if (delayMs > 0) delay(static_cast<unsigned long>(delayMs));
+
+    // Verify: pins 0..pin should be LOW, pins (pin+1)..15 should still be HIGH
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    const uint16_t expected = (pin < 15)
+        ? static_cast<uint16_t>(0xFFFFU << (pin + 1))
+        : static_cast<uint16_t>(0x0000U);
+    if (!st.ok() || readback.combined() != expected) {
+      Serial.printf("  P%02u: %s[FAIL]%s OFF readback 0x%04X != 0x%04X\n",
+                    pin, LOG_COLOR_RED, LOG_COLOR_RESET,
+                    readback.combined(), expected);
+      fail++;
+    } else {
+      Serial.printf("  P%02u: %s[OK]%s OFF (0x%04X)\n",
+                    pin, LOG_COLOR_GREEN, LOG_COLOR_RESET, expected);
+      pass++;
+    }
   }
 
   // Restore
-  device.setPortConfiguration(PCA9555::Port::PORT_0, savedCfg.port0);
-  device.setPortConfiguration(PCA9555::Port::PORT_1, savedCfg.port1);
-  device.writeOutput(PCA9555::Port::PORT_0, savedOut.port0);
-  device.writeOutput(PCA9555::Port::PORT_1, savedOut.port1);
+  device.setConfiguration(savedCfg);
+  device.writeOutputs(savedOut);
 
   Serial.println("--- Summary ---");
   Serial.printf("  %s%d passed%s, %s%d failed%s\n",
@@ -1487,47 +1511,41 @@ void cmdWalk(const String& args) {
   if (!st.ok()) { printStatus(st); return; }
 
   // Set all pins to output
-  st = device.setPortConfiguration(PCA9555::Port::PORT_0, 0x00);
-  if (!st.ok()) { printStatus(st); return; }
-  st = device.setPortConfiguration(PCA9555::Port::PORT_1, 0x00);
+  st = device.setConfiguration({0x00, 0x00});
   if (!st.ok()) { printStatus(st); return; }
 
   Serial.printf("=== Walking-1 Test (delay=%ld ms) ===\n", delayMs);
   int pass = 0, fail = 0;
 
   for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
-    // All low, then only this pin high
-    const uint8_t p0 = (pin < 8) ? static_cast<uint8_t>(1U << pin) : 0x00;
-    const uint8_t p1 = (pin >= 8) ? static_cast<uint8_t>(1U << (pin - 8)) : 0x00;
+    // Only this pin high, all others low
+    const uint16_t pattern = static_cast<uint16_t>(1U << pin);
+    const PCA9555::PortData out = PCA9555::PortData::fromCombined(pattern);
 
-    st = device.writeOutput(PCA9555::Port::PORT_0, p0);
+    st = device.writeOutputs(out);
     if (!st.ok()) { fail++; continue; }
-    st = device.writeOutput(PCA9555::Port::PORT_1, p1);
-    if (!st.ok()) { fail++; continue; }
+
+    if (delayMs > 0) delay(static_cast<unsigned long>(delayMs));
 
     // Readback verify
     PCA9555::PortData readback;
     st = device.readOutputs(readback);
-    if (!st.ok() || readback.port0 != p0 || readback.port1 != p1) {
-      Serial.printf("  P%02u: %s[FAIL]%s readback mismatch\n",
-                    pin, LOG_COLOR_RED, LOG_COLOR_RESET);
+    if (!st.ok() || readback.combined() != pattern) {
+      Serial.printf("  P%02u: %s[FAIL]%s readback 0x%04X != 0x%04X\n",
+                    pin, LOG_COLOR_RED, LOG_COLOR_RESET,
+                    readback.combined(), pattern);
       fail++;
     } else {
       Serial.printf("  P%02u: %s[OK]%s P0=0x%02X P1=0x%02X\n",
-                    pin, LOG_COLOR_GREEN, LOG_COLOR_RESET, p0, p1);
+                    pin, LOG_COLOR_GREEN, LOG_COLOR_RESET, out.port0, out.port1);
       pass++;
     }
-
-    if (delayMs > 0) delay(static_cast<unsigned long>(delayMs));
   }
 
   // All off, then restore
-  device.writeOutput(PCA9555::Port::PORT_0, 0x00);
-  device.writeOutput(PCA9555::Port::PORT_1, 0x00);
-  device.setPortConfiguration(PCA9555::Port::PORT_0, savedCfg.port0);
-  device.setPortConfiguration(PCA9555::Port::PORT_1, savedCfg.port1);
-  device.writeOutput(PCA9555::Port::PORT_0, savedOut.port0);
-  device.writeOutput(PCA9555::Port::PORT_1, savedOut.port1);
+  device.writeOutputs({0x00, 0x00});
+  device.setConfiguration(savedCfg);
+  device.writeOutputs(savedOut);
 
   Serial.println("--- Summary ---");
   Serial.printf("  %s%d passed%s, %s%d failed%s\n",
@@ -1617,8 +1635,8 @@ void printHelp() {
            "Write 1-2 registers in one pair");
 
   helpSection("Testing");
-  helpItem("sweep [delay_ms]", "Sequential ON/OFF for each pin (default 200ms)");
-  helpItem("walk [delay_ms]", "Walking-1 pattern across all 16 pins");
+  helpItem("sweep [delay_ms]", "Fill ON then drain OFF, pin by pin (accumulating)");
+  helpItem("walk [delay_ms]", "Walking-1: single pin HIGH moves across all 16");
   helpItem("allhigh", "Set all 16 pins to output HIGH");
   helpItem("alllow", "Set all 16 pins to output LOW");
 

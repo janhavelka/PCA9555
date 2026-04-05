@@ -2092,6 +2092,7 @@ void setup() {
   cfg.polarityPort0 = 0x00;
   cfg.polarityPort1 = 0x00;
   cfg.applyInterruptErrata = true;
+  cfg.requireConfigPortDefaults = false;  // CLI mutates config regs; chip has no SW reset
   PCA9555::Status st = device.begin(cfg);
   if (!st.ok()) {
     LOGE("Init failed!");

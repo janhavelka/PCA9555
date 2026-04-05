@@ -395,6 +395,141 @@ Status PCA9555::readOutputs(PortData& data) {
 }
 
 // ===========================================================================
+// Bit Manipulation API
+// ===========================================================================
+
+Status PCA9555::setOutputBits(uint16_t mask) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+
+  PortData data;
+  data.port0 = _cachedOutput0 | static_cast<uint8_t>(mask & 0xFF);
+  data.port1 = _cachedOutput1 | static_cast<uint8_t>((mask >> 8) & 0xFF);
+
+  if (data.port0 == _cachedOutput0 && data.port1 == _cachedOutput1) {
+    return Status::Ok();
+  }
+
+  return writeOutputs(data);
+}
+
+Status PCA9555::clearOutputBits(uint16_t mask) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+
+  PortData data;
+  data.port0 = _cachedOutput0 & static_cast<uint8_t>(~mask & 0xFF);
+  data.port1 = _cachedOutput1 & static_cast<uint8_t>(~(mask >> 8) & 0xFF);
+
+  if (data.port0 == _cachedOutput0 && data.port1 == _cachedOutput1) {
+    return Status::Ok();
+  }
+
+  return writeOutputs(data);
+}
+
+Status PCA9555::toggleOutputBits(uint16_t mask) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+
+  if (mask == 0) {
+    return Status::Ok();
+  }
+
+  PortData data;
+  data.port0 = _cachedOutput0 ^ static_cast<uint8_t>(mask & 0xFF);
+  data.port1 = _cachedOutput1 ^ static_cast<uint8_t>((mask >> 8) & 0xFF);
+
+  return writeOutputs(data);
+}
+
+Status PCA9555::togglePin(Pin pin) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPin(pin)) {
+    return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
+  }
+
+  const uint8_t mask = bitMaskForPin(pin);
+  const bool isPort0 = (pin < cmd::PINS_PER_PORT);
+  const uint8_t& cached = isPort0 ? _cachedOutput0 : _cachedOutput1;
+  const uint8_t newVal = cached ^ mask;
+
+  const Port port = isPort0 ? Port::PORT_0 : Port::PORT_1;
+  return writeOutput(port, newVal);
+}
+
+Status PCA9555::configureInputBits(uint16_t mask) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+
+  PortData data;
+  data.port0 = _cachedConfig0 | static_cast<uint8_t>(mask & 0xFF);
+  data.port1 = _cachedConfig1 | static_cast<uint8_t>((mask >> 8) & 0xFF);
+
+  if (data.port0 == _cachedConfig0 && data.port1 == _cachedConfig1) {
+    return Status::Ok();
+  }
+
+  return setConfiguration(data);
+}
+
+Status PCA9555::configureOutputBits(uint16_t mask) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+
+  PortData data;
+  data.port0 = _cachedConfig0 & static_cast<uint8_t>(~mask & 0xFF);
+  data.port1 = _cachedConfig1 & static_cast<uint8_t>(~(mask >> 8) & 0xFF);
+
+  if (data.port0 == _cachedConfig0 && data.port1 == _cachedConfig1) {
+    return Status::Ok();
+  }
+
+  return setConfiguration(data);
+}
+
+Status PCA9555::setInvertBits(uint16_t mask) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+
+  PortData data;
+  data.port0 = _config.polarityPort0 | static_cast<uint8_t>(mask & 0xFF);
+  data.port1 = _config.polarityPort1 | static_cast<uint8_t>((mask >> 8) & 0xFF);
+
+  if (data.port0 == _config.polarityPort0 &&
+      data.port1 == _config.polarityPort1) {
+    return Status::Ok();
+  }
+
+  return setPolarity(data);
+}
+
+Status PCA9555::clearInvertBits(uint16_t mask) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+
+  PortData data;
+  data.port0 = _config.polarityPort0 & static_cast<uint8_t>(~mask & 0xFF);
+  data.port1 = _config.polarityPort1 & static_cast<uint8_t>(~(mask >> 8) & 0xFF);
+
+  if (data.port0 == _config.polarityPort0 &&
+      data.port1 == _config.polarityPort1) {
+    return Status::Ok();
+  }
+
+  return setPolarity(data);
+}
+
+// ===========================================================================
 // Configuration API
 // ===========================================================================
 

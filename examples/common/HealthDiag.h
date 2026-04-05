@@ -88,7 +88,7 @@ inline void printHealthDiag(const PCA9555::SettingsSnapshot& snapshot, uint32_t 
                 log_bool_str(online),
                 LOG_COLOR_RESET);
   Serial.printf("  Consecutive failures: %s%u%s\n",
-                (snapshot.consecutiveFailures == 0U) ? LOG_COLOR_GREEN : LOG_COLOR_YELLOW,
+                (snapshot.consecutiveFailures == 0U) ? LOG_COLOR_GREEN : LOG_COLOR_RED,
                 snapshot.consecutiveFailures,
                 LOG_COLOR_RESET);
   Serial.printf("  Total success: %s%lu%s\n",

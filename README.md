@@ -12,6 +12,7 @@ Production-grade PCA9555 16-bit I/O expander I2C driver for ESP32 (Arduino/Platf
 - **16-bit I/O** - two independent 8-bit ports (Port 0 and Port 1)
 - **Interrupt errata workaround** - configurable automatic errata mitigation
 - **Single-pin helpers** - pin-level readback plus atomic read-modify-write for output, direction, and polarity
+- **Bit manipulation helpers** - 16-bit mask-based set/clear/toggle for outputs, direction, and polarity in a single I2C burst
 - **Bulk register helpers** - pair-bounded `readRegisters()` / `writeRegisters()` for low-level diagnostics
 - **Recoverable runtime state** - `recover()` reapplies the latest live output/config/polarity state
 
@@ -148,6 +149,21 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 - `Status setPinDirection(Pin pin, bool input)` - Set single pin direction (uses cached value)
 - `Status getPinDirection(Pin pin, bool& input)` - Read single pin direction
 
+### Bit Manipulation API
+
+All methods operate on a 16-bit mask (bit 0 = P00, bit 15 = P17), use cached shadow
+registers, and write both ports in a single 2-byte I2C burst. No I2C occurs when the
+mask causes no change.
+
+- `Status setOutputBits(uint16_t mask)` - Set output bits HIGH (OR mask into shadow)
+- `Status clearOutputBits(uint16_t mask)` - Clear output bits LOW (AND ~mask into shadow)
+- `Status toggleOutputBits(uint16_t mask)` - Toggle output bits (XOR mask into shadow)
+- `Status togglePin(Pin pin)` - Toggle single output pin (1-byte write, no read)
+- `Status configureInputBits(uint16_t mask)` - Set masked pins to INPUT direction
+- `Status configureOutputBits(uint16_t mask)` - Set masked pins to OUTPUT direction
+- `Status setInvertBits(uint16_t mask)` - Enable polarity inversion for masked pins
+- `Status clearInvertBits(uint16_t mask)` - Disable polarity inversion for masked pins
+
 ### Register Access
 
 - `Status readRegister(uint8_t reg, uint8_t& value)` - Read any register (0-7)
@@ -232,6 +248,7 @@ the register pointer away from 0x00.
 
 Interactive serial CLI for device bringup and testing. Supports reading/writing all
 ports and individual pins, register dump, direction and polarity configuration,
+16-bit mask-based bit manipulation (`setbits`, `clearbits`, `togglebits`, `dirin`, `dirout`, `invertset`, `invertclr`),
 self-test, stress tests, driver health diagnostics, `cfg/settings` snapshots,
 single-pin latch/direction/polarity readback (`rout`, `rdir`, `rpol`), `pininfo`,
 full `pins` summaries, port-specific readback commands, and pair-bounded low-level

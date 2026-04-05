@@ -17,7 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repo validation scripts: `tools/check_cli_contract.py` and `tools/check_core_timing_guard.py`.
 - `Config::requireConfigPortDefaults` to make the strict POR-default check in `begin()` explicit and configurable.
 
+### Added
+- Bit Manipulation API: `setOutputBits()`, `clearOutputBits()`, `toggleOutputBits()`, `togglePin()` for masked output changes in a single 2-byte I2C burst.
+- Direction bit manipulation: `configureInputBits()`, `configureOutputBits()` for bulk pin direction changes.
+- Polarity bit manipulation: `setInvertBits()`, `clearInvertBits()` for bulk polarity inversion changes.
+- CLI commands for bit manipulation: `setbits`/`sb`, `clearbits`/`cb`, `togglebits`/`tb`, `dirin`, `dirout`, `invertset`, `invertclr`.
+- `parseU16Token()` CLI parser for 16-bit mask arguments.
+- Native unit tests for all bit manipulation methods including no-op optimization and pre-begin rejection.
+
 ### Changed
+- `cmdTogglePin` now uses library-level `togglePin()` (1 I2C write) instead of `readOutputPin()` + `writePin()` (2 I2C transactions).
+- `cmdAllHigh` / `cmdAllLow` now use dual-port bulk operations (2 I2C transactions) instead of 5 separate port-level calls.
 - Standardized the bringup CLI with descriptive aliases such as `read inputs`, `write pin`, `read reg`, and `cfg/settings`, while preserving the existing short commands.
 - Extended the bringup CLI with bulk register commands (`read regs` / `rregs`, `write regs` / `wregs`) and snapshot-backed health output.
 - Expanded the CLI with single-pin inspection/readback commands (`rout`, `rdir`, `rpol`, `pininfo`), full `pins` summaries, per-port semantic readback commands, and stricter numeric parsing for interactive safety.

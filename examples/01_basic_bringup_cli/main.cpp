@@ -1099,6 +1099,13 @@ void runSelfTest() {
   st = device.getPinPolarity(0, pinPolarity);
   reportCheck("getPinPolarity(0)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
+  // --- getSettings ---
+  const PCA9555::SettingsSnapshot snapshot = device.getSettings();
+  reportCheck("getSettings().initialized", snapshot.initialized, "");
+  reportCheck("getSettings().state == READY",
+              snapshot.state == PCA9555::DriverState::READY,
+              "");
+
   // --- writeOutput + readback ---
   PCA9555::PortData savedOut;
   device.readOutputs(savedOut);
@@ -1203,6 +1210,118 @@ void runSelfTest() {
   }
   device.writeRegister(2, savedReg2); // restore
 
+  // --- bit manipulation helpers ---
+  PCA9555::PortData savedBitOut;
+  PCA9555::PortData savedBitCfg;
+  PCA9555::PortData savedBitPol;
+  device.readOutputs(savedBitOut);
+  device.getConfiguration(savedBitCfg);
+  device.getPolarity(savedBitPol);
+
+  st = device.writeOutputs({0x00, 0x00});
+  if (st.ok()) {
+    st = device.setConfiguration({0x00, 0x00});
+  }
+  if (st.ok()) {
+    st = device.setOutputBits(0x0103U);
+  }
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    reportCheck("setOutputBits(0x0103) + readback",
+                st.ok() && readback.combined() == 0x0103U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("setOutputBits(0x0103)", false, errToStr(st.code));
+  }
+
+  st = device.clearOutputBits(0x0001U);
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    reportCheck("clearOutputBits(0x0001) + readback",
+                st.ok() && readback.combined() == 0x0102U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("clearOutputBits(0x0001)", false, errToStr(st.code));
+  }
+
+  st = device.toggleOutputBits(0x0300U);
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    reportCheck("toggleOutputBits(0x0300) + readback",
+                st.ok() && readback.combined() == 0x0202U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("toggleOutputBits(0x0300)", false, errToStr(st.code));
+  }
+
+  st = device.togglePin(0);
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    reportCheck("togglePin(0) + readback",
+                st.ok() && readback.combined() == 0x0203U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("togglePin(0)", false, errToStr(st.code));
+  }
+
+  st = device.setConfiguration({0x00, 0x00});
+  if (st.ok()) {
+    st = device.configureInputBits(0x0103U);
+  }
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.getConfiguration(readback);
+    reportCheck("configureInputBits(0x0103) + readback",
+                st.ok() && readback.combined() == 0x0103U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("configureInputBits(0x0103)", false, errToStr(st.code));
+  }
+
+  st = device.configureOutputBits(0x0001U);
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.getConfiguration(readback);
+    reportCheck("configureOutputBits(0x0001) + readback",
+                st.ok() && readback.combined() == 0x0102U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("configureOutputBits(0x0001)", false, errToStr(st.code));
+  }
+
+  st = device.setPolarity({0x00, 0x00});
+  if (st.ok()) {
+    st = device.setInvertBits(0x0101U);
+  }
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.getPolarity(readback);
+    reportCheck("setInvertBits(0x0101) + readback",
+                st.ok() && readback.combined() == 0x0101U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("setInvertBits(0x0101)", false, errToStr(st.code));
+  }
+
+  st = device.clearInvertBits(0x0001U);
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.getPolarity(readback);
+    reportCheck("clearInvertBits(0x0001) + readback",
+                st.ok() && readback.combined() == 0x0100U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("clearInvertBits(0x0001)", false, errToStr(st.code));
+  }
+
+  device.writeOutputs(savedBitOut);
+  device.setPolarity(savedBitPol);
+  device.setConfiguration(savedBitCfg);
+
   // --- recover ---
   st = device.recover();
   reportCheck("recover", st.ok(), st.ok() ? "" : errToStr(st.code));
@@ -1298,33 +1417,83 @@ void runStressMix(int count) {
     uint32_t ok;
     uint32_t fail;
   };
-  static constexpr int OP_COUNT = 6;
+  static constexpr int OP_COUNT = 14;
   OpStats ops[OP_COUNT] = {
-    {"readInputs",    0, 0},
-    {"readOutputs",   0, 0},
-    {"getConfig",     0, 0},
-    {"getPolarity",   0, 0},
-    {"readRegister",  0, 0},
-    {"writeOutput",   0, 0},
+    {"readInputs",        0, 0},
+    {"readOutputs",       0, 0},
+    {"getConfig",         0, 0},
+    {"getPolarity",       0, 0},
+    {"readRegister",      0, 0},
+    {"readRegisters",     0, 0},
+    {"setOutputBits",     0, 0},
+    {"clearOutputBits",   0, 0},
+    {"toggleOutputBits",  0, 0},
+    {"togglePin",         0, 0},
+    {"configureInput",    0, 0},
+    {"configureOutput",   0, 0},
+    {"setInvertBits",     0, 0},
+    {"clearInvertBits",   0, 0},
   };
 
-  // Save output state for restore
   PCA9555::PortData savedOut;
-  device.readOutputs(savedOut);
+  PCA9555::PortData savedCfg;
+  PCA9555::PortData savedPol;
+  PCA9555::Status st = device.readOutputs(savedOut);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.getConfiguration(savedCfg);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.getPolarity(savedPol);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  st = device.writeOutputs({0x00, 0x00});
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.setPolarity({0x00, 0x00});
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.setConfiguration({0x00, 0x00});
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
 
   for (int i = 0; i < count; ++i) {
     const int op = i % OP_COUNT;
-    PCA9555::Status st;
     PCA9555::PortData d;
     uint8_t val = 0;
+    uint8_t pairBuf[2] = {};
+    const uint16_t maskA = ((i & 1) == 0) ? 0x0003U : 0x0300U;
+    const uint16_t maskB = ((i & 1) == 0) ? 0x0101U : 0x1008U;
+    const PCA9555::Pin pin = static_cast<PCA9555::Pin>(i % PCA9555::cmd::TOTAL_PINS);
 
     switch (op) {
-      case 0: st = device.readInputs(d);            break;
-      case 1: st = device.readOutputs(d);            break;
-      case 2: st = device.getConfiguration(d);       break;
-      case 3: st = device.getPolarity(d);            break;
-      case 4: st = device.readRegister(0, val);      break;
-      case 5: st = device.writeOutput(PCA9555::Port::PORT_0, savedOut.port0); break;
+      case 0: st = device.readInputs(d); break;
+      case 1: st = device.readOutputs(d); break;
+      case 2: st = device.getConfiguration(d); break;
+      case 3: st = device.getPolarity(d); break;
+      case 4: st = device.readRegister(0, val); break;
+      case 5: st = device.readRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, pairBuf, 2); break;
+      case 6: st = device.setOutputBits(maskA); break;
+      case 7: st = device.clearOutputBits(maskA); break;
+      case 8: st = device.toggleOutputBits(maskB); break;
+      case 9: st = device.togglePin(pin); break;
+      case 10: st = device.configureInputBits(maskA); break;
+      case 11: st = device.configureOutputBits(maskA); break;
+      case 12: st = device.setInvertBits(maskB); break;
+      case 13: st = device.clearInvertBits(maskB); break;
       default: break;
     }
 
@@ -1336,9 +1505,9 @@ void runStressMix(int count) {
     }
   }
 
-  // Restore outputs
-  device.writeOutput(PCA9555::Port::PORT_0, savedOut.port0);
-  device.writeOutput(PCA9555::Port::PORT_1, savedOut.port1);
+  device.writeOutputs(savedOut);
+  device.setPolarity(savedPol);
+  device.setConfiguration(savedCfg);
 
   const uint32_t elapsed = millis() - startMs;
   uint32_t totalOk = 0, totalFail = 0;
@@ -1571,6 +1740,32 @@ void cmdAllLow() {
   LOGI("All 16 pins set to OUTPUT LOW");
 }
 
+void cmdPattern(const String& args) {
+  const char* cursor = args.c_str();
+  uint16_t pattern = 0;
+  if (!parseU16Token(cursor, pattern) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: pattern <0x0000-0xFFFF>");
+    return;
+  }
+
+  const PCA9555::PortData outputs = PCA9555::PortData::fromCombined(pattern);
+  PCA9555::Status st = device.writeOutputs(outputs);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.setConfiguration({0x00, 0x00});
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  LOGI("Pattern applied: mask=0x%04X -> P0=0x%02X P1=0x%02X (all pins OUTPUT)",
+       pattern,
+       outputs.port0,
+       outputs.port1);
+}
+
 // ============================================================================
 // Help
 // ============================================================================
@@ -1582,9 +1777,19 @@ void printHelp() {
   auto helpItem = [](const char* cmd, const char* desc) {
     Serial.printf("  %s%-32s%s - %s\n", LOG_COLOR_CYAN, cmd, LOG_COLOR_RESET, desc);
   };
+  auto helpNote = [](const char* text) {
+    Serial.printf("  %s%s%s\n", LOG_COLOR_YELLOW, text, LOG_COLOR_RESET);
+  };
 
   Serial.println();
   Serial.printf("%s=== PCA9555 CLI Help ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
+
+  helpSection("CLI Terms");
+  helpNote("<P> = port index: 0 -> P00-P07, 1 -> P10-P17");
+  helpNote("<N> = pin index: 0-7 -> P00-P07, 8-15 -> P10-P17");
+  helpNote("polarity affects input sense only: NORMAL reads raw level, INVERTED flips 0/1");
+  helpNote("<M> = 16-bit mask: bit 0=P00 ... bit 7=P07, bit 8=P10 ... bit 15=P17");
+  helpNote("mask examples: 0x0003 -> P00+P01, 0x0100 -> P10, 0x8001 -> P00+P17");
 
   helpSection("Common");
   helpItem("help / ?", "Show this help");
@@ -1610,22 +1815,22 @@ void printHelp() {
   helpItem("dump", "Dump all 8 registers");
 
   helpSection("Write");
-  helpItem("write pin <N> <0|1> / wpin <N> <0|1>", "Set output pin N to 0 or 1");
+  helpItem("write pin <N> <0|1> / wpin <N> <0|1>", "Set output latch bit for pin N to 0 or 1");
   helpItem("toggle <N>", "Toggle output pin N");
-  helpItem("dir pin <N> <in|out> / dir <N> <in|out>", "Set pin N direction");
-  helpItem("write port <P> <V> / wport <P> <V>", "Write port P (0/1) output to V");
-  helpItem("dir port <P> <V> / dport <P> <V>", "Set port direction (1=in, 0=out)");
-  helpItem("polarity pin <N> <0|1> / pol <N> <0|1>", "Set single-pin polarity inversion");
-  helpItem("polarity port <P> <V> / wpol <P> <V>", "Set port polarity inversion");
+  helpItem("dir pin <N> <in|out> / dir <N> <in|out>", "Set pin N direction (in=input, out=output)");
+  helpItem("write port <P> <V> / wport <P> <V>", "Write output latch for port P (8 bits)");
+  helpItem("dir port <P> <V> / dport <P> <V>", "Set port direction bits (1=input, 0=output)");
+  helpItem("polarity pin <N> <0|1> / pol <N> <0|1>", "Set input polarity for one pin (1=inverted)");
+  helpItem("polarity port <P> <V> / wpol <P> <V>", "Set input polarity bits for one port");
 
-  helpSection("Bit Manipulation (16-bit mask, single I2C burst)");
-  helpItem("setbits <M> / sb <M>", "Set output bits HIGH (OR mask)");
-  helpItem("clearbits <M> / cb <M>", "Clear output bits LOW (AND ~mask)");
-  helpItem("togglebits <M> / tb <M>", "Toggle output bits (XOR mask)");
-  helpItem("dirin <M>", "Configure masked pins as INPUT");
-  helpItem("dirout <M>", "Configure masked pins as OUTPUT");
-  helpItem("invertset <M>", "Enable polarity inversion for masked pins");
-  helpItem("invertclr <M>", "Disable polarity inversion for masked pins");
+  helpSection("Bit Manipulation (M=16-bit mask, one 2-byte I2C burst)");
+  helpItem("setbits <M> / sb <M>", "Set masked output bits HIGH, leave all other bits unchanged");
+  helpItem("clearbits <M> / cb <M>", "Clear masked output bits LOW, leave all other bits unchanged");
+  helpItem("togglebits <M> / tb <M>", "Toggle only the masked output bits");
+  helpItem("dirin <M>", "Set masked pins to INPUT, leave other direction bits unchanged");
+  helpItem("dirout <M>", "Set masked pins to OUTPUT, leave other direction bits unchanged");
+  helpItem("invertset <M>", "Enable input polarity inversion for masked pins");
+  helpItem("invertclr <M>", "Disable input polarity inversion for masked pins");
 
   helpSection("Raw Register");
   helpItem("read reg <R> / rreg <R>", "Read register R (0-7)");
@@ -1635,6 +1840,7 @@ void printHelp() {
            "Write 1-2 registers in one pair");
 
   helpSection("Testing");
+  helpItem("pattern <M> / pat <M>", "Drive exact 16-bit output pattern M and force all pins OUTPUT");
   helpItem("sweep [delay_ms]", "Fill ON then drain OFF, pin by pin (accumulating)");
   helpItem("walk [delay_ms]", "Walking-1: single pin HIGH moves across all 16");
   helpItem("allhigh", "Set all 16 pins to output HIGH");
@@ -1645,9 +1851,9 @@ void printHelp() {
   helpItem("probe", "Probe device (no health tracking)");
   helpItem("recover", "Manual recovery attempt");
   helpItem("verbose [0|1]", "Enable/disable verbose output");
-  helpItem("selftest", "Run safe command self-test report");
+  helpItem("selftest", "Run safe API self-test incl. readback, masks, direction, and polarity");
   helpItem("stress [N]", "Run N readInputs cycles (default 10)");
-  helpItem("stress_mix [N]", "Run N mixed-operation cycles (default 50)");
+  helpItem("stress_mix [N]", "Run N mixed read/write/config/polarity/mask cycles (default 50)");
 }
 
 // ============================================================================
@@ -2009,6 +2215,16 @@ void processCommand(const String& cmdLine) {
 
   if (cmd == "alllow") {
     cmdAllLow();
+    return;
+  }
+
+  if (cmd.startsWith("pattern ")) {
+    cmdPattern(cmd.substring(8));
+    return;
+  }
+
+  if (cmd.startsWith("pat ")) {
+    cmdPattern(cmd.substring(4));
     return;
   }
 

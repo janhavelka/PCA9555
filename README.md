@@ -36,17 +36,22 @@ Copy `include/PCA9555/` and `src/` to your project.
 ```cpp
 #include <Wire.h>
 #include "PCA9555/PCA9555.h"
-#include "common/I2cTransport.h"
+
+PCA9555::Status myI2cWrite(uint8_t addr, const uint8_t* data, size_t len,
+                           uint32_t timeoutMs, void* user);
+PCA9555::Status myI2cWriteRead(uint8_t addr, const uint8_t* txData, size_t txLen,
+                               uint8_t* rxData, size_t rxLen, uint32_t timeoutMs,
+                               void* user);
 
 PCA9555::PCA9555 device;
 
 void setup() {
   Serial.begin(115200);
-  transport::initWire(8, 9, 400000, 50);
+  Wire.begin(8, 9, 400000);
   
   PCA9555::Config cfg;
-  cfg.i2cWrite = transport::wireWrite;
-  cfg.i2cWriteRead = transport::wireWriteRead;
+  cfg.i2cWrite = myI2cWrite;
+  cfg.i2cWriteRead = myI2cWriteRead;
   cfg.i2cUser = &Wire;
   cfg.i2cAddress = 0x20;
   cfg.configPort0 = 0x0F;   // Port 0 lower nibble = input, upper = output
@@ -77,8 +82,9 @@ void loop() {
 }
 ```
 
-The example adapter maps Arduino `Wire` failures to specific `I2C_*` status codes and keeps
-bus timeout ownership in `transport::initWire()`. If you do not inject `Config::nowMs`, the
+Provide your own `Config::i2cWrite` and `Config::i2cWriteRead` callbacks, or copy/adapt the
+ready-made Arduino helper from `examples/common/I2cTransport.h`. That helper is example-only
+and not part of the installed library package. If you do not inject `Config::nowMs`, the
 driver falls back to `millis()` on Arduino/native-test builds.
 
 ## Health Monitoring
@@ -105,6 +111,13 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 | `READY` | Operational, no recent failures |
 | `DEGRADED` | 1+ failures, below offline threshold |
 | `OFFLINE` | Too many consecutive failures |
+
+## Terminology
+
+- **Port**: an 8-bit register bank. Port 0 maps to `P00-P07`; Port 1 maps to `P10-P17`.
+- **Pin**: a linear pin index `0-15`. Pins `0-7` are Port 0; pins `8-15` are Port 1. Example: pin `12` is Port 1, bit 4 (`P14`).
+- **Polarity**: input inversion only. `0 = normal`, `1 = inverted`. It changes how input reads are reported; it does not invert the output driver.
+- **Mask**: a 16-bit bitmap used by the bit-manipulation helpers and CLI. Bit `0 = P00`, bit `7 = P07`, bit `8 = P10`, bit `15 = P17`. Example: `0x0103` selects `P00`, `P01`, and `P10`.
 
 ## API Reference
 
@@ -249,17 +262,19 @@ the register pointer away from 0x00.
 Interactive serial CLI for device bringup and testing. Supports reading/writing all
 ports and individual pins, register dump, direction and polarity configuration,
 16-bit mask-based bit manipulation (`setbits`, `clearbits`, `togglebits`, `dirin`, `dirout`, `invertset`, `invertclr`),
-self-test, stress tests, driver health diagnostics, `cfg/settings` snapshots,
-single-pin latch/direction/polarity readback (`rout`, `rdir`, `rpol`), `pininfo`,
-full `pins` summaries, port-specific readback commands, and pair-bounded low-level
-register access (`read regs` / `write regs`),
+exact-pattern output drive (`pattern`), self-test, stress tests, driver health
+diagnostics, `cfg/settings` snapshots, single-pin latch/direction/polarity readback
+(`rout`, `rdir`, `rpol`), `pininfo`, full `pins` summaries, port-specific readback
+commands, pair-bounded low-level register access (`read regs` / `write regs`),
 and both terse and descriptive command aliases (`read inputs`, `write pin`, `read reg`, ...).
+The CLI help also includes a glossary for `port`, `pin`, `polarity`, and 16-bit mask `M`.
 
 Typical bring-up commands:
 
 ```text
 scan
 cfg
+pattern 0x00FF
 read input port 0
 read output port 1
 pininfo 12
@@ -282,7 +297,7 @@ pins
 | `HealthDiag.h` | Driver health snapshot printer |
 | `HealthView.h` | Compact one-line health summary helper |
 
-These helpers are **not** part of the library — they exist only to keep examples self-contained.
+These helpers are **not** part of the library - they exist only to keep examples self-contained.
 
 ## Running Tests
 
@@ -304,6 +319,7 @@ python tools/check_core_timing_guard.py
 ## Documentation
 
 - [CHANGELOG](CHANGELOG.md)
+- [Release Notes v1.0.0](docs/releases/v1.0.0.md)
 - [PCA9555 Implementation Manual](PCA9555_io_expander_implementation_manual.md)
 - [Register Reference](docs/register_reference.md)
 - [Auto-Increment Feature](docs/application_notes/auto_increment_feature.md)

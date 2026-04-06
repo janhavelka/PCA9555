@@ -24,6 +24,8 @@
 
 PCA9555::PCA9555 device;
 bool verboseMode = false;
+const PCA9555::PortData PORTS_ALL_LOW = PCA9555::PortData::fromCombined(0x0000U);
+const PCA9555::PortData PORTS_ALL_HIGH = PCA9555::PortData::fromCombined(0xFFFFU);
 
 // Stress test state (non-blocking)
 struct StressStats {
@@ -1218,9 +1220,9 @@ void runSelfTest() {
   device.getConfiguration(savedBitCfg);
   device.getPolarity(savedBitPol);
 
-  st = device.writeOutputs({0x00, 0x00});
+  st = device.writeOutputs(PORTS_ALL_LOW);
   if (st.ok()) {
-    st = device.setConfiguration({0x00, 0x00});
+    st = device.setConfiguration(PORTS_ALL_LOW);
   }
   if (st.ok()) {
     st = device.setOutputBits(0x0103U);
@@ -1268,7 +1270,7 @@ void runSelfTest() {
     reportCheck("togglePin(0)", false, errToStr(st.code));
   }
 
-  st = device.setConfiguration({0x00, 0x00});
+  st = device.setConfiguration(PORTS_ALL_LOW);
   if (st.ok()) {
     st = device.configureInputBits(0x0103U);
   }
@@ -1293,7 +1295,7 @@ void runSelfTest() {
     reportCheck("configureOutputBits(0x0001)", false, errToStr(st.code));
   }
 
-  st = device.setPolarity({0x00, 0x00});
+  st = device.setPolarity(PORTS_ALL_LOW);
   if (st.ok()) {
     st = device.setInvertBits(0x0101U);
   }
@@ -1454,17 +1456,17 @@ void runStressMix(int count) {
     return;
   }
 
-  st = device.writeOutputs({0x00, 0x00});
+  st = device.writeOutputs(PORTS_ALL_LOW);
   if (!st.ok()) {
     printStatus(st);
     return;
   }
-  st = device.setPolarity({0x00, 0x00});
+  st = device.setPolarity(PORTS_ALL_LOW);
   if (!st.ok()) {
     printStatus(st);
     return;
   }
-  st = device.setConfiguration({0x00, 0x00});
+  st = device.setConfiguration(PORTS_ALL_LOW);
   if (!st.ok()) {
     printStatus(st);
     return;
@@ -1582,9 +1584,9 @@ void cmdSweep(const String& args) {
   if (!st.ok()) { printStatus(st); return; }
 
   // Set all pins to output, all low
-  st = device.writeOutputs({0x00, 0x00});
+  st = device.writeOutputs(PORTS_ALL_LOW);
   if (!st.ok()) { printStatus(st); return; }
-  st = device.setConfiguration({0x00, 0x00});
+  st = device.setConfiguration(PORTS_ALL_LOW);
   if (!st.ok()) { printStatus(st); return; }
 
   Serial.printf("=== Sweep Test (delay=%ld ms) ===\n", delayMs);
@@ -1680,7 +1682,7 @@ void cmdWalk(const String& args) {
   if (!st.ok()) { printStatus(st); return; }
 
   // Set all pins to output
-  st = device.setConfiguration({0x00, 0x00});
+  st = device.setConfiguration(PORTS_ALL_LOW);
   if (!st.ok()) { printStatus(st); return; }
 
   Serial.printf("=== Walking-1 Test (delay=%ld ms) ===\n", delayMs);
@@ -1712,7 +1714,7 @@ void cmdWalk(const String& args) {
   }
 
   // All off, then restore
-  device.writeOutputs({0x00, 0x00});
+  device.writeOutputs(PORTS_ALL_LOW);
   device.setConfiguration(savedCfg);
   device.writeOutputs(savedOut);
 
@@ -1724,18 +1726,18 @@ void cmdWalk(const String& args) {
 
 void cmdAllHigh() {
   // Set output values before direction to avoid glitches
-  PCA9555::Status st = device.writeOutputs({0xFF, 0xFF});
+  PCA9555::Status st = device.writeOutputs(PORTS_ALL_HIGH);
   if (!st.ok()) { printStatus(st); return; }
-  st = device.setConfiguration({0x00, 0x00});
+  st = device.setConfiguration(PORTS_ALL_LOW);
   if (!st.ok()) { printStatus(st); return; }
   LOGI("All 16 pins set to OUTPUT HIGH");
 }
 
 void cmdAllLow() {
   // Set output values before direction to avoid glitches
-  PCA9555::Status st = device.writeOutputs({0x00, 0x00});
+  PCA9555::Status st = device.writeOutputs(PORTS_ALL_LOW);
   if (!st.ok()) { printStatus(st); return; }
-  st = device.setConfiguration({0x00, 0x00});
+  st = device.setConfiguration(PORTS_ALL_LOW);
   if (!st.ok()) { printStatus(st); return; }
   LOGI("All 16 pins set to OUTPUT LOW");
 }
@@ -1754,7 +1756,7 @@ void cmdPattern(const String& args) {
     printStatus(st);
     return;
   }
-  st = device.setConfiguration({0x00, 0x00});
+  st = device.setConfiguration(PORTS_ALL_LOW);
   if (!st.ok()) {
     printStatus(st);
     return;

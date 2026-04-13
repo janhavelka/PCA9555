@@ -35,6 +35,7 @@ struct StressStats {
 };
 StressStats stressStats;
 int stressRemaining = 0;
+static constexpr uint32_t STRESS_PROGRESS_UPDATES = 10U;
 
 // ============================================================================
 // Helper Functions
@@ -95,6 +96,37 @@ const char* successRateColor(float pct) {
   if (pct >= 99.9f) return LOG_COLOR_GREEN;
   if (pct >= 80.0f) return LOG_COLOR_YELLOW;
   return LOG_COLOR_RED;
+}
+
+uint32_t stressProgressStep(uint32_t total) {
+  if (total == 0U) {
+    return 0U;
+  }
+  const uint32_t step = total / STRESS_PROGRESS_UPDATES;
+  return (step == 0U) ? 1U : step;
+}
+
+void printStressProgress(uint32_t completed, uint32_t total, uint32_t okCount, uint32_t failCount) {
+  if (completed == 0U || total == 0U) {
+    return;
+  }
+  const uint32_t step = stressProgressStep(total);
+  if (step == 0U || (completed != total && (completed % step) != 0U)) {
+    return;
+  }
+  const float pct = (100.0f * static_cast<float>(completed)) / static_cast<float>(total);
+  Serial.printf("  Progress: %lu/%lu (%s%.0f%%%s, ok=%s%lu%s, fail=%s%lu%s)\n",
+                static_cast<unsigned long>(completed),
+                static_cast<unsigned long>(total),
+                successRateColor(pct),
+                pct,
+                LOG_COLOR_RESET,
+                goodIfNonZeroColor(okCount),
+                static_cast<unsigned long>(okCount),
+                LOG_COLOR_RESET,
+                goodIfZeroColor(failCount),
+                static_cast<unsigned long>(failCount),
+                LOG_COLOR_RESET);
 }
 
 const char* onOffColor(bool on) {
@@ -1131,6 +1163,8 @@ void runStressMix(int count) {
     {"readRegister",  0, 0},
     {"writeOutput",   0, 0},
   };
+  uint32_t totalOk = 0;
+  uint32_t totalFail = 0;
 
   // Save output state for restore
   PCA9555::PortData savedOut;
@@ -1154,10 +1188,17 @@ void runStressMix(int count) {
 
     if (st.ok()) {
       ops[op].ok++;
+      totalOk++;
     } else {
       ops[op].fail++;
+      totalFail++;
       LOGV(verboseMode, "  cycle %d op=%s: %s", i, ops[op].name, errToStr(st.code));
     }
+
+    printStressProgress(static_cast<uint32_t>(i + 1),
+                        static_cast<uint32_t>(count),
+                        totalOk,
+                        totalFail);
   }
 
   // Restore outputs
@@ -1165,18 +1206,13 @@ void runStressMix(int count) {
   device.writeOutput(PCA9555::Port::PORT_1, savedOut.port1);
 
   const uint32_t elapsed = millis() - startMs;
-  int totalOk = 0, totalFail = 0;
-  for (int i = 0; i < OP_COUNT; ++i) {
-    totalOk += ops[i].ok;
-    totalFail += ops[i].fail;
-  }
   const float rate = (elapsed > 0) ? (1000.0f * count / elapsed) : 0.0f;
   const float successPct = (count > 0) ? (100.0f * totalOk / count) : 0.0f;
 
-  Serial.printf("  Total: %d   OK: %s%d%s   Fail: %s%d%s\n",
+  Serial.printf("  Total: %d   OK: %s%lu%s   Fail: %s%lu%s\n",
                 count,
-                LOG_COLOR_GREEN, totalOk, LOG_COLOR_RESET,
-                goodIfZeroColor(totalFail), totalFail, LOG_COLOR_RESET);
+                LOG_COLOR_GREEN, static_cast<unsigned long>(totalOk), LOG_COLOR_RESET,
+                goodIfZeroColor(totalFail), static_cast<unsigned long>(totalFail), LOG_COLOR_RESET);
   Serial.printf("  Success: %s%.1f%%%s   Duration: %lu ms   Rate: %.1f ops/s\n",
                 successRateColor(successPct), successPct, LOG_COLOR_RESET,
                 static_cast<unsigned long>(elapsed), rate);
@@ -1185,8 +1221,17 @@ void runStressMix(int count) {
   for (int i = 0; i < OP_COUNT; ++i) {
     const int opTotal = ops[i].ok + ops[i].fail;
     const float opPct = (opTotal > 0) ? (100.0f * ops[i].ok / opTotal) : 0.0f;
-    Serial.printf("    %-16s  ok=%d  fail=%d  (%.0f%%)\n",
-                  ops[i].name, ops[i].ok, ops[i].fail, opPct);
+    Serial.printf("    %-16s  ok=%s%d%s  fail=%s%d%s  (%s%.0f%%%s)\n",
+                  ops[i].name,
+                  goodIfNonZeroColor(static_cast<uint32_t>(ops[i].ok)),
+                  ops[i].ok,
+                  LOG_COLOR_RESET,
+                  goodIfZeroColor(static_cast<uint32_t>(ops[i].fail)),
+                  ops[i].fail,
+                  LOG_COLOR_RESET,
+                  successRateColor(opPct),
+                  opPct,
+                  LOG_COLOR_RESET);
   }
 
   const uint32_t succDelta = device.totalSuccess() - succBefore;
@@ -1647,6 +1692,12 @@ void loop() {
       LOGV(verboseMode, "  stress cycle fail: %s", errToStr(st.code));
     }
     stressRemaining--;
+    const uint32_t completed =
+        static_cast<uint32_t>(stressStats.okCount + stressStats.failCount);
+    printStressProgress(completed,
+                        static_cast<uint32_t>(stressStats.total),
+                        static_cast<uint32_t>(stressStats.okCount),
+                        static_cast<uint32_t>(stressStats.failCount));
     if (stressRemaining == 0) {
       finishStressStats();
       Serial.print("> ");

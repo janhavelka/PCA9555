@@ -1007,6 +1007,207 @@ void test_end_sets_safe_input_state() {
 }
 
 // ===========================================================================
+// Bit Manipulation API
+// ===========================================================================
+
+void test_set_output_bits() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.outputPort0 = 0x00;
+  cfg.outputPort1 = 0x00;
+  cfg.configPort0 = 0x00;
+  cfg.configPort1 = 0x00;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  // Set bits 0-3 of port 0 and bit 8 of port 1
+  Status st = dev.setOutputBits(0x010F);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x0F, bus.regs[cmd::REG_OUTPUT_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(0x01, bus.regs[cmd::REG_OUTPUT_PORT_1]);
+}
+
+void test_clear_output_bits() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.outputPort0 = 0xFF;
+  cfg.outputPort1 = 0xFF;
+  cfg.configPort0 = 0x00;
+  cfg.configPort1 = 0x00;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  // Clear bits 4-7 of port 0
+  Status st = dev.clearOutputBits(0x00F0);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x0F, bus.regs[cmd::REG_OUTPUT_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(0xFF, bus.regs[cmd::REG_OUTPUT_PORT_1]);
+}
+
+void test_toggle_output_bits() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.outputPort0 = 0xAA;
+  cfg.outputPort1 = 0x55;
+  cfg.configPort0 = 0x00;
+  cfg.configPort1 = 0x00;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  // Toggle all bits
+  Status st = dev.toggleOutputBits(0xFFFF);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x55, bus.regs[cmd::REG_OUTPUT_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(0xAA, bus.regs[cmd::REG_OUTPUT_PORT_1]);
+}
+
+void test_toggle_pin_bit_manip() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.configPort0 = 0x00;
+  cfg.configPort1 = 0x00;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  // Toggle pin 3 (port 0 starts at 0xFF)
+  Status st = dev.togglePin(3);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0xF7, bus.regs[cmd::REG_OUTPUT_PORT_0]);
+
+  // Toggle pin 3 back
+  st = dev.togglePin(3);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0xFF, bus.regs[cmd::REG_OUTPUT_PORT_0]);
+
+  // Toggle pin 10 (port 1, bit 2)
+  st = dev.togglePin(10);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0xFB, bus.regs[cmd::REG_OUTPUT_PORT_1]);
+}
+
+void test_toggle_pin_rejects_invalid() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(dev.togglePin(16).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(dev.togglePin(255).code));
+}
+
+void test_configure_input_bits() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.configPort0 = 0x00;
+  cfg.configPort1 = 0x00;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  // Set pins 0-3 and pin 8 back to input
+  Status st = dev.configureInputBits(0x010F);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x0F, bus.regs[cmd::REG_CONFIG_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(0x01, bus.regs[cmd::REG_CONFIG_PORT_1]);
+}
+
+void test_configure_output_bits() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  // Start with all inputs (0xFF default)
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  // Set pins 8-11 to output
+  Status st = dev.configureOutputBits(0x0F00);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0xFF, bus.regs[cmd::REG_CONFIG_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(0xF0, bus.regs[cmd::REG_CONFIG_PORT_1]);
+}
+
+void test_set_invert_bits() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  // Enable inversion for pins 0 and 8
+  Status st = dev.setInvertBits(0x0101);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x01, bus.regs[cmd::REG_POLARITY_INV_0]);
+  TEST_ASSERT_EQUAL_HEX8(0x01, bus.regs[cmd::REG_POLARITY_INV_1]);
+}
+
+void test_clear_invert_bits() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.polarityPort0 = 0xFF;
+  cfg.polarityPort1 = 0xFF;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  // Disable inversion for pins 0-7 (port 0)
+  Status st = dev.clearInvertBits(0x00FF);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x00, bus.regs[cmd::REG_POLARITY_INV_0]);
+  TEST_ASSERT_EQUAL_HEX8(0xFF, bus.regs[cmd::REG_POLARITY_INV_1]);
+}
+
+void test_bit_manipulation_no_op_skips_i2c() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  // Outputs start at 0xFF (default)
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  const uint32_t writesBefore = bus.writeCalls;
+
+  // setOutputBits with all bits already high -- no-op
+  TEST_ASSERT_TRUE(dev.setOutputBits(0xFFFF).ok());
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
+
+  // clearOutputBits(0) -- no bits to clear -- no-op
+  TEST_ASSERT_TRUE(dev.clearOutputBits(0x0000).ok());
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
+
+  // toggleOutputBits(0) -- no bits to toggle -- no-op
+  TEST_ASSERT_TRUE(dev.toggleOutputBits(0x0000).ok());
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
+
+  // configureInputBits with all pins already input -- no-op
+  TEST_ASSERT_TRUE(dev.configureInputBits(0xFFFF).ok());
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
+
+  // configureOutputBits(0) -- no bits to change -- no-op
+  TEST_ASSERT_TRUE(dev.configureOutputBits(0x0000).ok());
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
+
+  // setInvertBits(0) -- no-op
+  TEST_ASSERT_TRUE(dev.setInvertBits(0x0000).ok());
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
+
+  // clearInvertBits with all polarity already 0 -- no-op
+  TEST_ASSERT_TRUE(dev.clearInvertBits(0xFFFF).ok());
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
+}
+
+void test_bit_manipulation_rejects_before_begin() {
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.setOutputBits(0x01).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.clearOutputBits(0x01).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.toggleOutputBits(0x01).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.togglePin(0).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.configureInputBits(0x01).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.configureOutputBits(0x01).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.setInvertBits(0x01).code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(dev.clearInvertBits(0x01).code));
+}
+
+// ===========================================================================
 // main
 // ===========================================================================
 
@@ -1072,6 +1273,19 @@ int main() {
   RUN_TEST(test_write_register_updates_config_shadow_for_set_pin_direction);
   RUN_TEST(test_register_out_of_range);
   RUN_TEST(test_recover_reapplies_runtime_configuration);
+
+  // Bit Manipulation API
+  RUN_TEST(test_set_output_bits);
+  RUN_TEST(test_clear_output_bits);
+  RUN_TEST(test_toggle_output_bits);
+  RUN_TEST(test_toggle_pin_bit_manip);
+  RUN_TEST(test_toggle_pin_rejects_invalid);
+  RUN_TEST(test_configure_input_bits);
+  RUN_TEST(test_configure_output_bits);
+  RUN_TEST(test_set_invert_bits);
+  RUN_TEST(test_clear_invert_bits);
+  RUN_TEST(test_bit_manipulation_no_op_skips_i2c);
+  RUN_TEST(test_bit_manipulation_rejects_before_begin);
 
   // PortData
   RUN_TEST(test_port_data_combined);

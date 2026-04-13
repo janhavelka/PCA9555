@@ -24,6 +24,8 @@
 
 PCA9555::PCA9555 device;
 bool verboseMode = false;
+const PCA9555::PortData PORTS_ALL_LOW = PCA9555::PortData::fromCombined(0x0000U);
+const PCA9555::PortData PORTS_ALL_HIGH = PCA9555::PortData::fromCombined(0xFFFFU);
 
 // Stress test state (non-blocking)
 struct StressStats {
@@ -32,6 +34,11 @@ struct StressStats {
   int okCount = 0;
   int failCount = 0;
   uint32_t startMs = 0;
+  bool hasFailure = false;
+  PCA9555::Status firstFailure;
+  PCA9555::Status lastFailure;
+  uint32_t succBefore = 0;
+  uint32_t failBefore = 0;
 };
 StressStats stressStats;
 int stressRemaining = 0;
@@ -130,7 +137,11 @@ void printStressProgress(uint32_t completed, uint32_t total, uint32_t okCount, u
 }
 
 const char* onOffColor(bool on) {
-  return on ? LOG_COLOR_GREEN : LOG_COLOR_YELLOW;
+  return on ? LOG_COLOR_GREEN : LOG_COLOR_RESET;
+}
+
+const char* skipCountColor(uint32_t value) {
+  return (value > 0U) ? LOG_COLOR_YELLOW : LOG_COLOR_RESET;
 }
 
 const char* skipWhitespace(const char* text) {
@@ -204,6 +215,16 @@ bool parseByteToken(const char*& text, uint8_t& value) {
   }
 
   value = static_cast<uint8_t>(parsed);
+  return true;
+}
+
+bool parseU16Token(const char*& text, uint16_t& value) {
+  long parsed = 0;
+  if (!parseLongToken(text, parsed) || parsed < 0 || parsed > 0xFFFFL) {
+    return false;
+  }
+
+  value = static_cast<uint16_t>(parsed);
   return true;
 }
 
@@ -680,22 +701,12 @@ void cmdTogglePin(const String& args) {
     return;
   }
 
-  bool currentState = false;
-  PCA9555::Status st = device.readOutputPin(pin, currentState);
+  PCA9555::Status st = device.togglePin(pin);
   if (!st.ok()) {
     printStatus(st);
     return;
   }
-
-  st = device.writePin(pin, !currentState);
-  if (!st.ok()) {
-    printStatus(st);
-    return;
-  }
-  LOGI("Pin %u toggled: %d -> %d",
-       static_cast<unsigned>(pin),
-       currentState ? 1 : 0,
-       currentState ? 0 : 1);
+  LOGI("Pin %u toggled", static_cast<unsigned>(pin));
 }
 
 void cmdSetDirection(const String& args) {
@@ -790,6 +801,115 @@ void cmdSetPinPolarity(const String& args) {
   LOGI("Pin %u polarity set to %s",
        static_cast<unsigned>(pin),
        inverted ? "INVERTED" : "NORMAL");
+}
+
+// ============================================================================
+// Bit Manipulation Commands
+// ============================================================================
+
+void cmdSetBits(const String& args) {
+  const char* cursor = args.c_str();
+  uint16_t mask = 0;
+  if (!parseU16Token(cursor, mask) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: setbits <0x0000-0xFFFF>");
+    return;
+  }
+  PCA9555::Status st = device.setOutputBits(mask);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  LOGI("Output bits set HIGH: mask=0x%04X", mask);
+}
+
+void cmdClearBits(const String& args) {
+  const char* cursor = args.c_str();
+  uint16_t mask = 0;
+  if (!parseU16Token(cursor, mask) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: clearbits <0x0000-0xFFFF>");
+    return;
+  }
+  PCA9555::Status st = device.clearOutputBits(mask);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  LOGI("Output bits cleared LOW: mask=0x%04X", mask);
+}
+
+void cmdToggleBits(const String& args) {
+  const char* cursor = args.c_str();
+  uint16_t mask = 0;
+  if (!parseU16Token(cursor, mask) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: togglebits <0x0000-0xFFFF>");
+    return;
+  }
+  PCA9555::Status st = device.toggleOutputBits(mask);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  LOGI("Output bits toggled: mask=0x%04X", mask);
+}
+
+void cmdDirIn(const String& args) {
+  const char* cursor = args.c_str();
+  uint16_t mask = 0;
+  if (!parseU16Token(cursor, mask) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: dirin <0x0000-0xFFFF>");
+    return;
+  }
+  PCA9555::Status st = device.configureInputBits(mask);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  LOGI("Pins configured as INPUT: mask=0x%04X", mask);
+}
+
+void cmdDirOut(const String& args) {
+  const char* cursor = args.c_str();
+  uint16_t mask = 0;
+  if (!parseU16Token(cursor, mask) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: dirout <0x0000-0xFFFF>");
+    return;
+  }
+  PCA9555::Status st = device.configureOutputBits(mask);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  LOGI("Pins configured as OUTPUT: mask=0x%04X", mask);
+}
+
+void cmdInvertSet(const String& args) {
+  const char* cursor = args.c_str();
+  uint16_t mask = 0;
+  if (!parseU16Token(cursor, mask) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: invertset <0x0000-0xFFFF>");
+    return;
+  }
+  PCA9555::Status st = device.setInvertBits(mask);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  LOGI("Polarity inversion enabled: mask=0x%04X", mask);
+}
+
+void cmdInvertClr(const String& args) {
+  const char* cursor = args.c_str();
+  uint16_t mask = 0;
+  if (!parseU16Token(cursor, mask) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: invertclr <0x0000-0xFFFF>");
+    return;
+  }
+  PCA9555::Status st = device.clearInvertBits(mask);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  LOGI("Polarity inversion disabled: mask=0x%04X", mask);
 }
 
 // ============================================================================
@@ -917,95 +1037,127 @@ void cmdRegsWrite(const String& args) {
 // ============================================================================
 
 void runSelfTest() {
-  int pass = 0, fail = 0, skip = 0;
-  const uint32_t succBefore = device.totalSuccess();
-  const uint32_t failBefore = device.totalFailures();
+  struct TestStats {
+    uint32_t pass = 0;
+    uint32_t fail = 0;
+    uint32_t skip = 0;
+  } stats;
 
-  auto report = [&](const char* label, bool ok) {
-    if (ok) {
-      Serial.printf("  %s[PASS]%s %s\n", LOG_COLOR_GREEN, LOG_COLOR_RESET, label);
-      pass++;
+  enum class SelftestOutcome : uint8_t { PASS, FAIL, SKIP };
+  auto report = [&](const char* name, SelftestOutcome outcome, const char* note) {
+    const bool passed = (outcome == SelftestOutcome::PASS);
+    const bool skipped = (outcome == SelftestOutcome::SKIP);
+    const char* color = skipped ? LOG_COLOR_YELLOW : LOG_COLOR_RESULT(passed);
+    const char* tag = skipped ? "SKIP" : (passed ? "PASS" : "FAIL");
+    Serial.printf("  [%s%s%s] %s", color, tag, LOG_COLOR_RESET, name);
+    if (note && note[0]) {
+      Serial.printf(" - %s", note);
+    }
+    Serial.println();
+    if (skipped) {
+      stats.skip++;
+    } else if (passed) {
+      stats.pass++;
     } else {
-      Serial.printf("  %s[FAIL]%s %s\n", LOG_COLOR_RED, LOG_COLOR_RESET, label);
-      fail++;
+      stats.fail++;
     }
   };
-
-  auto reportSkip = [&](const char* label) {
-    Serial.printf("  %s[SKIP]%s %s\n", LOG_COLOR_YELLOW, LOG_COLOR_RESET, label);
-    skip++;
+  auto reportCheck = [&](const char* name, bool passed, const char* note) {
+    report(name, passed ? SelftestOutcome::PASS : SelftestOutcome::FAIL, note);
   };
-  (void)reportSkip; // may be unused if no tests need skipping
+  auto reportSkip = [&](const char* name, const char* note) {
+    report(name, SelftestOutcome::SKIP, note);
+  };
 
-  Serial.println("=== Self-Test ===");
+  Serial.println("=== PCA9555 selftest (safe commands) ===");
+
+  const uint32_t succBefore = device.totalSuccess();
+  const uint32_t failBefore = device.totalFailures();
+  const uint8_t consBefore = device.consecutiveFailures();
 
   // --- probe ---
-  const uint32_t hSuccBefore = device.totalSuccess();
-  const uint32_t hFailBefore = device.totalFailures();
   PCA9555::Status st = device.probe();
-  report("probe() OK", st.ok());
-  report("probe() no health side-effects",
-         device.totalSuccess() == hSuccBefore && device.totalFailures() == hFailBefore);
+  if (st.code == PCA9555::Err::NOT_INITIALIZED) {
+    reportSkip("probe responds", "driver not initialized");
+    reportSkip("remaining checks", "selftest aborted");
+    Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
+                  goodIfNonZeroColor(stats.pass), static_cast<unsigned long>(stats.pass), LOG_COLOR_RESET,
+                  goodIfZeroColor(stats.fail), static_cast<unsigned long>(stats.fail), LOG_COLOR_RESET,
+                  skipCountColor(stats.skip), static_cast<unsigned long>(stats.skip), LOG_COLOR_RESET);
+    return;
+  }
+  const bool probeHealthUnchanged =
+      device.totalSuccess() == succBefore &&
+      device.totalFailures() == failBefore &&
+      device.consecutiveFailures() == consBefore;
+  reportCheck("probe responds", st.ok(), st.ok() ? "" : errToStr(st.code));
+  reportCheck("probe no-health-side-effects", probeHealthUnchanged, "");
 
   // --- readInputs ---
   PCA9555::PortData data;
   st = device.readInputs(data);
-  report("readInputs() OK", st.ok());
+  reportCheck("readInputs", st.ok(), st.ok() ? "" : errToStr(st.code));
   uint8_t inputPort = 0;
   st = device.readInput(PCA9555::Port::PORT_0, inputPort);
-  report("readInput(P0) OK", st.ok());
+  reportCheck("readInput(P0)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   // --- readOutputs ---
   st = device.readOutputs(data);
-  report("readOutputs() OK", st.ok());
+  reportCheck("readOutputs", st.ok(), st.ok() ? "" : errToStr(st.code));
   uint8_t outputPort = 0;
   st = device.readOutput(PCA9555::Port::PORT_0, outputPort);
-  report("readOutput(P0) OK", st.ok());
+  reportCheck("readOutput(P0)", st.ok(), st.ok() ? "" : errToStr(st.code));
   bool outputPin = false;
   st = device.readOutputPin(0, outputPin);
-  report("readOutputPin(0) OK", st.ok());
+  reportCheck("readOutputPin(0)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   // --- getConfiguration ---
   PCA9555::PortData configData;
   st = device.getConfiguration(configData);
-  report("getConfiguration() OK", st.ok());
+  reportCheck("getConfiguration", st.ok(), st.ok() ? "" : errToStr(st.code));
   uint8_t configPort = 0;
   st = device.getPortConfiguration(PCA9555::Port::PORT_0, configPort);
-  report("getPortConfiguration(P0) OK", st.ok());
+  reportCheck("getPortConfiguration(P0)", st.ok(), st.ok() ? "" : errToStr(st.code));
   bool pinDirection = false;
   st = device.getPinDirection(0, pinDirection);
-  report("getPinDirection(0) OK", st.ok());
+  reportCheck("getPinDirection(0)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   // --- getPolarity ---
   PCA9555::PortData polData;
   st = device.getPolarity(polData);
-  report("getPolarity() OK", st.ok());
+  reportCheck("getPolarity", st.ok(), st.ok() ? "" : errToStr(st.code));
   uint8_t polarityPort = 0;
   st = device.getPortPolarity(PCA9555::Port::PORT_0, polarityPort);
-  report("getPortPolarity(P0) OK", st.ok());
+  reportCheck("getPortPolarity(P0)", st.ok(), st.ok() ? "" : errToStr(st.code));
   bool pinPolarity = false;
   st = device.getPinPolarity(0, pinPolarity);
-  report("getPinPolarity(0) OK", st.ok());
+  reportCheck("getPinPolarity(0)", st.ok(), st.ok() ? "" : errToStr(st.code));
+
+  // --- getSettings ---
+  const PCA9555::SettingsSnapshot snapshot = device.getSettings();
+  reportCheck("getSettings().initialized", snapshot.initialized, "");
+  reportCheck("getSettings().state == READY",
+              snapshot.state == PCA9555::DriverState::READY,
+              "");
 
   // --- writeOutput + readback ---
-  // Save current outputs
   PCA9555::PortData savedOut;
   device.readOutputs(savedOut);
   st = device.writeOutput(PCA9555::Port::PORT_0, 0xAA);
   if (st.ok()) {
     PCA9555::PortData readback;
     device.readOutputs(readback);
-    report("writeOutput(P0, 0xAA) + readback", readback.port0 == 0xAA);
+    reportCheck("writeOutput(P0, 0xAA) + readback", readback.port0 == 0xAA, "");
   } else {
-    report("writeOutput(P0, 0xAA)", false);
+    reportCheck("writeOutput(P0, 0xAA)", false, errToStr(st.code));
   }
   st = device.writeOutput(PCA9555::Port::PORT_1, 0x55);
   if (st.ok()) {
     PCA9555::PortData readback;
     device.readOutputs(readback);
-    report("writeOutput(P1, 0x55) + readback", readback.port1 == 0x55);
+    reportCheck("writeOutput(P1, 0x55) + readback", readback.port1 == 0x55, "");
   } else {
-    report("writeOutput(P1, 0x55)", false);
+    reportCheck("writeOutput(P1, 0x55)", false, errToStr(st.code));
   }
   // Restore outputs
   device.writeOutput(PCA9555::Port::PORT_0, savedOut.port0);
@@ -1018,9 +1170,9 @@ void runSelfTest() {
   if (st.ok()) {
     PCA9555::PortData readback;
     device.getConfiguration(readback);
-    report("setPortConfiguration(P0, 0x0F) + readback", readback.port0 == 0x0F);
+    reportCheck("setPortConfiguration(P0, 0x0F) + readback", readback.port0 == 0x0F, "");
   } else {
-    report("setPortConfiguration(P0, 0x0F)", false);
+    reportCheck("setPortConfiguration(P0, 0x0F)", false, errToStr(st.code));
   }
   // Restore config
   device.setPortConfiguration(PCA9555::Port::PORT_0, savedCfg.port0);
@@ -1033,17 +1185,17 @@ void runSelfTest() {
   if (st.ok()) {
     PCA9555::PortData readback;
     device.getPolarity(readback);
-    report("setPortPolarity(P0, 0x0F) + readback", readback.port0 == 0x0F);
+    reportCheck("setPortPolarity(P0, 0x0F) + readback", readback.port0 == 0x0F, "");
   } else {
-    report("setPortPolarity(P0, 0x0F)", false);
+    reportCheck("setPortPolarity(P0, 0x0F)", false, errToStr(st.code));
   }
   st = device.setPinPolarity(8, true);
   if (st.ok()) {
     PCA9555::PortData readback;
     device.getPolarity(readback);
-    report("setPinPolarity(8, 1) + readback", (readback.port1 & 0x01U) != 0U);
+    reportCheck("setPinPolarity(8, 1) + readback", (readback.port1 & 0x01U) != 0U, "");
   } else {
-    report("setPinPolarity(8, 1)", false);
+    reportCheck("setPinPolarity(8, 1)", false, errToStr(st.code));
   }
   // Restore polarity
   device.setPortPolarity(PCA9555::Port::PORT_0, savedPol.port0);
@@ -1057,7 +1209,7 @@ void runSelfTest() {
       allRegsOk = false;
     }
   }
-  report("readRegister(0-7) all OK", allRegsOk);
+  reportCheck("readRegister(0-7) all OK", allRegsOk, "");
 
   // --- bulk register helpers ---
   PCA9555::PortData savedBulkOut;
@@ -1067,17 +1219,17 @@ void runSelfTest() {
   if (st.ok()) {
     uint8_t bulkRead[2] = {};
     st = device.readRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, bulkRead, 2);
-    report("writeRegisters(OUT, 2) + readback",
-           st.ok() && bulkRead[0] == bulkOut[0] && bulkRead[1] == bulkOut[1]);
+    reportCheck("writeRegisters(OUT, 2) + readback",
+           st.ok() && bulkRead[0] == bulkOut[0] && bulkRead[1] == bulkOut[1], "");
   } else {
-    report("writeRegisters(OUT, 2)", false);
+    reportCheck("writeRegisters(OUT, 2)", false, errToStr(st.code));
   }
   const uint8_t restoreBulkOut[2] = {savedBulkOut.port0, savedBulkOut.port1};
   device.writeRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, restoreBulkOut, 2);
 
   uint8_t bulkCfg[2] = {};
   st = device.readRegisters(PCA9555::cmd::REG_CONFIG_PORT_0, bulkCfg, 2);
-  report("readRegisters(CFG, 2) OK", st.ok());
+  reportCheck("readRegisters(CFG, 2)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   // --- writeRegister (writable range 2-7) ---
   uint8_t savedReg2 = 0;
@@ -1086,31 +1238,146 @@ void runSelfTest() {
   if (st.ok()) {
     uint8_t readback = 0;
     device.readRegister(2, readback);
-    report("writeRegister(2, 0xBB) + readback", readback == 0xBB);
+    reportCheck("writeRegister(2, 0xBB) + readback", readback == 0xBB, "");
   } else {
-    report("writeRegister(2, 0xBB)", false);
+    reportCheck("writeRegister(2, 0xBB)", false, errToStr(st.code));
   }
   device.writeRegister(2, savedReg2); // restore
 
+  // --- bit manipulation helpers ---
+  PCA9555::PortData savedBitOut;
+  PCA9555::PortData savedBitCfg;
+  PCA9555::PortData savedBitPol;
+  device.readOutputs(savedBitOut);
+  device.getConfiguration(savedBitCfg);
+  device.getPolarity(savedBitPol);
+
+  st = device.writeOutputs(PORTS_ALL_LOW);
+  if (st.ok()) {
+    st = device.setConfiguration(PORTS_ALL_LOW);
+  }
+  if (st.ok()) {
+    st = device.setOutputBits(0x0103U);
+  }
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    reportCheck("setOutputBits(0x0103) + readback",
+                st.ok() && readback.combined() == 0x0103U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("setOutputBits(0x0103)", false, errToStr(st.code));
+  }
+
+  st = device.clearOutputBits(0x0001U);
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    reportCheck("clearOutputBits(0x0001) + readback",
+                st.ok() && readback.combined() == 0x0102U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("clearOutputBits(0x0001)", false, errToStr(st.code));
+  }
+
+  st = device.toggleOutputBits(0x0300U);
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    reportCheck("toggleOutputBits(0x0300) + readback",
+                st.ok() && readback.combined() == 0x0202U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("toggleOutputBits(0x0300)", false, errToStr(st.code));
+  }
+
+  st = device.togglePin(0);
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    reportCheck("togglePin(0) + readback",
+                st.ok() && readback.combined() == 0x0203U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("togglePin(0)", false, errToStr(st.code));
+  }
+
+  st = device.setConfiguration(PORTS_ALL_LOW);
+  if (st.ok()) {
+    st = device.configureInputBits(0x0103U);
+  }
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.getConfiguration(readback);
+    reportCheck("configureInputBits(0x0103) + readback",
+                st.ok() && readback.combined() == 0x0103U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("configureInputBits(0x0103)", false, errToStr(st.code));
+  }
+
+  st = device.configureOutputBits(0x0001U);
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.getConfiguration(readback);
+    reportCheck("configureOutputBits(0x0001) + readback",
+                st.ok() && readback.combined() == 0x0102U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("configureOutputBits(0x0001)", false, errToStr(st.code));
+  }
+
+  st = device.setPolarity(PORTS_ALL_LOW);
+  if (st.ok()) {
+    st = device.setInvertBits(0x0101U);
+  }
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.getPolarity(readback);
+    reportCheck("setInvertBits(0x0101) + readback",
+                st.ok() && readback.combined() == 0x0101U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("setInvertBits(0x0101)", false, errToStr(st.code));
+  }
+
+  st = device.clearInvertBits(0x0001U);
+  if (st.ok()) {
+    PCA9555::PortData readback;
+    st = device.getPolarity(readback);
+    reportCheck("clearInvertBits(0x0001) + readback",
+                st.ok() && readback.combined() == 0x0100U,
+                st.ok() ? "" : errToStr(st.code));
+  } else {
+    reportCheck("clearInvertBits(0x0001)", false, errToStr(st.code));
+  }
+
+  device.writeOutputs(savedBitOut);
+  device.setPolarity(savedBitPol);
+  device.setConfiguration(savedBitCfg);
+
   // --- recover ---
   st = device.recover();
-  report("recover() OK", st.ok());
+  reportCheck("recover", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   // --- isOnline ---
-  report("isOnline() after recover", device.isOnline());
+  reportCheck("isOnline", device.isOnline(), "");
 
   // --- health delta ---
   const uint32_t succDelta = device.totalSuccess() - succBefore;
   const uint32_t failDelta = device.totalFailures() - failBefore;
 
-  Serial.println("--- Summary ---");
-  Serial.printf("  %s%d passed%s, %s%d failed%s, %s%d skipped%s\n",
-                LOG_COLOR_GREEN, pass, LOG_COLOR_RESET,
-                (fail > 0) ? LOG_COLOR_RED : LOG_COLOR_GREEN, fail, LOG_COLOR_RESET,
-                (skip > 0) ? LOG_COLOR_YELLOW : LOG_COLOR_GREEN, skip, LOG_COLOR_RESET);
-  Serial.printf("  Health delta: +%lu ok, +%lu fail\n",
+  Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
+                goodIfNonZeroColor(stats.pass), static_cast<unsigned long>(stats.pass), LOG_COLOR_RESET,
+                goodIfZeroColor(stats.fail), static_cast<unsigned long>(stats.fail), LOG_COLOR_RESET,
+                skipCountColor(stats.skip), static_cast<unsigned long>(stats.skip), LOG_COLOR_RESET);
+  Serial.printf("  Health delta: %ssuccess +%lu%s, %sfailures +%lu%s\n",
+                goodIfNonZeroColor(succDelta),
                 static_cast<unsigned long>(succDelta),
-                static_cast<unsigned long>(failDelta));
+                LOG_COLOR_RESET,
+                goodIfZeroColor(failDelta),
+                static_cast<unsigned long>(failDelta),
+                LOG_COLOR_RESET);
 }
 
 // ============================================================================
@@ -1123,66 +1390,146 @@ void resetStressStats(int count) {
   stressStats.okCount = 0;
   stressStats.failCount = 0;
   stressStats.startMs = millis();
+  stressStats.hasFailure = false;
+  stressStats.firstFailure = PCA9555::Status::Ok();
+  stressStats.lastFailure = PCA9555::Status::Ok();
+  stressStats.succBefore = device.totalSuccess();
+  stressStats.failBefore = device.totalFailures();
 }
 
 void finishStressStats() {
   stressStats.active = false;
   const uint32_t elapsed = millis() - stressStats.startMs;
   const int total = stressStats.okCount + stressStats.failCount;
-  const float rate = (elapsed > 0) ? (1000.0f * total / elapsed) : 0.0f;
-  const float successPct = (total > 0) ? (100.0f * stressStats.okCount / total) : 0.0f;
+  const float successPct = (total > 0)
+                               ? (100.0f * static_cast<float>(stressStats.okCount) /
+                                  static_cast<float>(total))
+                               : 0.0f;
 
   Serial.println("=== Stress Results ===");
-  Serial.printf("  Total: %d   OK: %s%d%s   Fail: %s%d%s\n",
-                total,
-                LOG_COLOR_GREEN, stressStats.okCount, LOG_COLOR_RESET,
-                goodIfZeroColor(stressStats.failCount),
-                stressStats.failCount, LOG_COLOR_RESET);
-  Serial.printf("  Success: %s%.1f%%%s   Duration: %lu ms   Rate: %.1f ops/s\n",
-                successRateColor(successPct), successPct, LOG_COLOR_RESET,
-                static_cast<unsigned long>(elapsed), rate);
+  Serial.printf("  Total: %sok=%lu%s %sfail=%lu%s (%s%.2f%%%s)\n",
+                goodIfNonZeroColor(static_cast<uint32_t>(stressStats.okCount)),
+                static_cast<unsigned long>(stressStats.okCount),
+                LOG_COLOR_RESET,
+                goodIfZeroColor(static_cast<uint32_t>(stressStats.failCount)),
+                static_cast<unsigned long>(stressStats.failCount),
+                LOG_COLOR_RESET,
+                successRateColor(successPct),
+                successPct,
+                LOG_COLOR_RESET);
+  Serial.printf("  Duration: %lu ms\n", static_cast<unsigned long>(elapsed));
+  if (elapsed > 0) {
+    Serial.printf("  Rate: %.2f ops/s\n",
+                  (1000.0f * static_cast<float>(total)) / static_cast<float>(elapsed));
+  }
+  const uint32_t succDelta = device.totalSuccess() - stressStats.succBefore;
+  const uint32_t failDelta = device.totalFailures() - stressStats.failBefore;
+  Serial.printf("  Health delta: %ssuccess +%lu%s, %sfailures +%lu%s\n",
+                goodIfNonZeroColor(succDelta),
+                static_cast<unsigned long>(succDelta),
+                LOG_COLOR_RESET,
+                goodIfZeroColor(failDelta),
+                static_cast<unsigned long>(failDelta),
+                LOG_COLOR_RESET);
+  if (stressStats.hasFailure) {
+    Serial.println("  First failure:");
+    printStatus(stressStats.firstFailure);
+    if (stressStats.failCount > 1) {
+      Serial.println("  Last failure:");
+      printStatus(stressStats.lastFailure);
+    }
+  }
 }
 
 void runStressMix(int count) {
-  Serial.printf("=== Stress Mix: %d cycles ===\n", count);
   const uint32_t startMs = millis();
   const uint32_t succBefore = device.totalSuccess();
   const uint32_t failBefore = device.totalFailures();
 
   struct OpStats {
     const char* name;
-    int ok;
-    int fail;
+    uint32_t ok;
+    uint32_t fail;
   };
-  static constexpr int OP_COUNT = 6;
+  static constexpr int OP_COUNT = 14;
   OpStats ops[OP_COUNT] = {
-    {"readInputs",    0, 0},
-    {"readOutputs",   0, 0},
-    {"getConfig",     0, 0},
-    {"getPolarity",   0, 0},
-    {"readRegister",  0, 0},
-    {"writeOutput",   0, 0},
+    {"readInputs",        0, 0},
+    {"readOutputs",       0, 0},
+    {"getConfig",         0, 0},
+    {"getPolarity",       0, 0},
+    {"readRegister",      0, 0},
+    {"readRegisters",     0, 0},
+    {"setOutputBits",     0, 0},
+    {"clearOutputBits",   0, 0},
+    {"toggleOutputBits",  0, 0},
+    {"togglePin",         0, 0},
+    {"configureInput",    0, 0},
+    {"configureOutput",   0, 0},
+    {"setInvertBits",     0, 0},
+    {"clearInvertBits",   0, 0},
   };
   uint32_t totalOk = 0;
   uint32_t totalFail = 0;
 
-  // Save output state for restore
   PCA9555::PortData savedOut;
-  device.readOutputs(savedOut);
+  PCA9555::PortData savedCfg;
+  PCA9555::PortData savedPol;
+  PCA9555::Status st = device.readOutputs(savedOut);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.getConfiguration(savedCfg);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.getPolarity(savedPol);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  st = device.writeOutputs(PORTS_ALL_LOW);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.setPolarity(PORTS_ALL_LOW);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.setConfiguration(PORTS_ALL_LOW);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
 
   for (int i = 0; i < count; ++i) {
     const int op = i % OP_COUNT;
-    PCA9555::Status st;
     PCA9555::PortData d;
     uint8_t val = 0;
+    uint8_t pairBuf[2] = {};
+    const uint16_t maskA = ((i & 1) == 0) ? 0x0003U : 0x0300U;
+    const uint16_t maskB = ((i & 1) == 0) ? 0x0101U : 0x1008U;
+    const PCA9555::Pin pin = static_cast<PCA9555::Pin>(i % PCA9555::cmd::TOTAL_PINS);
 
     switch (op) {
-      case 0: st = device.readInputs(d);            break;
-      case 1: st = device.readOutputs(d);            break;
-      case 2: st = device.getConfiguration(d);       break;
-      case 3: st = device.getPolarity(d);            break;
-      case 4: st = device.readRegister(0, val);      break;
-      case 5: st = device.writeOutput(PCA9555::Port::PORT_0, savedOut.port0); break;
+      case 0: st = device.readInputs(d); break;
+      case 1: st = device.readOutputs(d); break;
+      case 2: st = device.getConfiguration(d); break;
+      case 3: st = device.getPolarity(d); break;
+      case 4: st = device.readRegister(0, val); break;
+      case 5: st = device.readRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, pairBuf, 2); break;
+      case 6: st = device.setOutputBits(maskA); break;
+      case 7: st = device.clearOutputBits(maskA); break;
+      case 8: st = device.toggleOutputBits(maskB); break;
+      case 9: st = device.togglePin(pin); break;
+      case 10: st = device.configureInputBits(maskA); break;
+      case 11: st = device.configureOutputBits(maskA); break;
+      case 12: st = device.setInvertBits(maskB); break;
+      case 13: st = device.clearInvertBits(maskB); break;
       default: break;
     }
 
@@ -1201,33 +1548,45 @@ void runStressMix(int count) {
                         totalFail);
   }
 
-  // Restore outputs
-  device.writeOutput(PCA9555::Port::PORT_0, savedOut.port0);
-  device.writeOutput(PCA9555::Port::PORT_1, savedOut.port1);
+  device.writeOutputs(savedOut);
+  device.setPolarity(savedPol);
+  device.setConfiguration(savedCfg);
 
   const uint32_t elapsed = millis() - startMs;
-  const float rate = (elapsed > 0) ? (1000.0f * count / elapsed) : 0.0f;
-  const float successPct = (count > 0) ? (100.0f * totalOk / count) : 0.0f;
-
-  Serial.printf("  Total: %d   OK: %s%lu%s   Fail: %s%lu%s\n",
-                count,
-                LOG_COLOR_GREEN, static_cast<unsigned long>(totalOk), LOG_COLOR_RESET,
-                goodIfZeroColor(totalFail), static_cast<unsigned long>(totalFail), LOG_COLOR_RESET);
-  Serial.printf("  Success: %s%.1f%%%s   Duration: %lu ms   Rate: %.1f ops/s\n",
-                successRateColor(successPct), successPct, LOG_COLOR_RESET,
-                static_cast<unsigned long>(elapsed), rate);
-
+  const float successPct = (count > 0)
+                               ? (100.0f * static_cast<float>(totalOk) /
+                                  static_cast<float>(count))
+                               : 0.0f;
+  Serial.println("=== stress_mix summary ===");
+  Serial.printf("  Total: %sok=%lu%s %sfail=%lu%s (%s%.2f%%%s)\n",
+                goodIfNonZeroColor(totalOk),
+                static_cast<unsigned long>(totalOk),
+                LOG_COLOR_RESET,
+                goodIfZeroColor(totalFail),
+                static_cast<unsigned long>(totalFail),
+                LOG_COLOR_RESET,
+                successRateColor(successPct),
+                successPct,
+                LOG_COLOR_RESET);
+  Serial.printf("  Duration: %lu ms\n", static_cast<unsigned long>(elapsed));
+  if (elapsed > 0) {
+    Serial.printf("  Rate: %.2f ops/s\n",
+                  (1000.0f * static_cast<float>(count)) / static_cast<float>(elapsed));
+  }
   Serial.println("  Per-operation breakdown:");
   for (int i = 0; i < OP_COUNT; ++i) {
-    const int opTotal = ops[i].ok + ops[i].fail;
-    const float opPct = (opTotal > 0) ? (100.0f * ops[i].ok / opTotal) : 0.0f;
-    Serial.printf("    %-16s  ok=%s%d%s  fail=%s%d%s  (%s%.0f%%%s)\n",
+    const uint32_t opTotal = ops[i].ok + ops[i].fail;
+    const float opPct = (opTotal > 0U)
+                            ? (100.0f * static_cast<float>(ops[i].ok) /
+                               static_cast<float>(opTotal))
+                            : 0.0f;
+    Serial.printf("  %-16s %sok=%lu%s %sfail=%lu%s (%s%.0f%%%s)\n",
                   ops[i].name,
-                  goodIfNonZeroColor(static_cast<uint32_t>(ops[i].ok)),
-                  ops[i].ok,
+                  goodIfNonZeroColor(ops[i].ok),
+                  static_cast<unsigned long>(ops[i].ok),
                   LOG_COLOR_RESET,
-                  goodIfZeroColor(static_cast<uint32_t>(ops[i].fail)),
-                  ops[i].fail,
+                  goodIfZeroColor(ops[i].fail),
+                  static_cast<unsigned long>(ops[i].fail),
                   LOG_COLOR_RESET,
                   successRateColor(opPct),
                   opPct,
@@ -1236,9 +1595,221 @@ void runStressMix(int count) {
 
   const uint32_t succDelta = device.totalSuccess() - succBefore;
   const uint32_t failDelta = device.totalFailures() - failBefore;
-  Serial.printf("  Health delta: +%lu ok, +%lu fail\n",
+  Serial.printf("  Health delta: %ssuccess +%lu%s, %sfailures +%lu%s\n",
+                goodIfNonZeroColor(succDelta),
                 static_cast<unsigned long>(succDelta),
-                static_cast<unsigned long>(failDelta));
+                LOG_COLOR_RESET,
+                goodIfZeroColor(failDelta),
+                static_cast<unsigned long>(failDelta),
+                LOG_COLOR_RESET);
+}
+
+// ============================================================================
+// Pin Test Commands
+// ============================================================================
+
+void cmdSweep(const String& args) {
+  const char* cursor = args.c_str();
+  long delayMs = 200;
+  if (*skipWhitespace(cursor) != '\0') {
+    if (!parseLongToken(cursor, delayMs) || hasTrailingArgs(cursor) ||
+        delayMs < 0 || delayMs > 10000) {
+      LOGE("Usage: sweep [delay_ms] (0-10000, default 200)");
+      return;
+    }
+  }
+
+  // Save current config and outputs
+  PCA9555::PortData savedCfg;
+  PCA9555::PortData savedOut;
+  PCA9555::Status st = device.getConfiguration(savedCfg);
+  if (!st.ok()) { printStatus(st); return; }
+  st = device.readOutputs(savedOut);
+  if (!st.ok()) { printStatus(st); return; }
+
+  // Set all pins to output, all low
+  st = device.writeOutputs(PORTS_ALL_LOW);
+  if (!st.ok()) { printStatus(st); return; }
+  st = device.setConfiguration(PORTS_ALL_LOW);
+  if (!st.ok()) { printStatus(st); return; }
+
+  Serial.printf("=== Sweep Test (delay=%ld ms) ===\n", delayMs);
+  int pass = 0, fail = 0;
+
+  // Phase 1: turn pins ON one-by-one (accumulating)
+  Serial.println("  -- ON sweep --");
+  for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
+    st = device.writePin(pin, true);
+    if (!st.ok()) {
+      Serial.printf("  P%02u: %s[FAIL]%s set high - %s\n",
+                    pin, LOG_COLOR_RED, LOG_COLOR_RESET, errToStr(st.code));
+      fail++;
+      continue;
+    }
+
+    if (delayMs > 0) delay(static_cast<unsigned long>(delayMs));
+
+    // Verify: all pins 0..pin should be HIGH
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    const uint16_t expected = static_cast<uint16_t>((1U << (pin + 1)) - 1U);
+    if (!st.ok() || readback.combined() != expected) {
+      Serial.printf("  P%02u: %s[FAIL]%s ON readback 0x%04X != 0x%04X\n",
+                    pin, LOG_COLOR_RED, LOG_COLOR_RESET,
+                    readback.combined(), expected);
+      fail++;
+    } else {
+      Serial.printf("  P%02u: %s[OK]%s ON (0x%04X)\n",
+                    pin, LOG_COLOR_GREEN, LOG_COLOR_RESET, expected);
+      pass++;
+    }
+  }
+
+  // Phase 2: turn pins OFF one-by-one (draining)
+  Serial.println("  -- OFF sweep --");
+  for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
+    st = device.writePin(pin, false);
+    if (!st.ok()) {
+      Serial.printf("  P%02u: %s[FAIL]%s set low - %s\n",
+                    pin, LOG_COLOR_RED, LOG_COLOR_RESET, errToStr(st.code));
+      fail++;
+      continue;
+    }
+
+    if (delayMs > 0) delay(static_cast<unsigned long>(delayMs));
+
+    // Verify: pins 0..pin should be LOW, pins (pin+1)..15 should still be HIGH
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    const uint16_t expected = (pin < 15)
+        ? static_cast<uint16_t>(0xFFFFU << (pin + 1))
+        : static_cast<uint16_t>(0x0000U);
+    if (!st.ok() || readback.combined() != expected) {
+      Serial.printf("  P%02u: %s[FAIL]%s OFF readback 0x%04X != 0x%04X\n",
+                    pin, LOG_COLOR_RED, LOG_COLOR_RESET,
+                    readback.combined(), expected);
+      fail++;
+    } else {
+      Serial.printf("  P%02u: %s[OK]%s OFF (0x%04X)\n",
+                    pin, LOG_COLOR_GREEN, LOG_COLOR_RESET, expected);
+      pass++;
+    }
+  }
+
+  // Restore
+  device.setConfiguration(savedCfg);
+  device.writeOutputs(savedOut);
+
+  Serial.println("--- Summary ---");
+  Serial.printf("  %s%d passed%s, %s%d failed%s\n",
+                LOG_COLOR_GREEN, pass, LOG_COLOR_RESET,
+                (fail > 0) ? LOG_COLOR_RED : LOG_COLOR_GREEN, fail, LOG_COLOR_RESET);
+}
+
+void cmdWalk(const String& args) {
+  const char* cursor = args.c_str();
+  long delayMs = 200;
+  if (*skipWhitespace(cursor) != '\0') {
+    if (!parseLongToken(cursor, delayMs) || hasTrailingArgs(cursor) ||
+        delayMs < 0 || delayMs > 10000) {
+      LOGE("Usage: walk [delay_ms] (0-10000, default 200)");
+      return;
+    }
+  }
+
+  // Save current config and outputs
+  PCA9555::PortData savedCfg;
+  PCA9555::PortData savedOut;
+  PCA9555::Status st = device.getConfiguration(savedCfg);
+  if (!st.ok()) { printStatus(st); return; }
+  st = device.readOutputs(savedOut);
+  if (!st.ok()) { printStatus(st); return; }
+
+  // Set all pins to output
+  st = device.setConfiguration(PORTS_ALL_LOW);
+  if (!st.ok()) { printStatus(st); return; }
+
+  Serial.printf("=== Walking-1 Test (delay=%ld ms) ===\n", delayMs);
+  int pass = 0, fail = 0;
+
+  for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
+    // Only this pin high, all others low
+    const uint16_t pattern = static_cast<uint16_t>(1U << pin);
+    const PCA9555::PortData out = PCA9555::PortData::fromCombined(pattern);
+
+    st = device.writeOutputs(out);
+    if (!st.ok()) { fail++; continue; }
+
+    if (delayMs > 0) delay(static_cast<unsigned long>(delayMs));
+
+    // Readback verify
+    PCA9555::PortData readback;
+    st = device.readOutputs(readback);
+    if (!st.ok() || readback.combined() != pattern) {
+      Serial.printf("  P%02u: %s[FAIL]%s readback 0x%04X != 0x%04X\n",
+                    pin, LOG_COLOR_RED, LOG_COLOR_RESET,
+                    readback.combined(), pattern);
+      fail++;
+    } else {
+      Serial.printf("  P%02u: %s[OK]%s P0=0x%02X P1=0x%02X\n",
+                    pin, LOG_COLOR_GREEN, LOG_COLOR_RESET, out.port0, out.port1);
+      pass++;
+    }
+  }
+
+  // All off, then restore
+  device.writeOutputs(PORTS_ALL_LOW);
+  device.setConfiguration(savedCfg);
+  device.writeOutputs(savedOut);
+
+  Serial.println("--- Summary ---");
+  Serial.printf("  %s%d passed%s, %s%d failed%s\n",
+                LOG_COLOR_GREEN, pass, LOG_COLOR_RESET,
+                (fail > 0) ? LOG_COLOR_RED : LOG_COLOR_GREEN, fail, LOG_COLOR_RESET);
+}
+
+void cmdAllHigh() {
+  // Set output values before direction to avoid glitches
+  PCA9555::Status st = device.writeOutputs(PORTS_ALL_HIGH);
+  if (!st.ok()) { printStatus(st); return; }
+  st = device.setConfiguration(PORTS_ALL_LOW);
+  if (!st.ok()) { printStatus(st); return; }
+  LOGI("All 16 pins set to OUTPUT HIGH");
+}
+
+void cmdAllLow() {
+  // Set output values before direction to avoid glitches
+  PCA9555::Status st = device.writeOutputs(PORTS_ALL_LOW);
+  if (!st.ok()) { printStatus(st); return; }
+  st = device.setConfiguration(PORTS_ALL_LOW);
+  if (!st.ok()) { printStatus(st); return; }
+  LOGI("All 16 pins set to OUTPUT LOW");
+}
+
+void cmdPattern(const String& args) {
+  const char* cursor = args.c_str();
+  uint16_t pattern = 0;
+  if (!parseU16Token(cursor, pattern) || hasTrailingArgs(cursor)) {
+    LOGE("Usage: pattern <0x0000-0xFFFF>");
+    return;
+  }
+
+  const PCA9555::PortData outputs = PCA9555::PortData::fromCombined(pattern);
+  PCA9555::Status st = device.writeOutputs(outputs);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+  st = device.setConfiguration(PORTS_ALL_LOW);
+  if (!st.ok()) {
+    printStatus(st);
+    return;
+  }
+
+  LOGI("Pattern applied: mask=0x%04X -> P0=0x%02X P1=0x%02X (all pins OUTPUT)",
+       pattern,
+       outputs.port0,
+       outputs.port1);
 }
 
 // ============================================================================
@@ -1252,9 +1823,19 @@ void printHelp() {
   auto helpItem = [](const char* cmd, const char* desc) {
     Serial.printf("  %s%-32s%s - %s\n", LOG_COLOR_CYAN, cmd, LOG_COLOR_RESET, desc);
   };
+  auto helpNote = [](const char* text) {
+    Serial.printf("  %s%s%s\n", LOG_COLOR_YELLOW, text, LOG_COLOR_RESET);
+  };
 
   Serial.println();
   Serial.printf("%s=== PCA9555 CLI Help ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
+
+  helpSection("CLI Terms");
+  helpNote("<P> = port index: 0 -> P00-P07, 1 -> P10-P17");
+  helpNote("<N> = pin index: 0-7 -> P00-P07, 8-15 -> P10-P17");
+  helpNote("polarity affects input sense only: NORMAL reads raw level, INVERTED flips 0/1");
+  helpNote("<M> = 16-bit mask: bit 0=P00 ... bit 7=P07, bit 8=P10 ... bit 15=P17");
+  helpNote("mask examples: 0x0003 -> P00+P01, 0x0100 -> P10, 0x8001 -> P00+P17");
 
   helpSection("Common");
   helpItem("help / ?", "Show this help");
@@ -1280,13 +1861,22 @@ void printHelp() {
   helpItem("dump", "Dump all 8 registers");
 
   helpSection("Write");
-  helpItem("write pin <N> <0|1> / wpin <N> <0|1>", "Set output pin N to 0 or 1");
+  helpItem("write pin <N> <0|1> / wpin <N> <0|1>", "Set output latch bit for pin N to 0 or 1");
   helpItem("toggle <N>", "Toggle output pin N");
-  helpItem("dir pin <N> <in|out> / dir <N> <in|out>", "Set pin N direction");
-  helpItem("write port <P> <V> / wport <P> <V>", "Write port P (0/1) output to V");
-  helpItem("dir port <P> <V> / dport <P> <V>", "Set port direction (1=in, 0=out)");
-  helpItem("polarity pin <N> <0|1> / pol <N> <0|1>", "Set single-pin polarity inversion");
-  helpItem("polarity port <P> <V> / wpol <P> <V>", "Set port polarity inversion");
+  helpItem("dir pin <N> <in|out> / dir <N> <in|out>", "Set pin N direction (in=input, out=output)");
+  helpItem("write port <P> <V> / wport <P> <V>", "Write output latch for port P (8 bits)");
+  helpItem("dir port <P> <V> / dport <P> <V>", "Set port direction bits (1=input, 0=output)");
+  helpItem("polarity pin <N> <0|1> / pol <N> <0|1>", "Set input polarity for one pin (1=inverted)");
+  helpItem("polarity port <P> <V> / wpol <P> <V>", "Set input polarity bits for one port");
+
+  helpSection("Bit Manipulation (M=16-bit mask, one 2-byte I2C burst)");
+  helpItem("setbits <M> / sb <M>", "Set masked output bits HIGH, leave all other bits unchanged");
+  helpItem("clearbits <M> / cb <M>", "Clear masked output bits LOW, leave all other bits unchanged");
+  helpItem("togglebits <M> / tb <M>", "Toggle only the masked output bits");
+  helpItem("dirin <M>", "Set masked pins to INPUT, leave other direction bits unchanged");
+  helpItem("dirout <M>", "Set masked pins to OUTPUT, leave other direction bits unchanged");
+  helpItem("invertset <M>", "Enable input polarity inversion for masked pins");
+  helpItem("invertclr <M>", "Disable input polarity inversion for masked pins");
 
   helpSection("Raw Register");
   helpItem("read reg <R> / rreg <R>", "Read register R (0-7)");
@@ -1295,14 +1885,21 @@ void printHelp() {
   helpItem("write regs <R> <V0> [V1] / wregs <R> <V0> [V1]",
            "Write 1-2 registers in one pair");
 
+  helpSection("Testing");
+  helpItem("pattern <M> / pat <M>", "Drive exact 16-bit output pattern M and force all pins OUTPUT");
+  helpItem("sweep [delay_ms]", "Fill ON then drain OFF, pin by pin (accumulating)");
+  helpItem("walk [delay_ms]", "Walking-1: single pin HIGH moves across all 16");
+  helpItem("allhigh", "Set all 16 pins to output HIGH");
+  helpItem("alllow", "Set all 16 pins to output LOW");
+
   helpSection("Diagnostics");
   helpItem("drv", "Show driver state and health");
   helpItem("probe", "Probe device (no health tracking)");
   helpItem("recover", "Manual recovery attempt");
   helpItem("verbose [0|1]", "Enable/disable verbose output");
-  helpItem("selftest", "Run safe command self-test report");
+  helpItem("selftest", "Run safe API self-test incl. readback, masks, direction, and polarity");
   helpItem("stress [N]", "Run N readInputs cycles (default 10)");
-  helpItem("stress_mix [N]", "Run N mixed-operation cycles (default 50)");
+  helpItem("stress_mix [N]", "Run N mixed read/write/config/polarity/mask cycles (default 50)");
 }
 
 // ============================================================================
@@ -1517,6 +2114,57 @@ void processCommand(const String& cmdLine) {
     return;
   }
 
+  // ---- Bit Manipulation ----
+  if (cmd.startsWith("setbits ")) {
+    cmdSetBits(cmd.substring(8));
+    return;
+  }
+
+  if (cmd.startsWith("sb ")) {
+    cmdSetBits(cmd.substring(3));
+    return;
+  }
+
+  if (cmd.startsWith("clearbits ")) {
+    cmdClearBits(cmd.substring(10));
+    return;
+  }
+
+  if (cmd.startsWith("cb ")) {
+    cmdClearBits(cmd.substring(3));
+    return;
+  }
+
+  if (cmd.startsWith("togglebits ")) {
+    cmdToggleBits(cmd.substring(11));
+    return;
+  }
+
+  if (cmd.startsWith("tb ")) {
+    cmdToggleBits(cmd.substring(3));
+    return;
+  }
+
+  if (cmd.startsWith("dirin ")) {
+    cmdDirIn(cmd.substring(6));
+    return;
+  }
+
+  if (cmd.startsWith("dirout ")) {
+    cmdDirOut(cmd.substring(7));
+    return;
+  }
+
+  if (cmd.startsWith("invertset ")) {
+    cmdInvertSet(cmd.substring(10));
+    return;
+  }
+
+  if (cmd.startsWith("invertclr ")) {
+    cmdInvertClr(cmd.substring(10));
+    return;
+  }
+
   // ---- Raw Register ----
   if (cmd.startsWith("write regs ")) {
     cmdRegsWrite(cmd.substring(11));
@@ -1550,14 +2198,16 @@ void processCommand(const String& cmdLine) {
   }
 
   if (cmd == "probe") {
+    LOGI("Probing device (no health tracking)...");
     printStatus(device.probe());
     return;
   }
 
   if (cmd == "recover") {
+    LOGI("Attempting recovery...");
     PCA9555::Status st = device.recover();
     printStatus(st);
-    if (st.ok()) printDriverHealth();
+    printDriverHealth();
     return;
   }
 
@@ -1583,6 +2233,44 @@ void processCommand(const String& cmdLine) {
 
   if (cmd == "selftest") {
     runSelfTest();
+    return;
+  }
+
+  if (cmd.startsWith("sweep")) {
+    if (cmd.length() > 5) {
+      cmdSweep(cmd.substring(5));
+    } else {
+      cmdSweep("");
+    }
+    return;
+  }
+
+  if (cmd.startsWith("walk")) {
+    if (cmd.length() > 4) {
+      cmdWalk(cmd.substring(4));
+    } else {
+      cmdWalk("");
+    }
+    return;
+  }
+
+  if (cmd == "allhigh") {
+    cmdAllHigh();
+    return;
+  }
+
+  if (cmd == "alllow") {
+    cmdAllLow();
+    return;
+  }
+
+  if (cmd.startsWith("pattern ")) {
+    cmdPattern(cmd.substring(8));
+    return;
+  }
+
+  if (cmd.startsWith("pat ")) {
+    cmdPattern(cmd.substring(4));
     return;
   }
 
@@ -1666,6 +2354,7 @@ void setup() {
   cfg.polarityPort0 = 0x00;
   cfg.polarityPort1 = 0x00;
   cfg.applyInterruptErrata = true;
+  cfg.requireConfigPortDefaults = false;  // CLI mutates config regs; chip has no SW reset
   PCA9555::Status st = device.begin(cfg);
   if (!st.ok()) {
     LOGE("Init failed!");
@@ -1689,6 +2378,11 @@ void loop() {
       stressStats.okCount++;
     } else {
       stressStats.failCount++;
+      if (!stressStats.hasFailure) {
+        stressStats.firstFailure = st;
+        stressStats.hasFailure = true;
+      }
+      stressStats.lastFailure = st;
       LOGV(verboseMode, "  stress cycle fail: %s", errToStr(st.code));
     }
     stressRemaining--;

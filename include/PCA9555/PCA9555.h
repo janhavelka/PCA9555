@@ -216,7 +216,67 @@ public:
   /// @param[out] data Port 0 and Port 1 output register values
   /// @return Status::Ok() on success
   Status readOutputs(PortData& data);
-  
+
+  // =========================================================================
+  // Bit Manipulation API
+  // =========================================================================
+
+  /// Set specific output bits HIGH without affecting other bits.
+  /// Applies mask via OR to cached output shadow registers and writes both
+  /// ports in a single 2-byte burst. No I2C occurs if the mask causes no
+  /// change (all targeted bits already HIGH).
+  /// @param mask 16-bit mask (bit 0 = P00 … bit 15 = P17); 1 = set HIGH
+  /// @return Status::Ok() on success
+  Status setOutputBits(uint16_t mask);
+
+  /// Clear specific output bits to LOW without affecting other bits.
+  /// Applies inverted mask via AND to cached output shadow registers and
+  /// writes both ports in a single 2-byte burst. No I2C occurs if no change.
+  /// @param mask 16-bit mask; 1 = clear to LOW
+  /// @return Status::Ok() on success
+  Status clearOutputBits(uint16_t mask);
+
+  /// Toggle specific output bits without affecting other bits.
+  /// Applies mask via XOR to cached output shadow registers and writes both
+  /// ports in a single 2-byte burst. No I2C occurs if mask is zero.
+  /// @param mask 16-bit mask; 1 = toggle
+  /// @return Status::Ok() on success
+  Status toggleOutputBits(uint16_t mask);
+
+  /// Toggle a single output pin using the cached shadow register.
+  /// Performs a single 1-byte I2C write without a preceding read.
+  /// @param pin Pin number 0–15
+  /// @return Status::Ok() on success
+  Status togglePin(Pin pin);
+
+  /// Configure masked pins as inputs (set configuration register bits to 1).
+  /// Applies mask via OR to cached configuration shadow registers and writes
+  /// both ports in a single 2-byte burst. No I2C occurs if no change.
+  /// @param mask 16-bit mask; 1 = set direction to INPUT
+  /// @return Status::Ok() on success
+  Status configureInputBits(uint16_t mask);
+
+  /// Configure masked pins as outputs (clear configuration register bits to 0).
+  /// Applies inverted mask via AND to cached configuration shadow registers
+  /// and writes both ports in a single 2-byte burst. No I2C occurs if no change.
+  /// @param mask 16-bit mask; 1 = set direction to OUTPUT
+  /// @return Status::Ok() on success
+  Status configureOutputBits(uint16_t mask);
+
+  /// Enable polarity inversion for masked pins.
+  /// Applies mask via OR to polarity registers and writes both ports in a
+  /// single 2-byte burst. No I2C occurs if no change.
+  /// @param mask 16-bit mask; 1 = enable inversion
+  /// @return Status::Ok() on success
+  Status setInvertBits(uint16_t mask);
+
+  /// Disable polarity inversion for masked pins.
+  /// Applies inverted mask via AND to polarity registers and writes both
+  /// ports in a single 2-byte burst. No I2C occurs if no change.
+  /// @param mask 16-bit mask; 1 = disable inversion
+  /// @return Status::Ok() on success
+  Status clearInvertBits(uint16_t mask);
+
   // =========================================================================
   // Configuration API
   // =========================================================================

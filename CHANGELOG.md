@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Doxyfile inputs now cover the root implementation manual and docs tree.
+- Documented cache-safe output, direction, and polarity write semantics.
+
+### Fixed
+
+- Removed duplicate Doxygen parameter sections from readback helper comments.
+- Guarded raw tracked read helpers against zero-length reads before transport dispatch.
+- Treated transport `IN_PROGRESS` statuses as neutral for health counters instead of counting them as failures.
+- Added native coverage proving failed output/config/polarity writes do not mutate cached runtime state and invalid register blocks do not touch the bus.
+
 ## [1.0.0] - 2026-04-06
 
 ### Added

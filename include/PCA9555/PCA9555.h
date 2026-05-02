@@ -185,9 +185,6 @@ public:
   /// @return Status::Ok() on success
   Status writeOutput(Port port, uint8_t value);
 
-  /// @param port Port to read (PORT_0 or PORT_1)
-  /// @param[out] value 8-bit output latch value
-  /// @return Status::Ok() on success
   /// Read back a single output port register value.
   /// Returns the latched output flip-flop state, not the sampled pin level.
   /// @param port Port to read (PORT_0 or PORT_1)
@@ -202,9 +199,6 @@ public:
   /// @return Status::Ok() on success
   Status writePin(Pin pin, bool high);
 
-  /// @param pin Pin number 0–15
-  /// @param[out] high true if the output latch bit is set
-  /// @return Status::Ok() on success
   /// Read back a single output pin latch state.
   /// Returns the stored output-register bit, not the sampled pin level.
   /// @param pin Pin number 0-15
@@ -293,9 +287,6 @@ public:
   /// @return Status::Ok() on success
   Status setPortConfiguration(Port port, uint8_t value);
 
-  /// @param port Port to read (PORT_0 or PORT_1)
-  /// @param[out] value Direction bits (1=input, 0=output)
-  /// @return Status::Ok() on success
   /// Read back a single port configuration register.
   /// @param port Port to read (PORT_0 or PORT_1)
   /// @param[out] value Direction bits (1=input, 0=output)
@@ -319,9 +310,6 @@ public:
   /// @return Status::Ok() on success
   Status setPortPolarity(Port port, uint8_t value);
 
-  /// @param port Port to read (PORT_0 or PORT_1)
-  /// @param[out] value Polarity inversion bits
-  /// @return Status::Ok() on success
   /// Read back a single port polarity inversion register.
   /// @param port Port to read (PORT_0 or PORT_1)
   /// @param[out] value Polarity inversion bits
@@ -340,9 +328,6 @@ public:
   /// @return Status::Ok() on success
   Status setPinPolarity(Pin pin, bool inverted);
 
-  /// @param pin Pin number 0-15
-  /// @param[out] inverted true if input polarity is inverted
-  /// @return Status::Ok() on success
   /// Read back the configured polarity inversion for a single pin.
   /// @param pin Pin number 0-15
   /// @param[out] inverted true if the pin input is inverted
@@ -356,9 +341,6 @@ public:
   /// @return Status::Ok() on success
   Status setPinDirection(Pin pin, bool input);
 
-  /// @param pin Pin number 0–15
-  /// @param[out] input true if configured as input, false if configured as output
-  /// @return Status::Ok() on success
   /// Read back the configured direction for a single pin.
   /// @param pin Pin number 0-15
   /// @param[out] input true if the pin is configured as input

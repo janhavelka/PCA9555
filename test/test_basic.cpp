@@ -570,6 +570,56 @@ void test_write_outputs_updates_device() {
   TEST_ASSERT_EQUAL_HEX8(0x55, bus.regs[cmd::REG_OUTPUT_PORT_1]);
 }
 
+void test_failed_writes_do_not_update_cached_runtime_state() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  PortData data;
+  data.port0 = 0x00;
+  data.port1 = 0x11;
+
+  bus.writeErrorRemaining = 1;
+  Status st = dev.writeOutputs(data);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_ERROR), static_cast<uint8_t>(st.code));
+
+  SettingsSnapshot snapshot = dev.getSettings();
+  TEST_ASSERT_EQUAL_HEX8(0xFF, snapshot.config.outputPort0);
+  TEST_ASSERT_EQUAL_HEX8(0xFF, snapshot.config.outputPort1);
+
+  bus.writeErrorRemaining = 1;
+  st = dev.setConfiguration(data);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_ERROR), static_cast<uint8_t>(st.code));
+  snapshot = dev.getSettings();
+  TEST_ASSERT_EQUAL_HEX8(0xFF, snapshot.config.configPort0);
+  TEST_ASSERT_EQUAL_HEX8(0xFF, snapshot.config.configPort1);
+
+  bus.writeErrorRemaining = 1;
+  st = dev.setPolarity(data);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_ERROR), static_cast<uint8_t>(st.code));
+  snapshot = dev.getSettings();
+  TEST_ASSERT_EQUAL_HEX8(0x00, snapshot.config.polarityPort0);
+  TEST_ASSERT_EQUAL_HEX8(0x00, snapshot.config.polarityPort1);
+}
+
+void test_transport_in_progress_does_not_update_health() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  bus.writeErrorRemaining = 1;
+  bus.writeError = Status{Err::IN_PROGRESS, 0, "queued"};
+  Status st = dev.writeOutput(Port::PORT_0, 0x00);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::IN_PROGRESS), static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_UINT32(0u, dev.totalFailures());
+  TEST_ASSERT_EQUAL_UINT8(0u, dev.consecutiveFailures());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
+                          static_cast<uint8_t>(dev.state()));
+
+  const SettingsSnapshot snapshot = dev.getSettings();
+  TEST_ASSERT_EQUAL_HEX8(0xFF, snapshot.config.outputPort0);
+}
+
 void test_bulk_register_helpers_round_trip_and_update_shadow() {
   FakeBus bus;
   PCA9555::PCA9555 dev;
@@ -900,6 +950,8 @@ void test_register_out_of_range() {
   PCA9555::PCA9555 dev;
   TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
 
+  const uint32_t readsBefore = bus.readCalls;
+  const uint32_t writesBefore = bus.writeCalls;
   uint8_t value = 0;
   Status st = dev.readRegister(0x08, value);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
@@ -908,6 +960,18 @@ void test_register_out_of_range() {
   st = dev.writeRegister(0x08, 0x55);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
                           static_cast<uint8_t>(st.code));
+
+  uint8_t buf[2] = {};
+  st = dev.readRegisters(cmd::REG_OUTPUT_PORT_1, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(st.code));
+
+  st = dev.writeRegisters(cmd::REG_OUTPUT_PORT_1, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
+                          static_cast<uint8_t>(st.code));
+
+  TEST_ASSERT_EQUAL_UINT32(readsBefore, bus.readCalls);
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
 }
 
 // ===========================================================================
@@ -1255,6 +1319,8 @@ int main() {
   RUN_TEST(test_single_pin_helpers_reject_invalid_pin);
   RUN_TEST(test_port_apis_reject_invalid_port_enum);
   RUN_TEST(test_write_outputs_updates_device);
+  RUN_TEST(test_failed_writes_do_not_update_cached_runtime_state);
+  RUN_TEST(test_transport_in_progress_does_not_update_health);
   RUN_TEST(test_bulk_register_helpers_round_trip_and_update_shadow);
   RUN_TEST(test_bulk_read_input_registers_applies_errata_workaround);
   RUN_TEST(test_write_pin_modifies_single_bit);

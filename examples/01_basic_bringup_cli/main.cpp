@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include "examples/common/CliStyle.h"
 #include "examples/common/Log.h"
 #include "examples/common/BoardConfig.h"
 #include "examples/common/BusDiag.h"
@@ -1817,89 +1818,83 @@ void cmdPattern(const String& args) {
 // ============================================================================
 
 void printHelp() {
-  auto helpSection = [](const char* title) {
-    Serial.printf("\n%s[%s]%s\n", LOG_COLOR_GREEN, title, LOG_COLOR_RESET);
-  };
-  auto helpItem = [](const char* cmd, const char* desc) {
-    Serial.printf("  %s%-32s%s - %s\n", LOG_COLOR_CYAN, cmd, LOG_COLOR_RESET, desc);
-  };
   auto helpNote = [](const char* text) {
     Serial.printf("  %s%s%s\n", LOG_COLOR_YELLOW, text, LOG_COLOR_RESET);
   };
 
   Serial.println();
-  Serial.printf("%s=== PCA9555 CLI Help ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
+  cli::printHelpHeader("PCA9555 CLI Help");
 
-  helpSection("CLI Terms");
+  cli::printHelpSection("CLI Terms");
   helpNote("<P> = port index: 0 -> P00-P07, 1 -> P10-P17");
   helpNote("<N> = pin index: 0-7 -> P00-P07, 8-15 -> P10-P17");
   helpNote("polarity affects input sense only: NORMAL reads raw level, INVERTED flips 0/1");
   helpNote("<M> = 16-bit mask: bit 0=P00 ... bit 7=P07, bit 8=P10 ... bit 15=P17");
   helpNote("mask examples: 0x0003 -> P00+P01, 0x0100 -> P10, 0x8001 -> P00+P17");
 
-  helpSection("Common");
-  helpItem("help / ?", "Show this help");
-  helpItem("version / ver", "Print firmware and library version info");
-  helpItem("scan", "Scan I2C bus");
+  cli::printHelpSection("Common");
+  cli::printHelpItem("help / ?", "Show this help");
+  cli::printHelpItem("version / ver", "Print firmware and library version info");
+  cli::printHelpItem("scan", "Scan I2C bus");
 
-  helpSection("Read");
-  helpItem("read / inputs", "Read both input ports");
-  helpItem("read input port <P> / rin <P>", "Read one input port");
-  helpItem("read outputs / outputs", "Read output registers");
-  helpItem("read output port <P>", "Read one output-port latch register");
-  helpItem("read config / config", "Read configuration (direction) registers");
-  helpItem("read config port <P>", "Read one configuration register");
-  helpItem("read polarity / polarity", "Read polarity inversion registers");
-  helpItem("read polarity port <P>", "Read one polarity register");
-  helpItem("read pin <N> / rpin <N>", "Read input pin N (0-15)");
-  helpItem("read outpin <N> / rout <N>", "Read output latch bit for pin N");
-  helpItem("read dirpin <N> / rdir <N>", "Read pin direction for pin N");
-  helpItem("read polpin <N> / rpol <N>", "Read pin polarity inversion for pin N");
-  helpItem("pininfo <N>", "Show actual level, latch, direction, and polarity");
-  helpItem("pins", "Show a 16-pin summary table");
-  helpItem("cfg / settings", "Print active driver settings snapshot");
-  helpItem("dump", "Dump all 8 registers");
+  cli::printHelpSection("Read");
+  cli::printHelpItem("read / inputs", "Read both input ports");
+  cli::printHelpItem("read input port <P> / rin <P>", "Read one input port");
+  cli::printHelpItem("read outputs / outputs", "Read output registers");
+  cli::printHelpItem("read output port <P>", "Read one output-port latch register");
+  cli::printHelpItem("read config / config", "Read configuration (direction) registers");
+  cli::printHelpItem("read config port <P>", "Read one configuration register");
+  cli::printHelpItem("read polarity / polarity", "Read polarity inversion registers");
+  cli::printHelpItem("read polarity port <P>", "Read one polarity register");
+  cli::printHelpItem("read pin <N> / rpin <N>", "Read input pin N (0-15)");
+  cli::printHelpItem("read outpin <N> / rout <N>", "Read output latch bit for pin N");
+  cli::printHelpItem("read dirpin <N> / rdir <N>", "Read pin direction for pin N");
+  cli::printHelpItem("read polpin <N> / rpol <N>", "Read pin polarity inversion for pin N");
+  cli::printHelpItem("pininfo <N>", "Show actual level, latch, direction, and polarity");
+  cli::printHelpItem("pins", "Show a 16-pin summary table");
+  cli::printHelpItem("cfg / settings", "Print active driver settings snapshot");
+  cli::printHelpItem("dump", "Dump all 8 registers");
 
-  helpSection("Write");
-  helpItem("write pin <N> <0|1> / wpin <N> <0|1>", "Set output latch bit for pin N to 0 or 1");
-  helpItem("toggle <N>", "Toggle output pin N");
-  helpItem("dir pin <N> <in|out> / dir <N> <in|out>", "Set pin N direction (in=input, out=output)");
-  helpItem("write port <P> <V> / wport <P> <V>", "Write output latch for port P (8 bits)");
-  helpItem("dir port <P> <V> / dport <P> <V>", "Set port direction bits (1=input, 0=output)");
-  helpItem("polarity pin <N> <0|1> / pol <N> <0|1>", "Set input polarity for one pin (1=inverted)");
-  helpItem("polarity port <P> <V> / wpol <P> <V>", "Set input polarity bits for one port");
+  cli::printHelpSection("Write");
+  cli::printHelpItem("write pin <N> <0|1> / wpin <N> <0|1>", "Set output latch bit for pin N to 0 or 1");
+  cli::printHelpItem("toggle <N>", "Toggle output pin N");
+  cli::printHelpItem("dir pin <N> <in|out> / dir <N> <in|out>", "Set pin N direction (in=input, out=output)");
+  cli::printHelpItem("write port <P> <V> / wport <P> <V>", "Write output latch for port P (8 bits)");
+  cli::printHelpItem("dir port <P> <V> / dport <P> <V>", "Set port direction bits (1=input, 0=output)");
+  cli::printHelpItem("polarity pin <N> <0|1> / pol <N> <0|1>", "Set input polarity for one pin (1=inverted)");
+  cli::printHelpItem("polarity port <P> <V> / wpol <P> <V>", "Set input polarity bits for one port");
 
-  helpSection("Bit Manipulation (M=16-bit mask, one 2-byte I2C burst)");
-  helpItem("setbits <M> / sb <M>", "Set masked output bits HIGH, leave all other bits unchanged");
-  helpItem("clearbits <M> / cb <M>", "Clear masked output bits LOW, leave all other bits unchanged");
-  helpItem("togglebits <M> / tb <M>", "Toggle only the masked output bits");
-  helpItem("dirin <M>", "Set masked pins to INPUT, leave other direction bits unchanged");
-  helpItem("dirout <M>", "Set masked pins to OUTPUT, leave other direction bits unchanged");
-  helpItem("invertset <M>", "Enable input polarity inversion for masked pins");
-  helpItem("invertclr <M>", "Disable input polarity inversion for masked pins");
+  cli::printHelpSection("Bit Manipulation (M=16-bit mask, one 2-byte I2C burst)");
+  cli::printHelpItem("setbits <M> / sb <M>", "Set masked output bits HIGH, leave all other bits unchanged");
+  cli::printHelpItem("clearbits <M> / cb <M>", "Clear masked output bits LOW, leave all other bits unchanged");
+  cli::printHelpItem("togglebits <M> / tb <M>", "Toggle only the masked output bits");
+  cli::printHelpItem("dirin <M>", "Set masked pins to INPUT, leave other direction bits unchanged");
+  cli::printHelpItem("dirout <M>", "Set masked pins to OUTPUT, leave other direction bits unchanged");
+  cli::printHelpItem("invertset <M>", "Enable input polarity inversion for masked pins");
+  cli::printHelpItem("invertclr <M>", "Disable input polarity inversion for masked pins");
 
-  helpSection("Raw Register");
-  helpItem("read reg <R> / rreg <R>", "Read register R (0-7)");
-  helpItem("read regs <R> <N> / rregs <R> <N>", "Read 1-2 registers in one pair");
-  helpItem("write reg <R> <V> / wreg <R> <V>", "Write register R (2-7) to V");
-  helpItem("write regs <R> <V0> [V1] / wregs <R> <V0> [V1]",
+  cli::printHelpSection("Raw Register");
+  cli::printHelpItem("read reg <R> / rreg <R>", "Read register R (0-7)");
+  cli::printHelpItem("read regs <R> <N> / rregs <R> <N>", "Read 1-2 registers in one pair");
+  cli::printHelpItem("write reg <R> <V> / wreg <R> <V>", "Write register R (2-7) to V");
+  cli::printHelpItem("write regs <R> <V0> [V1] / wregs <R> <V0> [V1]",
            "Write 1-2 registers in one pair");
 
-  helpSection("Testing");
-  helpItem("pattern <M> / pat <M>", "Drive exact 16-bit output pattern M and force all pins OUTPUT");
-  helpItem("sweep [delay_ms]", "Fill ON then drain OFF, pin by pin (accumulating)");
-  helpItem("walk [delay_ms]", "Walking-1: single pin HIGH moves across all 16");
-  helpItem("allhigh", "Set all 16 pins to output HIGH");
-  helpItem("alllow", "Set all 16 pins to output LOW");
+  cli::printHelpSection("Testing");
+  cli::printHelpItem("pattern <M> / pat <M>", "Drive exact 16-bit output pattern M and force all pins OUTPUT");
+  cli::printHelpItem("sweep [delay_ms]", "Fill ON then drain OFF, pin by pin (accumulating)");
+  cli::printHelpItem("walk [delay_ms]", "Walking-1: single pin HIGH moves across all 16");
+  cli::printHelpItem("allhigh", "Set all 16 pins to output HIGH");
+  cli::printHelpItem("alllow", "Set all 16 pins to output LOW");
 
-  helpSection("Diagnostics");
-  helpItem("drv", "Show driver state and health");
-  helpItem("probe", "Probe device (no health tracking)");
-  helpItem("recover", "Manual recovery attempt");
-  helpItem("verbose [0|1]", "Enable/disable verbose output");
-  helpItem("selftest", "Run safe API self-test incl. readback, masks, direction, and polarity");
-  helpItem("stress [N]", "Run N readInputs cycles (default 10)");
-  helpItem("stress_mix [N]", "Run N mixed read/write/config/polarity/mask cycles (default 50)");
+  cli::printHelpSection("Diagnostics");
+  cli::printHelpItem("drv", "Show driver state and health");
+  cli::printHelpItem("probe", "Probe device (no health tracking)");
+  cli::printHelpItem("recover", "Manual recovery attempt");
+  cli::printHelpItem("verbose [0|1]", "Enable/disable verbose output");
+  cli::printHelpItem("selftest", "Run safe API self-test incl. readback, masks, direction, and polarity");
+  cli::printHelpItem("stress [N]", "Run N readInputs cycles (default 10)");
+  cli::printHelpItem("stress_mix [N]", "Run N mixed read/write/config/polarity/mask cycles (default 50)");
 }
 
 // ============================================================================
@@ -2364,7 +2359,7 @@ void setup() {
   LOGI("PCA9555 initialized at 0x%02X", cfg.i2cAddress);
   printDriverHealth();
   printHelp();
-  Serial.print("> ");
+  cli::printPrompt();
 }
 
 void loop() {
@@ -2394,13 +2389,13 @@ void loop() {
                         static_cast<uint32_t>(stressStats.failCount));
     if (stressRemaining == 0) {
       finishStressStats();
-      Serial.print("> ");
+      cli::printPrompt();
     }
   }
 
   String inputLine;
   if (cli_shell::readLine(inputLine)) {
     processCommand(inputLine);
-    Serial.print("> ");
+    cli::printPrompt();
   }
 }

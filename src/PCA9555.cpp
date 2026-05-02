@@ -866,7 +866,7 @@ Status PCA9555::writeRegisters(uint8_t startReg, const uint8_t* buf, size_t len)
 
 Status PCA9555::_i2cWriteReadRaw(const uint8_t* txBuf, size_t txLen,
                                  uint8_t* rxBuf, size_t rxLen) {
-  if (txBuf == nullptr || txLen == 0 || (rxLen > 0 && rxBuf == nullptr)) {
+  if (txBuf == nullptr || txLen == 0 || rxBuf == nullptr || rxLen == 0) {
     return Status::Error(Err::INVALID_PARAM, "Invalid I2C buffer");
   }
   if (_config.i2cWriteRead == nullptr) {
@@ -889,7 +889,7 @@ Status PCA9555::_i2cWriteRaw(const uint8_t* buf, size_t len) {
 
 Status PCA9555::_i2cWriteReadTracked(const uint8_t* txBuf, size_t txLen,
                                      uint8_t* rxBuf, size_t rxLen) {
-  if (txBuf == nullptr || txLen == 0 || (rxLen > 0 && rxBuf == nullptr)) {
+  if (txBuf == nullptr || txLen == 0 || rxBuf == nullptr || rxLen == 0) {
     return Status::Error(Err::INVALID_PARAM, "Invalid I2C buffer");
   }
 
@@ -971,6 +971,10 @@ Status PCA9555::_updateHealth(const Status& st) {
   const uint32_t now = _nowMs();
   const uint32_t maxU32 = std::numeric_limits<uint32_t>::max();
   const uint8_t maxU8 = std::numeric_limits<uint8_t>::max();
+
+  if (st.inProgress()) {
+    return st;
+  }
 
   if (st.ok()) {
     _lastOkMs = now;

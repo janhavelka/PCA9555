@@ -15,6 +15,7 @@ Production-grade PCA9555 16-bit I/O expander I2C driver for ESP32 (Arduino/Platf
 - **Bit manipulation helpers** - 16-bit mask-based set/clear/toggle for outputs, direction, and polarity in a single I2C burst
 - **Bulk register helpers** - pair-bounded `readRegisters()` / `writeRegisters()` for low-level diagnostics
 - **Recoverable runtime state** - `recover()` reapplies the latest live output/config/polarity state
+- **Cache-safe writes** - output, direction, and polarity mirrors update only after successful I2C writes
 
 ## Installation
 
@@ -166,7 +167,8 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 
 All methods operate on a 16-bit mask (bit 0 = P00, bit 15 = P17), use cached shadow
 registers, and write both ports in a single 2-byte I2C burst. No I2C occurs when the
-mask causes no change.
+mask causes no change. If the write fails, the cached shadow state remains unchanged so
+later single-pin and recovery operations do not build on a failed update.
 
 - `Status setOutputBits(uint16_t mask)` - Set output bits HIGH (OR mask into shadow)
 - `Status clearOutputBits(uint16_t mask)` - Clear output bits LOW (AND ~mask into shadow)
@@ -233,6 +235,8 @@ Up to 8 devices can share one bus. The address pins must be tied high or low and
 3. **Resource ownership**: Bus and pins provided by application via `Config`.
 4. **Memory behavior**: The library performs no dynamic allocation in `begin()` or steady state.
 5. **Error handling**: All fallible APIs return `Status`. Silent failure is not possible.
+6. **Health behavior**: transport `IN_PROGRESS` statuses are passed through without
+   incrementing success or failure counters.
 
 `begin()` verifies presence by reading both Configuration Port registers. By default it requires the
 POR default `0xFF/0xFF` state and returns `CONFIG_REG_MISMATCH` if the expander is already

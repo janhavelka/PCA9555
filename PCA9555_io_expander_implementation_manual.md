@@ -6,7 +6,7 @@
 
 | # | Filename | Description | Pages | TI Document # |
 |---|----------|-------------|-------|---------------|
-| 1 | `datasheet_PCA9555.pdf` | PCA9555 Remote 16-bit I2C and SMBus I/O Expander with Interrupt Output and Configuration Registers | 49 | SCPS131J (August 2005, revised March 2021) |
+| 1 | `PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf` | PCA9555 Remote 16-bit I2C and SMBus I/O Expander with Interrupt Output and Configuration Registers | 49 | SCPS131J (August 2005, revised March 2021) |
 | 2 | `auto_increment_feature.pdf` | I2C: What is the Auto Increment Feature? (Application Note) | 7 | SLVAFL0 (July 2024) |
 
 ---
@@ -14,17 +14,17 @@
 ## 2. Device Identity and Variants
 
 - **Part number**: PCA9555
-  (datasheet_PCA9555.pdf, p.1)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1)
 - **Full title**: "Remote 16-bit I2C and SMBus I/O Expander with Interrupt Output and Configuration Registers"
-  (datasheet_PCA9555.pdf, p.1)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1)
 - **Manufacturer**: Texas Instruments
 - **Relation to other parts**:
   - PCA9555 is **identical to PCA9535**, except PCA9555 includes an internal I/O pullup resistor (~100 kΩ, see schematic) which pulls I/O to a default high when configured as input and undriven.
-    (datasheet_PCA9555.pdf, p.14)
+    (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14)
   - Pin-to-pin and I2C-address compatible with **PCF8575**, but software changes required due to enhancements.
-    (datasheet_PCA9555.pdf, p.14)
+    (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14)
   - Fixed I2C address space is shared with PCF8575, PCF8575C, and PCF8574; up to 8 of these in any combination may share the same bus.
-    (datasheet_PCA9555.pdf, p.14)
+    (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14)
 - **No other variants** (PCA9555A, PCA9555C, PCA9555D, etc.) are documented in the reviewed materials. Only the base PCA9555 is described.
 
 ### Packages
@@ -38,20 +38,20 @@
 | TSSOP (PW) | 24 | 7.80 mm × 4.40 mm | PD9555 |
 | VQFN (RGE) | 24 | 4.00 mm × 4.00 mm | PD9555 |
 
-(datasheet_PCA9555.pdf, p.1, p.31)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1, p.31)
 
 ### Addendum: Latch-Up and ESD Feature Ratings
 
 - **Latch-up performance** exceeds 100 mA per JESD 78, Class II.
-  (datasheet_PCA9555.pdf, p.1)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1)
 - **ESD protection** exceeds JESD 22:
   - 2000 V Human-Body Model (HBM), per ANSI/ESDA/JEDEC JS-001, all pins
   - 1000 V Charged-Device Model (CDM), per JEDEC specification JESD22-C101 or ANSI/ESDA/JEDEC JS-002, all pins
-  (datasheet_PCA9555.pdf, p.1, p.5)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1, p.5)
 - **Note**: JEDEC document JEP155 states that 500-V HBM allows safe manufacturing with a standard ESD control process. JEDEC document JEP157 states that 250-V CDM allows safe manufacturing with a standard ESD control process.
-  (datasheet_PCA9555.pdf, p.5)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.5)
 - **Note**: The Features list on p.1 also references 200-V Machine Model (A115-A), but this is **not** included in the formal ESD Ratings table on p.5 (which only lists HBM and CDM).
-  (datasheet_PCA9555.pdf, p.1 vs p.5)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1 vs p.5)
 
 ---
 
@@ -70,7 +70,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 - **Polarity inversion** register to invert input sense without software overhead
 - **No dedicated reset pin** — reset only via power cycle (POR)
 
-(datasheet_PCA9555.pdf, p.1, p.14–15)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1, p.14–15)
 
 ---
 
@@ -78,18 +78,18 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 
 | Parameter | Value | Source |
 |-----------|-------|--------|
-| Interface type | I2C / SMBus | datasheet_PCA9555.pdf, p.1 |
-| Bus lines | SDA (data), SCL (clock) | datasheet_PCA9555.pdf, p.1 |
-| Max clock frequency | 400 kHz (Fast Mode) | datasheet_PCA9555.pdf, p.1, p.7 |
-| Standard Mode supported | Yes, 0–100 kHz | datasheet_PCA9555.pdf, p.7 |
-| Address bits (fixed) | `0 1 0 0` (MSB first, bits [7:4] of address byte) | datasheet_PCA9555.pdf, p.19 |
-| Address bits (programmable) | A2, A1, A0 (bits [3:1] of address byte) | datasheet_PCA9555.pdf, p.19 |
-| R/W bit | Bit 0 of address byte: 0 = write, 1 = read | datasheet_PCA9555.pdf, p.19 |
-| 7-bit address range | 0x20–0x27 (decimal 32–39) | datasheet_PCA9555.pdf, p.19 |
-| General call address response | **No** — device does not respond to general call | datasheet_PCA9555.pdf, p.17 |
-| Pullup resistors required | Yes, on SDA and SCL (external) | datasheet_PCA9555.pdf, p.4, p.17 |
-| Pullup resistor on INT | Yes, external to VCC (open-drain output) | datasheet_PCA9555.pdf, p.4 |
-| Bus capacitive load max | 400 pF | datasheet_PCA9555.pdf, p.7–8 |
+| Interface type | I2C / SMBus | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1 |
+| Bus lines | SDA (data), SCL (clock) | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1 |
+| Max clock frequency | 400 kHz (Fast Mode) | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1, p.7 |
+| Standard Mode supported | Yes, 0–100 kHz | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7 |
+| Address bits (fixed) | `0 1 0 0` (MSB first, bits [7:4] of address byte) | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.19 |
+| Address bits (programmable) | A2, A1, A0 (bits [3:1] of address byte) | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.19 |
+| R/W bit | Bit 0 of address byte: 0 = write, 1 = read | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.19 |
+| 7-bit address range | 0x20–0x27 (decimal 32–39) | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.19 |
+| General call address response | **No** — device does not respond to general call | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.17 |
+| Pullup resistors required | Yes, on SDA and SCL (external) | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.4, p.17 |
+| Pullup resistor on INT | Yes, external to VCC (open-drain output) | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.4 |
+| Bus capacitive load max | 400 pF | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7–8 |
 
 ### Address Table
 
@@ -104,10 +104,10 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 | H | H | L | 0x26 | 38 |
 | H | H | H | 0x27 | 39 |
 
-(datasheet_PCA9555.pdf, p.19)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.19)
 
 **CRITICAL**: Address inputs A0–A2 must **not** be changed between Start and Stop conditions.
-(datasheet_PCA9555.pdf, p.17)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.17)
 
 ---
 
@@ -126,7 +126,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 | IOH per I/O pin | — | –10 | mA | Source current max |
 | IOL per I/O pin | — | 25 | mA | Sink current max |
 
-(datasheet_PCA9555.pdf, p.5)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.5)
 
 ### Addendum: Absolute Maximum Ratings
 
@@ -147,7 +147,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 (1) The input negative-voltage and output voltage ratings may be exceeded if the input and output current ratings are observed.
 
 **Stresses beyond those listed under Absolute Maximum Ratings may cause permanent damage to the device. These are stress ratings only, and functional operation of the device at these or any other conditions beyond those indicated under Recommended Operating Conditions is not implied. Exposure to absolute-maximum-rated conditions for extended periods may affect device reliability.**
-(datasheet_PCA9555.pdf, p.5)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.5)
 
 ### Addendum: Output Voltage Specifications (VOH, VOL)
 
@@ -171,7 +171,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 | P port | 0.7 V | — | 10 | 24 | mA | 2.3–5.5 V |
 | INT | 0.4 V | — | — | 3 | mA | 2.3–5.5 V |
 
-(datasheet_PCA9555.pdf, p.7)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7)
 
 ### Addendum: Input Diode Clamp and Leakage Currents
 
@@ -184,7 +184,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 | P-port input low current | IIL | VI = GND | 2.3–5.5 V | — | — | –100 | μA |
 
 **Note**: The IIL of –100 μA for P-port at VI = GND is the current drawn by the internal ~100 kΩ pullup resistor when an input pin is held low. This is consistent with the ΔICC specification.
-(datasheet_PCA9555.pdf, p.7)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7)
 
 ### Current Limits
 
@@ -196,7 +196,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 - Continuous current through GND: max 250 mA
 - Continuous current through VCC: max 160 mA
 
-(datasheet_PCA9555.pdf, p.5, p.7)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.5, p.7)
 
 ### Supply Current (ICC)
 
@@ -213,10 +213,10 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 | Standby, all inputs high | 2.7 V | 0.7 | 1.6 | μA |
 | ΔICC (1 input at VCC−0.6 V) | 2.3–5.5 V | — | 1.5 | mA |
 
-(datasheet_PCA9555.pdf, p.7)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7)
 
 **IMPORTANT**: Standby current with **low inputs** is dramatically higher (up to 1.5 mA at 5.5 V) than with high inputs (3.5 μA). This is due to the internal ~100 kΩ pullup resistor conducting current when an input is held low. For battery applications, ensure unused inputs are pulled high or configured as outputs driven high.
-(datasheet_PCA9555.pdf, p.7, p.15, p.25)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7, p.15, p.25)
 
 ### I2C Timing — Standard Mode (0–100 kHz)
 
@@ -238,7 +238,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 | Valid data time (SCL low → SDA out) | tVD(DATA) | — | 3.45 | μs |
 | Valid ACK time | tVD(ACK) | — | 3.45 | μs |
 
-(datasheet_PCA9555.pdf, p.7)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7)
 
 ### I2C Timing — Fast Mode (0–400 kHz)
 
@@ -260,7 +260,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 | Valid data time (SCL low → SDA out) | tVD(DATA) | — | 0.9 | μs |
 | Valid ACK time | tVD(ACK) | — | 0.9 | μs |
 
-(datasheet_PCA9555.pdf, p.7–8)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7–8)
 
 ### Switching Characteristics (I/O Ports)
 
@@ -272,7 +272,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 | Input data setup time | tPS | P port | SCL | 150 | — | ns |
 | Input data hold time | tPH | P port | SCL | 1 | — | μs |
 
-(datasheet_PCA9555.pdf, p.8)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.8)
 
 ### Pin Capacitance
 
@@ -282,7 +282,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 | SDA (Cio) | 3 | 9.5 | pF |
 | P port (Cio) | 3.7 | 9.5 | pF |
 
-(datasheet_PCA9555.pdf, p.7)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7)
 
 ### Addendum: Electrical Characteristics Footnotes
 
@@ -291,7 +291,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 - (3) The total current sourced by all I/Os must be limited to 160 mA (80 mA for P07–P00 and 80 mA for P17–P10).
 - (4) Recommended Operating Conditions footnote: For voltages applied above VCC, an increase in ICC will result.
 - (5) Switching Characteristics test condition: CL ≤ 100 pF.
-  (datasheet_PCA9555.pdf, p.5, p.7, p.8)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.5, p.7, p.8)
 
 ### Addendum: Thermal Information
 
@@ -305,7 +305,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 | RθJC(bot) (junction-to-case bottom) | n/a | n/a | n/a | n/a | n/a | 15.3 | °C/W |
 
 All packages are 24 pins.
-(datasheet_PCA9555.pdf, p.6)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.6)
 
 ### Addendum: Parameter Measurement Test Conditions
 
@@ -315,7 +315,7 @@ All packages are 24 pins.
 - All inputs supplied by generators: PRR ≤ 10 MHz, ZO = 50 Ω, tr/tf ≤ 30 ns.
 - Outputs are measured one at a time, with one transition per measurement.
 - Cb = total capacitance of one bus line in pF (for I2C bus capacitive load spec).
-  (datasheet_PCA9555.pdf, p.12–13)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.12–13)
 
 ---
 
@@ -324,21 +324,21 @@ All packages are 24 pins.
 ### Power-On Reset (POR)
 
 - **No dedicated reset pin**. Reset is achieved only via power cycling VCC.
-  (datasheet_PCA9555.pdf, p.14, p.27)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14, p.27)
 - When VCC rises from 0 V, an internal POR circuit holds the device in reset until VCC reaches **VPORR** (rising threshold).
-  (datasheet_PCA9555.pdf, p.15)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.15)
 - **VPORR** (rising): min 1.033 V, typ not stated, max 1.428 V
-  (datasheet_PCA9555.pdf, p.27)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.27)
 - **VPORF** (falling): min 0.767 V, typ not stated, max 1.144 V
-  (datasheet_PCA9555.pdf, p.27)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.27)
 - Alternatively: VPORR typ = 1.2–1.5 V (from Electrical Characteristics table)
-  (datasheet_PCA9555.pdf, p.7)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7)
 - VPORF typ = 0.75–1 V (from Electrical Characteristics table)
-  (datasheet_PCA9555.pdf, p.7)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7)
 - Upon POR release: all registers reset to defaults, I2C/SMBus state machine initialized.
-  (datasheet_PCA9555.pdf, p.15)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.15)
 - For a subsequent power-reset cycle: VCC must drop below VPORF, then rise back to operating voltage.
-  (datasheet_PCA9555.pdf, p.15)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.15)
 
 ### POR Sequencing Requirements
 
@@ -350,7 +350,7 @@ All packages are 24 pins.
 | Time to re-ramp (VCC drops to VPOR_MIN−50mV) | 0.001 | — | — | ms |
 | Glitch-safe level (VCC_GH, 1 μs glitch) | 1.2 | — | — | V |
 
-(datasheet_PCA9555.pdf, p.27)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.27)
 
 ### Default Register State After POR
 
@@ -365,10 +365,10 @@ All packages are 24 pins.
 | Configuration Port 0 | 0x06 | 1111 1111 (0xFF) — all inputs |
 | Configuration Port 1 | 0x07 | 1111 1111 (0xFF) — all inputs |
 
-(datasheet_PCA9555.pdf, p.19)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.19)
 
 **Combined effect at power-on**: All I/Os are configured as inputs (Configuration = 0xFF), outputs default to high (Output = 0xFF), no polarity inversion (Polarity = 0x00). Because of the ~100 kΩ internal pullup, undriven input pins read high.
-(datasheet_PCA9555.pdf, p.14–15, p.19)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14–15, p.19)
 
 ---
 
@@ -389,19 +389,19 @@ All packages are 24 pins.
 | VCC | Power | — | Supply voltage | 2.3 V to 5.5 V |
 | GND | Power | — | Ground | — |
 
-(datasheet_PCA9555.pdf, p.4)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.4)
 
 ### I/O Pin Behavior Detail
 
 - **As input**: FETs Q1 and Q2 are off → high-impedance. Internal ~100 kΩ pullup to VCC is present.
   Input voltage may go up to 5.5 V regardless of VCC (5 V tolerant).
-  (datasheet_PCA9555.pdf, p.15)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.15)
 - **As output**: Push-pull structure. Q1 (pull-up to VCC) or Q2 (pull-down to GND) enabled depending on Output Port register state. Low-impedance path.
-  (datasheet_PCA9555.pdf, p.15)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.15)
 - Output port register default = 0xFF (high), so if a pin is switched from input to output, it will drive high initially.
-  (datasheet_PCA9555.pdf, p.19)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.19)
 - **CAUTION**: Changing an I/O from output to input may cause a **false interrupt** if the pin state doesn't match the Input Port register contents.
-  (datasheet_PCA9555.pdf, p.16)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.16)
 
 ### INT Pin Behavior
 
@@ -410,13 +410,13 @@ All packages are 24 pins.
 - Asserted when any input pin state differs from its corresponding Input Port register value.
 - De-asserts (goes high-impedance / pulled high) when the input port that caused the interrupt is read (at the ACK/NACK bit), or when the pin returns to its original state.
 
-(datasheet_PCA9555.pdf, p.14, p.16)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14, p.16)
 
 ### Address Pin Behavior
 
 - A0, A1, A2: connect directly to VCC or GND. Input current ±1 μA.
 - **Must not change** between Start and Stop conditions.
-  (datasheet_PCA9555.pdf, p.4, p.7, p.17)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.4, p.7, p.17)
 
 ---
 
@@ -435,7 +435,7 @@ The PCA9555 has **8 registers** addressed by a 3-bit command byte (bits B2:B1:B0
 | 0x06 | Configuration Port 0 | Read/Write | 1111 1111 (0xFF) | 8 bits |
 | 0x07 | Configuration Port 1 | Read/Write | 1111 1111 (0xFF) | 8 bits |
 
-(datasheet_PCA9555.pdf, p.19)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.19)
 
 ### Command Byte Format
 
@@ -445,7 +445,7 @@ Bit:  7   6   5   4   3   2   1   0
 ```
 
 Only bits [2:0] are used. Upper bits [7:3] are always 0.
-(datasheet_PCA9555.pdf, p.19)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.19)
 
 ### Register Pair Architecture
 
@@ -456,7 +456,7 @@ The 8 registers operate as **4 pairs**:
 - Pair 3: Configuration Port 0 (0x06) + Configuration Port 1 (0x07)
 
 Auto-increment alternates **within** a pair only — it does NOT increment across pairs.
-(datasheet_PCA9555.pdf, p.21; auto_increment_feature.pdf, p.4)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.21; auto_increment_feature.pdf, p.4)
 
 ---
 
@@ -482,7 +482,7 @@ Auto-increment alternates **within** a pair only — it does NOT increment acros
 - Before reading, a write transaction with the command byte must be sent to set the register pointer.
 - Reading this register clears the interrupt for Port 0.
 
-(datasheet_PCA9555.pdf, p.20)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.20)
 
 ### 9.2 Input Port 1 (Command Byte 0x01)
 
@@ -500,7 +500,7 @@ Auto-increment alternates **within** a pair only — it does NOT increment acros
 - Same behavior as Input Port 0, but for Port 1 pins.
 - Reading this register clears the interrupt for Port 1.
 
-(datasheet_PCA9555.pdf, p.20)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.20)
 
 ### 9.3 Output Port 0 (Command Byte 0x02)
 
@@ -520,7 +520,7 @@ Auto-increment alternates **within** a pair only — it does NOT increment acros
 - **Reading** this register returns the value in the output flip-flop, **NOT the actual pin value**. To read actual pin levels, read the Input Port register.
 - Default = 0xFF (all high). This means newly-configured output pins will drive high initially.
 
-(datasheet_PCA9555.pdf, p.20)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.20)
 
 ### 9.4 Output Port 1 (Command Byte 0x03)
 
@@ -537,7 +537,7 @@ Auto-increment alternates **within** a pair only — it does NOT increment acros
 
 - Same behavior as Output Port 0, but for Port 1 pins.
 
-(datasheet_PCA9555.pdf, p.20)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.20)
 
 ### 9.5 Polarity Inversion Port 0 (Command Byte 0x04)
 
@@ -558,7 +558,7 @@ Auto-increment alternates **within** a pair only — it does NOT increment acros
 - Default = 0x00 (no inversion).
 - Writing polarity inversion may trigger an interrupt if the resulting Input Port register value changes.
 
-(datasheet_PCA9555.pdf, p.20)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.20)
 
 ### 9.6 Polarity Inversion Port 1 (Command Byte 0x05)
 
@@ -575,7 +575,7 @@ Auto-increment alternates **within** a pair only — it does NOT increment acros
 
 - Same behavior as Polarity Inversion Port 0, but for Port 1 pins.
 
-(datasheet_PCA9555.pdf, p.20)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.20)
 
 ### 9.7 Configuration Port 0 (Command Byte 0x06)
 
@@ -594,7 +594,7 @@ Auto-increment alternates **within** a pair only — it does NOT increment acros
 - **0 = output** (push-pull driver active, driven by Output Port register).
 - Default = 0xFF (all inputs).
 
-(datasheet_PCA9555.pdf, p.20)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.20)
 
 ### 9.8 Configuration Port 1 (Command Byte 0x07)
 
@@ -611,7 +611,7 @@ Auto-increment alternates **within** a pair only — it does NOT increment acros
 
 - Same behavior as Configuration Port 0, but for Port 1 pins.
 
-(datasheet_PCA9555.pdf, p.20)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.20)
 
 ---
 
@@ -620,7 +620,7 @@ Auto-increment alternates **within** a pair only — it does NOT increment acros
 ### 10.1 Command Byte
 
 The command byte is sent in a **write** transaction immediately after the slave address byte. It selects which register is read or written. Only bits [2:0] are meaningful. Once a command byte is sent, subsequent reads access that register (and its pair partner) until a new command byte is written.
-(datasheet_PCA9555.pdf, p.19)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.19)
 
 ### 10.2 Write Transaction
 
@@ -632,7 +632,7 @@ The command byte is sent in a **write** transaction immediately after the slave 
 - Data takes effect (output updates) upon the rising edge of the ACK clock pulse.
 - Output valid time after SCL: tPV ≤ 200 ns.
 
-(datasheet_PCA9555.pdf, p.21)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.21)
 
 ### 10.3 Read Transaction
 
@@ -647,7 +647,7 @@ The command byte is sent in a **write** transaction immediately after the slave 
 - No limitation on number of bytes read; final byte must receive **NACK** from master.
 - Transfer can be stopped at any time by a Stop condition; data at the latest ACK phase is valid.
 
-(datasheet_PCA9555.pdf, p.21–23)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.21–23)
 
 ### 10.4 Auto-Increment Behavior
 
@@ -660,7 +660,7 @@ The command byte is sent in a **write** transaction immediately after the slave 
 - Auto-increment does **not** need to be enabled; it is always active.
 - To write to a different register pair, a new transaction with a new command byte is required.
 
-(datasheet_PCA9555.pdf, p.21; auto_increment_feature.pdf, p.4–5)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.21; auto_increment_feature.pdf, p.4–5)
 
 **Benefit**: Continuous burst writes/reads to a register pair allow rapid toggling of both ports' data in a single transaction without re-sending the command byte.
 (auto_increment_feature.pdf, p.3–5)
@@ -672,7 +672,7 @@ Once a command byte is sent, the register pointer persists until:
 - A restart occurs (in which case it updates to the register being accessed at restart time)
 
 The command byte is sent **only** during write transmissions.
-(datasheet_PCA9555.pdf, p.19, p.21)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.19, p.21)
 
 ---
 
@@ -701,7 +701,7 @@ No explicit initialization sequence is prescribed in the datasheet. Based on reg
 6. **Apply interrupt errata workaround**:
    - After reading input ports, write a command byte other than 0x00 to the device (e.g., write command byte 0x02 even without data) to avoid the interrupt errata.
 
-(Derived from datasheet_PCA9555.pdf, p.14–16, p.19–21)
+(Derived from PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14–16, p.19–21)
 
 ### Writing Both Output Ports in One Transaction
 
@@ -710,7 +710,7 @@ No explicit initialization sequence is prescribed in the datasheet. Based on reg
 ```
 
 This writes Output Port 0, then auto-increments to Output Port 1.
-(datasheet_PCA9555.pdf, p.21)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.21)
 
 ### Writing Both Configuration Registers in One Transaction
 
@@ -718,7 +718,7 @@ This writes Output Port 0, then auto-increments to Output Port 1.
 [S] [0x40|A2<<3|A1<<2|A0<<1|0] [ACK] [0x06] [ACK] [Config0_data] [ACK] [Config1_data] [ACK] [P]
 ```
 
-(datasheet_PCA9555.pdf, p.21)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.21)
 
 ### Reading Both Input Ports in One Transaction
 
@@ -726,7 +726,7 @@ This writes Output Port 0, then auto-increments to Output Port 1.
 [S] [addr+W] [ACK] [0x00] [ACK] [Sr] [addr+R] [ACK] [Port0_data] [ACK] [Port1_data] [NACK] [P]
 ```
 
-(datasheet_PCA9555.pdf, p.22)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.22)
 
 ---
 
@@ -737,14 +737,14 @@ This writes Output Port 0, then auto-increments to Output Port 1.
 - Initialized to default state at POR.
 - Can be re-initialized only by power cycling (lowering VCC below VPORF, then raising above VPORR).
 - The master can reset the device in case of timeout or improper operation via the POR feature.
-  (datasheet_PCA9555.pdf, p.14)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14)
 
 ### Operating Mode
 
 - Single operating mode: active I2C slave.
 - Standby: When no I2C transactions are occurring (SCL idle), the device enters a low-power standby state automatically.
   - Standby current depends heavily on I/O pin states (see Section 5).
-  (datasheet_PCA9555.pdf, p.7)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7)
 
 ### No Explicit State Machine Described
 
@@ -763,7 +763,7 @@ The datasheet does not describe multi-state operational modes or a complex inter
 5. Input data setup time (tPS): min 150 ns before SCL rising edge.
 6. Input data hold time (tPH): min 1 μs after SCL rising edge.
 
-(datasheet_PCA9555.pdf, p.8, p.14–15, p.23)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.8, p.14–15, p.23)
 
 ### Output Data Path
 
@@ -773,7 +773,7 @@ The datasheet does not describe multi-state operational modes or a complex inter
 4. Output data valid time (tPV): max 200 ns after SCL edge.
 5. Output is **latched** — it retains its value until a new write or POR.
 
-(datasheet_PCA9555.pdf, p.8, p.15, p.21)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.8, p.15, p.21)
 
 ### Input Register Latching
 
@@ -781,7 +781,7 @@ The datasheet does not describe multi-state operational modes or a complex inter
 - The register reflects the **real-time** value at the instant of sampling, not a previously captured snapshot.
 - Between reads, the actual pin states may change, but the Input Port register is updated fresh each time it is read.
 
-(datasheet_PCA9555.pdf, p.20, p.22–23)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.20, p.22–23)
 
 ---
 
@@ -797,7 +797,7 @@ The datasheet does not describe multi-state operational modes or a complex inter
 | Valid time after edge | tIV ≤ 4 μs |
 | Reset delay after read | tIR ≤ 4 μs |
 
-(datasheet_PCA9555.pdf, p.8, p.16)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.8, p.16)
 
 ### Interrupt Generation
 
@@ -805,7 +805,7 @@ The datasheet does not describe multi-state operational modes or a complex inter
 - INT is asserted when any input state **differs** from its corresponding Input Port register state.
 - The interrupt persists until the condition is resolved.
 
-(datasheet_PCA9555.pdf, p.14, p.16)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14, p.16)
 
 ### Interrupt Clearing / Reset
 
@@ -814,7 +814,7 @@ Interrupt is cleared (INT de-asserts) when:
 2. **The input port that caused the interrupt is read** — reset occurs at the ACK or NACK bit after the rising edge of SCL during the read.
 
 **CRITICAL**: Each 8-pin port is read independently. An interrupt caused by Port 0 is **NOT** cleared by reading Port 1, and vice versa.
-(datasheet_PCA9555.pdf, p.16)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.16)
 
 ### Interrupt Edge Cases
 
@@ -824,7 +824,7 @@ Interrupt is cleared (INT de-asserts) when:
 - A pin configured as an **output cannot cause** an interrupt.
 - Changing an I/O from output to input **may cause a false interrupt** if the pin state doesn't match the Input Port register contents.
 
-(datasheet_PCA9555.pdf, p.16)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.16)
 
 ### CRITICAL: Interrupt Errata
 
@@ -838,7 +838,7 @@ Interrupt is cleared (INT de-asserts) when:
 
 **Workaround**: After any read operation to the PCA9555, **write a command byte other than 0x00** (e.g., 0x02 for Output Port 0) before reading from another slave device on the bus. This is a minor software change that is compatible with other versions of this device and TI redesigns.
 
-(datasheet_PCA9555.pdf, p.16)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.16)
 
 ---
 
@@ -858,7 +858,7 @@ Not applicable to this device. The PCA9555 has no nonvolatile memory, OTP, or EE
 - **Difference from PCA9535**: PCA9535 lacks this internal pullup. PCA9555 is otherwise identical.
 - When an input is held low, the pullup sources current through itself, causing increased standby current (ΔICC up to 1.5 mA per pin at VCC – 0.6 V).
 
-(datasheet_PCA9555.pdf, p.14–15, p.7, p.25)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14–15, p.7, p.25)
 
 ### 16.2 LED Drive Considerations
 
@@ -866,56 +866,56 @@ Not applicable to this device. The PCA9555 has no nonvolatile memory, OTP, or EE
 - **Workaround A**: Add a 100 kΩ resistor in parallel with the LED to pull the pin to VCC when LED is off.
 - **Workaround B**: Use a separate, higher voltage LED supply so VCC is at least 1.2 V below the LED supply.
 
-(datasheet_PCA9555.pdf, p.25)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.25)
 
 ### 16.3 Output-to-Input Transition Caution
 
 - Switching a pin from output to input may cause a **false interrupt** if the external pin state doesn't match the Input Port register contents at the moment of reconfiguration.
 
-(datasheet_PCA9555.pdf, p.16)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.16)
 
 ### 16.4 Read-Back of Output Register
 
 - Reading the Output Port register returns the **flip-flop value**, NOT the actual pin level. To read the physical pin state, read the **Input Port** register instead.
 
-(datasheet_PCA9555.pdf, p.20)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.20)
 
 ### 16.5 Input Port Register Reflects All Pins
 
 - The Input Port register reflects the incoming logic level of the pin **regardless** of whether the pin is configured as input or output.
 
-(datasheet_PCA9555.pdf, p.20)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.20)
 
 ### 16.6 Address Compatibility
 
 - The PCA9555 uses the same address space (0x20–0x27) as PCF8575, PCF8575C, and PCF8574. Up to 8 of these in any combination may share a bus, but addresses must not collide.
 
-(datasheet_PCA9555.pdf, p.14)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14)
 
 ### 16.7 No General Call Support
 
 - The PCA9555 does **not** respond to the I2C general call address.
 
-(datasheet_PCA9555.pdf, p.17)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.17)
 
 ### 16.8 5 V Tolerant Inputs
 
 - I/O pins (P00–P07, P10–P17) and address pins (A0–A2) can accept up to 5.5 V input regardless of VCC (down to 2.3 V). SCL and SDA are limited to VCC max for high-level input.
 
-(datasheet_PCA9555.pdf, p.5)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.5)
 
 ### 16.9 Spike Filtering
 
 - The device has a 50 ns spike filter on SCL/SDA (both Standard and Fast modes).
 - An LP (low-pass) filter and input filter are shown on the I/O port input path in the block diagram.
 
-(datasheet_PCA9555.pdf, p.7–8, p.14)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7–8, p.14)
 
 ### 16.10 No Software Reset
 
 - There is no I2C software reset command. The only reset mechanism is power cycling.
 
-(datasheet_PCA9555.pdf, p.14, p.27)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14, p.27)
 
 ### Addendum: 16.11 QFN Package Pin Mapping Differences
 
@@ -937,7 +937,7 @@ The QFN (RGE) package has a different pinout from the SSOP/TSSOP/TVSOP/SOIC pack
 | VCC | 24 | 21 |
 
 The QFN package also has a thermal pad on the bottom.
-(datasheet_PCA9555.pdf, p.4)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.4)
 
 ### Addendum: 16.12 Layout Guidelines
 
@@ -948,7 +948,7 @@ The QFN package also has a thermal pad on the bottom.
 - **Bypass/decoupling capacitors**: Use a larger capacitor (e.g., 10 μF) for short power supply glitches and a smaller capacitor (e.g., 0.1 μF) for high-frequency ripple. Place both **as close to the PCA9555 VCC/GND pins as possible**.
 - A **2-layer PCB** is feasible (top layer for signal routing, bottom as split plane for VCC/GND).
 - A **4-layer PCB** is preferable for higher-density boards (signals on top/bottom, one internal ground plane, one internal power plane). Use vias next to SMD pads to connect to internal planes.
-  (datasheet_PCA9555.pdf, p.29)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.29)
 
 ### Addendum: 16.13 I2C Pullup Resistor Sizing
 
@@ -963,7 +963,7 @@ The datasheet provides application curves (Figure 9-4 and 9-5) for pullup resist
 - When VCC ≤ 2 V: VOL = 0.2 × VCC, IOL = 2 mA → Rp_min = (VCC – 0.2 × VCC) / 2 mA.
 - At VCC = 5 V: Rp_min ≈ 1.5 kΩ.
 - At VCC = 3.3 V: Rp_min ≈ 1 kΩ.
-  (datasheet_PCA9555.pdf, p.26)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.26)
 
 ### Addendum: 16.14 Typical Application Circuit Details
 
@@ -975,7 +975,7 @@ The typical application circuit (Figure 9-1) shows:
 - Subsystem connections: temperature sensor, counter, alarm, keypad, and controlled switch (e.g., CBT device) connected to various I/O pins.
 - INT output drives a microcontroller interrupt input.
 - **Design parameters**: VCC = 5 V, IOL = 25 mA, SCL speed = 400 kHz.
-  (datasheet_PCA9555.pdf, p.24–25)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.24–25)
 
 ---
 
@@ -986,7 +986,7 @@ The typical application circuit (Figure 9-1) shows:
 The datasheet explicitly describes using INT to signal the master that an input state has changed, avoiding the need to poll over I2C:
 
 > "By sending an interrupt signal on this line, the remote I/O can inform the microcontroller if there is incoming data on its ports without having to communicate via the I2C bus."
-> (datasheet_PCA9555.pdf, p.14)
+> (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14)
 
 **Recommended strategy**:
 1. Connect INT to a microcontroller GPIO interrupt input.
@@ -1007,7 +1007,7 @@ The datasheet explicitly describes using INT to signal the master that an input 
 - For battery-powered applications, ensure all unused input pins are pulled high (externally or using the internal pullup which is already present). Holding inputs low dramatically increases supply current.
 - Consider configuring unused pins as outputs driven high.
 
-(datasheet_PCA9555.pdf, p.7, p.25)
+(PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7, p.25)
 
 ---
 
@@ -1057,14 +1057,14 @@ The datasheet explicitly describes using INT to signal the master that an input 
 ### Addendum: 18.10 Machine Model ESD Discrepancy
 
 - The Features list (p.1) claims ESD protection for "200-V Machine Model (A115-A)", but the formal ESD Ratings table (p.5, Section 6.2) lists only HBM (2000 V) and CDM (1000 V). Machine Model is not included in the ESD Ratings table, possibly because it was deprecated from JEDEC standards after the original datasheet revision.
-  (datasheet_PCA9555.pdf, p.1, p.5)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1, p.5)
 
 ### Addendum: 18.11 Revision History — Implementation-Relevant Changes
 
 Key changes across datasheet revisions that may affect designs based on older revisions:
 - **Rev I → Rev J (March 2021)**: VIH max for SCL/SDA changed from 5.5 V to VCC. Ci SCL max changed from 7 pF to 8 pF. Cio SDA max changed from 7 pF to 9.5 pF. VPORF row added. ICC standby high inputs values changed. Power supply recommendations changed.
 - **Rev E → Rev F (June 2014)**: Interrupt Errata section was added.
-  (datasheet_PCA9555.pdf, p.2–3)
+  (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.2–3)
 
 ---
 
@@ -1099,32 +1099,32 @@ All facts in this document are extracted from the following two source documents
 
 | Short Reference | Full Document Title | TI Document Number | Revision | Date |
 |-----------------|--------------------|--------------------|----------|------|
-| datasheet_PCA9555.pdf | PCA9555 Remote 16-bit I2C and SMBus I/O Expander with Interrupt Output and Configuration Registers | SCPS131J | Rev. J | August 2005, revised March 2021 |
+| PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | PCA9555 Remote 16-bit I2C and SMBus I/O Expander with Interrupt Output and Configuration Registers | SCPS131J | Rev. J | August 2005, revised March 2021 |
 | auto_increment_feature.pdf | I2C: What is the Auto Increment Feature? | SLVAFL0 | — | July 2024 |
 
 ### Page-Level Citation Index
 
 | Topic | Source | Pages |
 |-------|--------|-------|
-| Features, package info, block diagram | datasheet_PCA9555.pdf | 1 |
-| Pin configuration and functions | datasheet_PCA9555.pdf | 4 |
-| Absolute maximum ratings | datasheet_PCA9555.pdf | 5 |
-| Recommended operating conditions | datasheet_PCA9555.pdf | 5 |
-| Thermal information | datasheet_PCA9555.pdf | 6 |
-| Electrical characteristics | datasheet_PCA9555.pdf | 7 |
-| I2C timing (standard and fast mode) | datasheet_PCA9555.pdf | 7–8 |
-| Switching characteristics | datasheet_PCA9555.pdf | 8 |
-| Parameter measurement info | datasheet_PCA9555.pdf | 12–13 |
-| Overview, block diagram, device features | datasheet_PCA9555.pdf | 14–15 |
-| Interrupt behavior and errata | datasheet_PCA9555.pdf | 16 |
-| I2C interface protocol | datasheet_PCA9555.pdf | 17 |
-| Register map, address byte, command byte | datasheet_PCA9555.pdf | 18–19 |
-| Register descriptions (all 8 registers) | datasheet_PCA9555.pdf | 20 |
-| Bus transactions (write/read sequences) | datasheet_PCA9555.pdf | 21–23 |
-| Typical application, design requirements | datasheet_PCA9555.pdf | 24–26 |
-| Power supply, POR requirements | datasheet_PCA9555.pdf | 27–28 |
-| Layout guidelines | datasheet_PCA9555.pdf | 29 |
-| Orderable information | datasheet_PCA9555.pdf | 31+ |
+| Features, package info, block diagram | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 1 |
+| Pin configuration and functions | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 4 |
+| Absolute maximum ratings | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 5 |
+| Recommended operating conditions | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 5 |
+| Thermal information | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 6 |
+| Electrical characteristics | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 7 |
+| I2C timing (standard and fast mode) | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 7–8 |
+| Switching characteristics | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 8 |
+| Parameter measurement info | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 12–13 |
+| Overview, block diagram, device features | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 14–15 |
+| Interrupt behavior and errata | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 16 |
+| I2C interface protocol | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 17 |
+| Register map, address byte, command byte | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 18–19 |
+| Register descriptions (all 8 registers) | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 20 |
+| Bus transactions (write/read sequences) | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 21–23 |
+| Typical application, design requirements | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 24–26 |
+| Power supply, POR requirements | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 27–28 |
+| Layout guidelines | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 29 |
+| Orderable information | PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf | 31+ |
 | Auto-increment concept and benefits | auto_increment_feature.pdf | 1–3 |
 | Auto-increment within I/O expander pairs | auto_increment_feature.pdf | 4 |
 | Auto-increment enable requirements | auto_increment_feature.pdf | 5 |

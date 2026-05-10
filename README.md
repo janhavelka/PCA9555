@@ -236,7 +236,9 @@ Up to 8 devices can share one bus. The address pins must be tied high or low and
 4. **Memory behavior**: The library performs no dynamic allocation in `begin()` or steady state.
 5. **Error handling**: All fallible APIs return `Status`. Silent failure is not possible.
 6. **Health behavior**: transport `IN_PROGRESS` statuses are passed through without
-   incrementing success or failure counters.
+   incrementing success or failure counters. `OFFLINE` is latched; normal public
+   I2C operations return `BUSY` with `Driver is offline; call recover()` without
+   touching the bus until `recover()` succeeds.
 
 `begin()` verifies presence by reading both Configuration Port registers. By default it requires the
 POR default `0xFF/0xFF` state and returns `CONFIG_REG_MISMATCH` if the expander is already

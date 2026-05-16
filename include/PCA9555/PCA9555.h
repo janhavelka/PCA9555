@@ -11,7 +11,7 @@
 
 namespace PCA9555 {
 
-/// Driver state for health monitoring
+/// @brief Driver state for health monitoring.
 enum class DriverState : uint8_t {
   UNINIT,    ///< begin() not called or end() called
   READY,     ///< Operational, consecutiveFailures == 0
@@ -19,7 +19,7 @@ enum class DriverState : uint8_t {
   OFFLINE    ///< consecutiveFailures >= offlineThreshold
 };
 
-/// 16-bit port data (both ports combined)
+/// @brief 16-bit port data for both ports.
 struct PortData {
   uint8_t port0 = 0;  ///< Port 0 data (P00–P07)
   uint8_t port1 = 0;  ///< Port 1 data (P10–P17)
@@ -41,7 +41,7 @@ struct PortData {
   }
 };
 
-/// Snapshot of the current driver settings and health state.
+/// @brief Snapshot of the current driver settings and health state.
 struct SettingsSnapshot {
   Config config;                 ///< Active runtime configuration snapshot
   DriverState state = DriverState::UNINIT;
@@ -54,7 +54,7 @@ struct SettingsSnapshot {
   uint32_t totalSuccess = 0;
 };
 
-/// PCA9555 driver class
+/// @brief PCA9555 driver class.
 class PCA9555 {
 public:
   // =========================================================================
@@ -99,6 +99,10 @@ public:
   /// @return Current DriverState
   DriverState state() const { return _driverState; }
 
+  /// Alias for state() for cross-driver diagnostics.
+  /// @return Current DriverState
+  DriverState driverState() const { return state(); }
+
   /// Check if begin() has completed successfully.
   /// @return true after begin() succeeds and before end() is called
   bool isInitialized() const { return _initialized; }
@@ -118,6 +122,11 @@ public:
   /// Get a snapshot of the active settings and health counters.
   /// @return Copy of the current runtime settings and diagnostic state
   SettingsSnapshot getSettings() const;
+
+  /// Copy the active settings and health counters.
+  /// @param[out] out Receives the current runtime settings and diagnostic state
+  /// @return Status::Ok()
+  Status getSettings(SettingsSnapshot& out) const;
   
   // =========================================================================
   // Health Tracking
@@ -357,8 +366,9 @@ public:
   /// @return Status::Ok() on success
   Status readRegister(uint8_t reg, uint8_t& value);
 
-  /// Read multiple consecutive registers within a single register pair.
-  /// Bulk reads are limited to 1-2 bytes and must not cross a pair boundary.
+  /// Read one or two registers within the selected register pair.
+  /// If startReg is the odd register in a pair, the second byte wraps to the
+  /// even register in that same pair, matching PCA9555 auto-increment behavior.
   /// The cached runtime state is synchronized for any writable registers read.
   /// @param startReg Starting register address (0x00-0x07)
   /// @param[out] buf Destination buffer
@@ -372,8 +382,9 @@ public:
   /// @return Status::Ok() on success
   Status writeRegister(uint8_t reg, uint8_t value);
 
-  /// Write multiple consecutive registers within a single register pair.
-  /// Bulk writes are limited to 1-2 bytes and must not cross a pair boundary.
+  /// Write one or two registers within the selected register pair.
+  /// If startReg is the odd register in a pair, the second byte wraps to the
+  /// even register in that same pair, matching PCA9555 auto-increment behavior.
   /// The cached runtime state is synchronized after a successful write.
   /// @param startReg Starting register address (0x02-0x07)
   /// @param buf Source buffer
@@ -420,6 +431,7 @@ private:
   /// Update health counters and state based on operation result.
   /// Called ONLY from tracked transport wrappers.
   Status _updateHealth(const Status& st);
+  void _reassertOfflineLatch();
 
   // =========================================================================
   // Internal Helpers
@@ -445,6 +457,7 @@ private:
   Config _config;
   bool _initialized = false;
   DriverState _driverState = DriverState::UNINIT;
+  bool _allowOfflineI2c = false;
   
   // Health counters
   uint32_t _lastOkMs = 0;

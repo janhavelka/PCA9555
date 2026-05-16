@@ -6,7 +6,7 @@
 
 namespace PCA9555 {
 
-/// Error codes for all PCA9555 operations
+/// @brief Error codes for all PCA9555 operations.
 enum class Err : uint8_t {
   OK = 0,                    ///< Operation successful
   NOT_INITIALIZED,           ///< begin() not called
@@ -26,7 +26,7 @@ enum class Err : uint8_t {
   I2C_BUS                    ///< I2C bus error (arbitration lost, etc.)
 };
 
-/// Status structure returned by all fallible operations
+/// @brief Status structure returned by all fallible operations.
 struct Status {
   Err code = Err::OK;        ///< Error code (OK on success)
   int32_t detail = 0;        ///< Implementation-specific detail (e.g., I2C error code)

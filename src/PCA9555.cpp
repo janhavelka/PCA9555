@@ -34,9 +34,32 @@ static bool isInputRegister(uint8_t reg) {
   return reg == cmd::REG_INPUT_PORT_0 || reg == cmd::REG_INPUT_PORT_1;
 }
 
+static uint8_t pairedRegisterAt(uint8_t startReg, size_t offset) {
+  return static_cast<uint8_t>((startReg & 0xFEU) |
+                              ((startReg + static_cast<uint8_t>(offset)) & 0x01U));
+}
+
 static uint8_t bitMaskForPin(Pin pin) {
   return static_cast<uint8_t>(1U << (pin % cmd::PINS_PER_PORT));
 }
+
+class ScopedOfflineI2cAllowance {
+public:
+  explicit ScopedOfflineI2cAllowance(bool& flag, bool allow) : _flag(flag), _old(flag) {
+    _flag = allow;
+  }
+
+  ~ScopedOfflineI2cAllowance() {
+    _flag = _old;
+  }
+
+  ScopedOfflineI2cAllowance(const ScopedOfflineI2cAllowance&) = delete;
+  ScopedOfflineI2cAllowance& operator=(const ScopedOfflineI2cAllowance&) = delete;
+
+private:
+  bool& _flag;
+  bool _old;
+};
 
 }  // namespace
 
@@ -45,8 +68,10 @@ static uint8_t bitMaskForPin(Pin pin) {
 // ===========================================================================
 
 Status PCA9555::begin(const Config& config) {
+  _config = Config{};
   _initialized = false;
   _driverState = DriverState::UNINIT;
+  _allowOfflineI2c = false;
 
   _lastOkMs = 0;
   _lastErrorMs = 0;
@@ -55,10 +80,28 @@ Status PCA9555::begin(const Config& config) {
   _totalFailures = 0;
   _totalSuccess = 0;
 
-  _cachedOutput0 = config.outputPort0;
-  _cachedOutput1 = config.outputPort1;
-  _cachedConfig0 = config.configPort0;
-  _cachedConfig1 = config.configPort1;
+  _cachedOutput0 = Config{}.outputPort0;
+  _cachedOutput1 = Config{}.outputPort1;
+  _cachedConfig0 = Config{}.configPort0;
+  _cachedConfig1 = Config{}.configPort1;
+
+  auto resetAfterFailedBegin = [this](Status failure) -> Status {
+    _config = Config{};
+    _initialized = false;
+    _driverState = DriverState::UNINIT;
+    _allowOfflineI2c = false;
+    _lastOkMs = 0;
+    _lastErrorMs = 0;
+    _lastError = Status::Ok();
+    _consecutiveFailures = 0;
+    _totalFailures = 0;
+    _totalSuccess = 0;
+    _cachedOutput0 = Config{}.outputPort0;
+    _cachedOutput1 = Config{}.outputPort1;
+    _cachedConfig0 = Config{}.configPort0;
+    _cachedConfig1 = Config{}.configPort1;
+    return failure;
+  };
 
   if (config.i2cWrite == nullptr || config.i2cWriteRead == nullptr) {
     return Status::Error(Err::INVALID_CONFIG, "I2C callbacks not set");
@@ -80,20 +123,22 @@ Status PCA9555::begin(const Config& config) {
   uint8_t startReg = cmd::REG_CONFIG_PORT_0;
   Status st = _i2cWriteReadRaw(&startReg, 1, configRegs, sizeof(configRegs));
   if (!st.ok()) {
-    return Status::Error(Err::DEVICE_NOT_FOUND, "Device not responding", st.detail);
+    return resetAfterFailedBegin(
+        Status::Error(Err::DEVICE_NOT_FOUND, "Device not responding", st.detail));
   }
   if (_config.requireConfigPortDefaults &&
       (configRegs[0] != cmd::DEFAULT_CONFIG || configRegs[1] != cmd::DEFAULT_CONFIG)) {
     const int32_t detail =
         static_cast<int32_t>((static_cast<uint16_t>(configRegs[1]) << 8) | configRegs[0]);
-    return Status::Error(Err::CONFIG_REG_MISMATCH,
-                         "Configuration registers not at POR defaults",
-                         detail);
+    return resetAfterFailedBegin(
+        Status::Error(Err::CONFIG_REG_MISMATCH,
+                      "Configuration registers not at POR defaults",
+                      detail));
   }
 
   st = _applyConfig();
   if (!st.ok()) {
-    return st;
+    return resetAfterFailedBegin(st);
   }
 
   _initialized = true;
@@ -108,7 +153,7 @@ void PCA9555::tick(uint32_t nowMs) {
 }
 
 void PCA9555::end() {
-  if (_initialized) {
+  if (_initialized && _driverState != DriverState::OFFLINE) {
     // Best-effort: set all pins to input (safe high-Z state).
     // Uses raw I2C to avoid health tracking during shutdown.
     const uint8_t payload[3] = {cmd::REG_CONFIG_PORT_0, 0xFF, 0xFF};
@@ -121,6 +166,14 @@ void PCA9555::end() {
   _cachedOutput1 = 0xFF;
   _cachedConfig0 = 0xFF;
   _cachedConfig1 = 0xFF;
+  _config = Config{};
+  _allowOfflineI2c = false;
+  _lastOkMs = 0;
+  _lastErrorMs = 0;
+  _lastError = Status::Ok();
+  _consecutiveFailures = 0;
+  _totalFailures = 0;
+  _totalSuccess = 0;
 }
 
 SettingsSnapshot PCA9555::getSettings() const {
@@ -135,6 +188,11 @@ SettingsSnapshot PCA9555::getSettings() const {
   snapshot.totalFailures = _totalFailures;
   snapshot.totalSuccess = _totalSuccess;
   return snapshot;
+}
+
+Status PCA9555::getSettings(SettingsSnapshot& out) const {
+  out = getSettings();
+  return Status::Ok();
 }
 
 // ===========================================================================
@@ -160,21 +218,29 @@ Status PCA9555::recover() {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
-  // Use tracked read to update health counters
-  uint8_t configVal = 0;
-  Status st = readRegs(cmd::REG_CONFIG_PORT_0, &configVal, 1);
-  if (!st.ok()) {
-    return st;
-  }
+  const bool startedOffline = (_driverState == DriverState::OFFLINE);
+  ScopedOfflineI2cAllowance allowOfflineI2c(_allowOfflineI2c, true);
+  Status result = [&]() -> Status {
+    // Use tracked read to update health counters.
+    uint8_t configVal = 0;
+    Status st = readRegs(cmd::REG_CONFIG_PORT_0, &configVal, 1);
+    if (!st.ok()) {
+      return st;
+    }
 
-  // Re-apply configuration: after a power glitch the device registers
-  // revert to defaults.
-  st = _applyConfig();
-  if (!st.ok()) {
-    return st;
-  }
+    // Re-apply configuration: after a power glitch the device registers
+    // revert to defaults.
+    st = _applyConfig();
+    if (!st.ok()) {
+      return st;
+    }
 
-  return Status::Ok();
+    return Status::Ok();
+  }();
+  if (startedOffline && !result.ok() && !result.inProgress()) {
+    _reassertOfflineLatch();
+  }
+  return result;
 }
 
 // ===========================================================================
@@ -821,8 +887,7 @@ Status PCA9555::readRegisters(uint8_t startReg, uint8_t* buf, size_t len) {
   }
 
   for (size_t i = 0; i < len; ++i) {
-    _syncShadowRegister(static_cast<uint8_t>(startReg + static_cast<uint8_t>(i)),
-                       buf[i]);
+    _syncShadowRegister(pairedRegisterAt(startReg, i), buf[i]);
   }
 
   if (isInputRegister(startReg) && _config.applyInterruptErrata) {
@@ -854,8 +919,7 @@ Status PCA9555::writeRegisters(uint8_t startReg, const uint8_t* buf, size_t len)
   }
 
   for (size_t i = 0; i < len; ++i) {
-    _syncShadowRegister(static_cast<uint8_t>(startReg + static_cast<uint8_t>(i)),
-                       buf[i]);
+    _syncShadowRegister(pairedRegisterAt(startReg, i), buf[i]);
   }
   return Status::Ok();
 }
@@ -889,6 +953,10 @@ Status PCA9555::_i2cWriteRaw(const uint8_t* buf, size_t len) {
 
 Status PCA9555::_i2cWriteReadTracked(const uint8_t* txBuf, size_t txLen,
                                      uint8_t* rxBuf, size_t rxLen) {
+  if (_initialized && _driverState == DriverState::OFFLINE && !_allowOfflineI2c) {
+    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
+  }
+
   if (txBuf == nullptr || txLen == 0 || rxBuf == nullptr || rxLen == 0) {
     return Status::Error(Err::INVALID_PARAM, "Invalid I2C buffer");
   }
@@ -901,6 +969,10 @@ Status PCA9555::_i2cWriteReadTracked(const uint8_t* txBuf, size_t txLen,
 }
 
 Status PCA9555::_i2cWriteTracked(const uint8_t* buf, size_t len) {
+  if (_initialized && _driverState == DriverState::OFFLINE && !_allowOfflineI2c) {
+    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
+  }
+
   if (buf == nullptr || len == 0) {
     return Status::Error(Err::INVALID_PARAM, "Invalid I2C buffer");
   }
@@ -923,9 +995,8 @@ Status PCA9555::readRegs(uint8_t startReg, uint8_t* buf, size_t len) {
   if (!isValidRegister(startReg)) {
     return Status::Error(Err::INVALID_PARAM, "Register address out of range");
   }
-  const size_t pairRemaining = 2U - static_cast<size_t>(startReg & 0x01U);
-  if (len > pairRemaining) {
-    return Status::Error(Err::INVALID_PARAM, "Read crosses register pair boundary");
+  if (len > MAX_BULK_LEN) {
+    return Status::Error(Err::INVALID_PARAM, "Read length too large");
   }
 
   uint8_t reg = startReg;
@@ -941,10 +1012,6 @@ Status PCA9555::writeRegs(uint8_t startReg, const uint8_t* buf, size_t len) {
   }
   if (len > MAX_BULK_LEN) {
     return Status::Error(Err::INVALID_PARAM, "Write length too large");
-  }
-  const size_t pairRemaining = 2U - static_cast<size_t>(startReg & 0x01U);
-  if (len > pairRemaining) {
-    return Status::Error(Err::INVALID_PARAM, "Write crosses register pair boundary");
   }
 
   uint8_t payload[MAX_BULK_LEN + 1] = {};
@@ -967,14 +1034,13 @@ Status PCA9555::_updateHealth(const Status& st) {
   if (!_initialized) {
     return st;
   }
+  if (st.inProgress()) {
+    return st;
+  }
 
   const uint32_t now = _nowMs();
   const uint32_t maxU32 = std::numeric_limits<uint32_t>::max();
   const uint8_t maxU8 = std::numeric_limits<uint8_t>::max();
-
-  if (st.inProgress()) {
-    return st;
-  }
 
   if (st.ok()) {
     _lastOkMs = now;
@@ -1002,6 +1068,14 @@ Status PCA9555::_updateHealth(const Status& st) {
   }
 
   return st;
+}
+
+void PCA9555::_reassertOfflineLatch() {
+  _driverState = DriverState::OFFLINE;
+  const uint8_t threshold = _config.offlineThreshold == 0 ? 1 : _config.offlineThreshold;
+  if (_consecutiveFailures < threshold) {
+    _consecutiveFailures = threshold;
+  }
 }
 
 // ===========================================================================

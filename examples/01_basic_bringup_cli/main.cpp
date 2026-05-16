@@ -92,6 +92,11 @@ const char* stateColor(PCA9555::DriverState st, bool online, uint8_t consecutive
   return LOG_COLOR_STATE(online, consecutiveFailures);
 }
 
+uint8_t autoIncrementPairRegister(uint8_t startReg, size_t offset) {
+  return static_cast<uint8_t>((startReg & 0xFEU) |
+                              ((startReg + static_cast<uint8_t>(offset)) & 0x01U));
+}
+
 const char* goodIfZeroColor(uint32_t value) {
   return (value == 0U) ? LOG_COLOR_GREEN : LOG_COLOR_RED;
 }
@@ -976,11 +981,11 @@ void cmdRegsRead(const String& args) {
     return;
   }
 
-  Serial.printf("  Regs 0x%02X..0x%02X =",
-                static_cast<unsigned>(reg),
-                static_cast<unsigned>(reg + len - 1));
+  Serial.print("  Regs");
   for (long i = 0; i < len; ++i) {
-    Serial.printf(" 0x%02X", values[static_cast<size_t>(i)]);
+    Serial.printf(" 0x%02X=0x%02X",
+                  autoIncrementPairRegister(static_cast<uint8_t>(reg), static_cast<size_t>(i)),
+                  values[static_cast<size_t>(i)]);
   }
   Serial.print(" (");
   for (long i = 0; i < len; ++i) {
@@ -1025,10 +1030,10 @@ void cmdRegsWrite(const String& args) {
   if (len == 1) {
     LOGI("Reg 0x%02X set to 0x%02X", static_cast<int>(reg), values[0]);
   } else {
-    LOGI("Regs 0x%02X..0x%02X set to 0x%02X 0x%02X",
-         static_cast<int>(reg),
-         static_cast<int>(reg + 1),
+    LOGI("Regs 0x%02X=0x%02X 0x%02X=0x%02X",
+         autoIncrementPairRegister(static_cast<uint8_t>(reg), 0),
          values[0],
+         autoIncrementPairRegister(static_cast<uint8_t>(reg), 1),
          values[1]);
   }
 }
@@ -1875,10 +1880,10 @@ void printHelp() {
 
   cli::printHelpSection("Raw Register");
   cli::printHelpItem("read reg <R> / rreg <R>", "Read register R (0-7)");
-  cli::printHelpItem("read regs <R> <N> / rregs <R> <N>", "Read 1-2 registers in one pair");
+  cli::printHelpItem("read regs <R> <N> / rregs <R> <N>", "Read 1-2 regs in one pair; odd starts wrap to pair mate");
   cli::printHelpItem("write reg <R> <V> / wreg <R> <V>", "Write register R (2-7) to V");
   cli::printHelpItem("write regs <R> <V0> [V1] / wregs <R> <V0> [V1]",
-           "Write 1-2 registers in one pair");
+           "Write 1-2 regs in one pair; odd starts wrap to pair mate");
 
   cli::printHelpSection("Testing");
   cli::printHelpItem("pattern <M> / pat <M>", "Drive exact 16-bit output pattern M and force all pins OUTPUT");

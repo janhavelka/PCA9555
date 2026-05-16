@@ -36,7 +36,7 @@ using I2cWriteReadFn = Status (*)(uint8_t addr, const uint8_t* txData, size_t tx
 /// @return Current monotonic milliseconds
 using NowMsFn = uint32_t (*)(void* user);
 
-/// Port identifier
+/// @brief Port identifier.
 enum class Port : uint8_t {
   PORT_0 = 0,  ///< Port 0 (P00–P07)
   PORT_1 = 1   ///< Port 1 (P10–P17)
@@ -46,7 +46,7 @@ enum class Port : uint8_t {
 /// Pins 0–7 = Port 0, Pins 8–15 = Port 1
 using Pin = uint8_t;
 
-/// Configuration for PCA9555 driver
+/// @brief Configuration for PCA9555 driver.
 struct Config {
   // === I2C Transport (required) ===
   I2cWriteFn i2cWrite = nullptr;        ///< I2C write function pointer

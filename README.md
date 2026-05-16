@@ -126,7 +126,7 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 
 - `Status begin(const Config& config)` - Initialize driver, verify device, apply configuration
 - `void tick(uint32_t nowMs)` - Process pending operations (currently no-op, reserved)
-- `void end()` - Shutdown driver, set all pins to input (safe state)
+- `void end()` - Shutdown driver and set pins to input when online; if already `OFFLINE`, it clears local state without extra I2C
 
 ### Diagnostics
 
@@ -183,16 +183,18 @@ later single-pin and recovery operations do not build on a failed update.
 
 - `Status readRegister(uint8_t reg, uint8_t& value)` - Read any register (0-7)
 - `Status writeRegister(uint8_t reg, uint8_t value)` - Write writable register (2-7)
-- `Status readRegisters(uint8_t startReg, uint8_t* buf, size_t len)` - Read 1-2 registers in one pair
-- `Status writeRegisters(uint8_t startReg, const uint8_t* buf, size_t len)` - Write 1-2 registers in one pair
+- `Status readRegisters(uint8_t startReg, uint8_t* buf, size_t len)` - Read 1-2 registers in one auto-increment pair; an odd start wraps to the pair mate
+- `Status writeRegisters(uint8_t startReg, const uint8_t* buf, size_t len)` - Write 1-2 registers in one auto-increment pair; an odd start wraps to the pair mate
 
 ### Health
 
 - `DriverState state()` - Current driver state
+- `DriverState driverState()` - Cross-library state alias
 - `bool isInitialized()` - True after `begin()` succeeds and before `end()`
 - `bool isOnline()` - True if READY or DEGRADED
 - `const Config& getConfig()` - Current recoverable runtime configuration snapshot
 - `SettingsSnapshot getSettings()` - Combined settings plus health snapshot
+- `Status getSettings(SettingsSnapshot& out)` - Status-returning snapshot copy for uniform callers
 - `uint32_t lastOkMs()` / `lastErrorMs()` - Timestamps
 - `Status lastError()` - Most recent error
 - `uint8_t consecutiveFailures()` - Failures since last success
@@ -208,6 +210,10 @@ later single-pin and recovery operations do not build on a failed update.
 | `i2cTimeoutMs` | `50` | I2C transaction timeout |
 | `offlineThreshold` | `5` | Consecutive failures before OFFLINE |
 | `configPort0/1` | `0xFF` | Pin direction (1=input, 0=output) |
+
+Failed `begin()` calls clear stale runtime/cache state before returning. This
+prevents a later diagnostic snapshot from reporting old output, polarity, or
+configuration shadows after an unsuccessful initialization attempt.
 | `outputPort0/1` | `0xFF` | Initial output values |
 | `polarityPort0/1` | `0x00` | Polarity inversion (1=inverted) |
 | `requireConfigPortDefaults` | `true` | Require Configuration Port 0/1 = `0xFF` at `begin()` |

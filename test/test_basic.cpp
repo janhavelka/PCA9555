@@ -50,10 +50,10 @@ Status fakeWrite(uint8_t, const uint8_t* data, size_t len, uint32_t, void* user)
   if (len >= 2) {
     uint8_t reg = data[0];
     if (reg <= 0x07) {
-      bus->regs[reg] = data[1];
-      // Auto-increment within register pair
-      if (len >= 3 && (reg % 2 == 0) && (reg + 1) <= 0x07) {
-        bus->regs[reg + 1] = data[2];
+      for (size_t i = 1; i < len; ++i) {
+        const uint8_t targetReg = static_cast<uint8_t>((reg & 0xFEU) |
+            ((reg + static_cast<uint8_t>(i - 1U)) & 0x01U));
+        bus->regs[targetReg] = data[i];
       }
     }
   }
@@ -186,6 +186,69 @@ void test_begin_rejects_zero_timeout() {
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG), static_cast<uint8_t>(st.code));
 }
 
+void test_failed_begin_clears_stale_runtime_snapshot() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+
+  Config good = makeConfig(bus);
+  good.i2cAddress = 0x27;
+  good.outputPort0 = 0xAA;
+  good.configPort0 = 0x00;
+  TEST_ASSERT_TRUE(dev.begin(good).ok());
+  TEST_ASSERT_TRUE(dev.writeOutput(Port::PORT_0, 0x55).ok());
+
+  Config bad = makeConfig(bus);
+  bad.i2cWrite = nullptr;
+  bad.i2cWriteRead = nullptr;
+  Status st = dev.begin(bad);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_CONFIG),
+                          static_cast<uint8_t>(st.code));
+
+  const SettingsSnapshot snap = dev.getSettings();
+  TEST_ASSERT_FALSE(snap.initialized);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
+                          static_cast<uint8_t>(snap.state));
+  TEST_ASSERT_EQUAL_HEX8(cmd::BASE_ADDRESS, snap.config.i2cAddress);
+  TEST_ASSERT_EQUAL_UINT32(50u, snap.config.i2cTimeoutMs);
+  TEST_ASSERT_EQUAL_UINT8(5u, snap.config.offlineThreshold);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, snap.config.outputPort0);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, snap.config.outputPort1);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_CONFIG, snap.config.configPort0);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_CONFIG, snap.config.configPort1);
+  TEST_ASSERT_EQUAL_UINT32(0u, snap.totalSuccess);
+  TEST_ASSERT_EQUAL_UINT32(0u, snap.totalFailures);
+  TEST_ASSERT_EQUAL_UINT8(0u, snap.consecutiveFailures);
+}
+
+void test_failed_begin_apply_clears_runtime_snapshot() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.i2cAddress = 0x27;
+  cfg.outputPort0 = 0xAA;
+  cfg.configPort0 = 0x00;
+  bus.writeErrorRemaining = 1;
+
+  Status st = dev.begin(cfg);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_ERROR),
+                          static_cast<uint8_t>(st.code));
+
+  const SettingsSnapshot snap = dev.getSettings();
+  TEST_ASSERT_FALSE(snap.initialized);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
+                          static_cast<uint8_t>(snap.state));
+  TEST_ASSERT_EQUAL_HEX8(cmd::BASE_ADDRESS, snap.config.i2cAddress);
+  TEST_ASSERT_EQUAL_UINT32(50u, snap.config.i2cTimeoutMs);
+  TEST_ASSERT_EQUAL_UINT8(5u, snap.config.offlineThreshold);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, snap.config.outputPort0);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, snap.config.outputPort1);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_CONFIG, snap.config.configPort0);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_CONFIG, snap.config.configPort1);
+  TEST_ASSERT_EQUAL_UINT32(0u, snap.totalSuccess);
+  TEST_ASSERT_EQUAL_UINT32(0u, snap.totalFailures);
+  TEST_ASSERT_EQUAL_UINT8(0u, snap.consecutiveFailures);
+}
+
 void test_begin_success_sets_ready_and_health() {
   FakeBus bus;
   PCA9555::PCA9555 dev;
@@ -211,9 +274,16 @@ void test_get_settings_snapshot_reflects_runtime_state() {
   TEST_ASSERT_TRUE(dev.begin(cfg).ok());
 
   const SettingsSnapshot snapshot = dev.getSettings();
+  SettingsSnapshot statusSnapshot;
+  TEST_ASSERT_TRUE(dev.getSettings(statusSnapshot).ok());
   TEST_ASSERT_TRUE(snapshot.initialized);
+  TEST_ASSERT_TRUE(statusSnapshot.initialized);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
                           static_cast<uint8_t>(snapshot.state));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(snapshot.state),
+                          static_cast<uint8_t>(statusSnapshot.state));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(dev.state()),
+                          static_cast<uint8_t>(dev.driverState()));
   TEST_ASSERT_EQUAL_HEX8(cfg.i2cAddress, snapshot.config.i2cAddress);
   TEST_ASSERT_EQUAL_HEX8(cfg.outputPort0, snapshot.config.outputPort0);
   TEST_ASSERT_EQUAL_HEX8(cfg.outputPort1, snapshot.config.outputPort1);
@@ -384,6 +454,70 @@ void test_recover_reaches_offline_when_threshold_is_one() {
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
                           static_cast<uint8_t>(dev.state()));
   TEST_ASSERT_FALSE(dev.isOnline());
+}
+
+void test_offline_latches_normal_read_without_i2c_until_recover() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.offlineThreshold = 1;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.readErrorRemaining = 1;
+  bus.readError = Status::Error(Err::TIMEOUT, "forced timeout", -11);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                          static_cast<uint8_t>(dev.recover().code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+
+  const uint32_t readsBefore = bus.readCalls;
+  PortData data;
+  Status st = dev.readInputs(data);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUSY), static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Driver is offline; call recover()", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(readsBefore, bus.readCalls);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+
+  TEST_ASSERT_TRUE(dev.recover().ok());
+  TEST_ASSERT_GREATER_THAN_UINT32(readsBefore, bus.readCalls);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
+                          static_cast<uint8_t>(dev.state()));
+}
+
+void test_failed_recover_from_offline_preserves_latch_after_partial_success() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.offlineThreshold = 3;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.readErrorRemaining = 3;
+  bus.readError = Status::Error(Err::TIMEOUT, "forced timeout", -12);
+  PortData data;
+  for (uint8_t i = 0; i < 3; ++i) {
+    Status st = dev.readInputs(data);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                            static_cast<uint8_t>(st.code));
+  }
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_EQUAL_UINT8(3u, dev.consecutiveFailures());
+
+  bus.writeErrorRemaining = 1;
+  Status st = dev.recover();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_ERROR),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_TRUE(dev.consecutiveFailures() >= 3u);
+
+  const uint32_t readsBefore = bus.readCalls;
+  st = dev.readInputs(data);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUSY),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Driver is offline; call recover()", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(readsBefore, bus.readCalls);
 }
 
 // ===========================================================================
@@ -635,23 +769,41 @@ void test_bulk_register_helpers_round_trip_and_update_shadow() {
   TEST_ASSERT_TRUE(dev.readRegisters(cmd::REG_OUTPUT_PORT_0, outReadback, 2).ok());
   TEST_ASSERT_EQUAL_HEX8(bulkOut[0], outReadback[0]);
   TEST_ASSERT_EQUAL_HEX8(bulkOut[1], outReadback[1]);
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
-                          static_cast<uint8_t>(dev.readRegisters(cmd::REG_OUTPUT_PORT_1,
-                                                                  outReadback,
-                                                                  2).code));
 
   TEST_ASSERT_TRUE(dev.writePin(0, true).ok());
   TEST_ASSERT_EQUAL_HEX8(0xA1, bus.regs[cmd::REG_OUTPUT_PORT_0]);
 
   const uint8_t bulkCfg[2] = {0x0F, 0xF0};
   TEST_ASSERT_TRUE(dev.writeRegisters(cmd::REG_CONFIG_PORT_0, bulkCfg, 2).ok());
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
-                          static_cast<uint8_t>(dev.writeRegisters(cmd::REG_CONFIG_PORT_1,
-                                                                   bulkCfg,
-                                                                   2).code));
   const SettingsSnapshot snapshot = dev.getSettings();
   TEST_ASSERT_EQUAL_HEX8(bulkCfg[0], snapshot.config.configPort0);
   TEST_ASSERT_EQUAL_HEX8(bulkCfg[1], snapshot.config.configPort1);
+}
+
+void test_bulk_register_helpers_wrap_odd_start_within_pair() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  const uint8_t values[2] = {0x12, 0x34};
+  Status st = dev.writeRegisters(cmd::REG_OUTPUT_PORT_1, values, 2);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x34, bus.regs[cmd::REG_OUTPUT_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(0x12, bus.regs[cmd::REG_OUTPUT_PORT_1]);
+
+  uint8_t readback[2] = {};
+  TEST_ASSERT_TRUE(dev.readRegisters(cmd::REG_OUTPUT_PORT_1, readback, 2).ok());
+  TEST_ASSERT_EQUAL_HEX8(values[0], readback[0]);
+  TEST_ASSERT_EQUAL_HEX8(values[1], readback[1]);
+
+  TEST_ASSERT_TRUE(dev.writePin(0, true).ok());
+  TEST_ASSERT_EQUAL_HEX8(0x35, bus.regs[cmd::REG_OUTPUT_PORT_0]);
+
+  const uint8_t configValues[2] = {0xF0, 0x0F};
+  TEST_ASSERT_TRUE(dev.writeRegisters(cmd::REG_CONFIG_PORT_1, configValues, 2).ok());
+  const SettingsSnapshot snapshot = dev.getSettings();
+  TEST_ASSERT_EQUAL_HEX8(0x0F, snapshot.config.configPort0);
+  TEST_ASSERT_EQUAL_HEX8(0xF0, snapshot.config.configPort1);
 }
 
 void test_bulk_read_input_registers_applies_errata_workaround() {
@@ -961,12 +1113,12 @@ void test_register_out_of_range() {
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
                           static_cast<uint8_t>(st.code));
 
-  uint8_t buf[2] = {};
-  st = dev.readRegisters(cmd::REG_OUTPUT_PORT_1, buf, sizeof(buf));
+  uint8_t buf[3] = {};
+  st = dev.readRegisters(cmd::REG_OUTPUT_PORT_0, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
                           static_cast<uint8_t>(st.code));
 
-  st = dev.writeRegisters(cmd::REG_OUTPUT_PORT_1, buf, sizeof(buf));
+  st = dev.writeRegisters(cmd::REG_OUTPUT_PORT_0, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::INVALID_PARAM),
                           static_cast<uint8_t>(st.code));
 
@@ -1066,6 +1218,27 @@ void test_end_sets_safe_input_state() {
 
   TEST_ASSERT_EQUAL_HEX8(0xFF, bus.regs[cmd::REG_CONFIG_PORT_0]);
   TEST_ASSERT_EQUAL_HEX8(0xFF, bus.regs[cmd::REG_CONFIG_PORT_1]);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
+                          static_cast<uint8_t>(dev.state()));
+}
+
+void test_end_while_offline_does_not_touch_bus() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.offlineThreshold = 1;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.readErrorRemaining = 1;
+  bus.readError = Status::Error(Err::TIMEOUT, "forced timeout", -13);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                          static_cast<uint8_t>(dev.recover().code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+
+  const uint32_t writesBefore = bus.writeCalls;
+  dev.end();
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
                           static_cast<uint8_t>(dev.state()));
 }
@@ -1289,6 +1462,8 @@ int main() {
   RUN_TEST(test_begin_rejects_missing_callbacks);
   RUN_TEST(test_begin_rejects_invalid_address);
   RUN_TEST(test_begin_rejects_zero_timeout);
+  RUN_TEST(test_failed_begin_clears_stale_runtime_snapshot);
+  RUN_TEST(test_failed_begin_apply_clears_runtime_snapshot);
   RUN_TEST(test_begin_success_sets_ready_and_health);
   RUN_TEST(test_get_settings_snapshot_reflects_runtime_state);
   RUN_TEST(test_begin_rejects_non_default_config_ports_by_default);
@@ -1304,6 +1479,8 @@ int main() {
   RUN_TEST(test_recover_success_returns_ready);
   RUN_TEST(test_recover_preserves_transport_error_code);
   RUN_TEST(test_recover_reaches_offline_when_threshold_is_one);
+  RUN_TEST(test_offline_latches_normal_read_without_i2c_until_recover);
+  RUN_TEST(test_failed_recover_from_offline_preserves_latch_after_partial_success);
 
   // Example transport
   RUN_TEST(test_example_transport_maps_wire_errors);
@@ -1322,6 +1499,7 @@ int main() {
   RUN_TEST(test_failed_writes_do_not_update_cached_runtime_state);
   RUN_TEST(test_transport_in_progress_does_not_update_health);
   RUN_TEST(test_bulk_register_helpers_round_trip_and_update_shadow);
+  RUN_TEST(test_bulk_register_helpers_wrap_odd_start_within_pair);
   RUN_TEST(test_bulk_read_input_registers_applies_errata_workaround);
   RUN_TEST(test_write_pin_modifies_single_bit);
   RUN_TEST(test_write_pin_port1);
@@ -1360,6 +1538,7 @@ int main() {
   // Not-initialized guards
   RUN_TEST(test_operations_reject_before_begin);
   RUN_TEST(test_end_sets_safe_input_state);
+  RUN_TEST(test_end_while_offline_does_not_touch_bus);
 
   return UNITY_END();
 }

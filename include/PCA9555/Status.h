@@ -17,7 +17,7 @@ enum class Err : uint8_t {
   DEVICE_NOT_FOUND,          ///< Device not responding on I2C bus
   CONFIG_REG_MISMATCH,       ///< Configuration register != expected default
   BUSY,                      ///< Device is busy
-  IN_PROGRESS,               ///< Operation scheduled; call tick() to complete
+  IN_PROGRESS,               ///< Reserved for future async operations; not returned by this synchronous driver
 
   // I2C transport details (append-only to preserve existing values)
   I2C_NACK_ADDR,             ///< I2C address not acknowledged

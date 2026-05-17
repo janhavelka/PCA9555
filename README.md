@@ -56,7 +56,7 @@ void setup() {
   cfg.i2cUser = &Wire;
   cfg.i2cAddress = 0x20;
   cfg.configPort0 = 0x0F;   // Port 0 lower nibble = input, upper = output
-  cfg.outputPort0 = 0xF0;   // Set output pins high initially
+  cfg.outputPort0 = 0xF0;   // Set Port 0 output latch bits high initially
   
   auto status = device.begin(cfg);
   if (!status.ok()) {
@@ -76,8 +76,8 @@ void loop() {
     Serial.printf("Inputs: P0=0x%02X P1=0x%02X\n", inputs.port0, inputs.port1);
   }
   
-  // Write a single pin
-  device.writePin(12, true);  // Set pin 12 (Port 1, bit 4) high
+  // Write a single output latch bit. Linear pin 12 maps to physical P14.
+  device.writePin(12, true);
   
   delay(1000);
 }
@@ -135,18 +135,18 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 
 ### Input API
 
-- `Status readInputs(PortData& data)` - Read both input ports
-- `Status readInput(Port port, uint8_t& value)` - Read single input port
-- `Status readPin(Pin pin, bool& state)` - Read single input pin (0-15)
+- `Status readInputs(PortData& data)` - Read both input ports after configured polarity inversion
+- `Status readInput(Port port, uint8_t& value)` - Read one input port after configured polarity inversion
+- `Status readPin(Pin pin, bool& state)` - Read one input-register bit after configured polarity inversion
 
 ### Output API
 
-- `Status writeOutputs(const PortData& data)` - Write both output ports
-- `Status writeOutput(Port port, uint8_t value)` - Write single output port
+- `Status writeOutputs(const PortData& data)` - Write both output latch registers
+- `Status writeOutput(Port port, uint8_t value)` - Write one output latch register
 - `Status readOutput(Port port, uint8_t& value)` - Read single output latch register
-- `Status writePin(Pin pin, bool high)` - Write single output pin (uses cached value)
+- `Status writePin(Pin pin, bool high)` - Write a single output latch bit (uses cached value)
 - `Status readOutputPin(Pin pin, bool& high)` - Read single output latch bit
-- `Status readOutputs(PortData& data)` - Read back output register values
+- `Status readOutputs(PortData& data)` - Read back output latch register values
 
 ### Configuration API
 
@@ -170,10 +170,10 @@ registers, and write both ports in a single 2-byte I2C burst. No I2C occurs when
 mask causes no change. If the write fails, the cached shadow state remains unchanged so
 later single-pin and recovery operations do not build on a failed update.
 
-- `Status setOutputBits(uint16_t mask)` - Set output bits HIGH (OR mask into shadow)
-- `Status clearOutputBits(uint16_t mask)` - Clear output bits LOW (AND ~mask into shadow)
-- `Status toggleOutputBits(uint16_t mask)` - Toggle output bits (XOR mask into shadow)
-- `Status togglePin(Pin pin)` - Toggle single output pin (1-byte write, no read)
+- `Status setOutputBits(uint16_t mask)` - Set output latch bits HIGH (OR mask into shadow)
+- `Status clearOutputBits(uint16_t mask)` - Clear output latch bits LOW (AND ~mask into shadow)
+- `Status toggleOutputBits(uint16_t mask)` - Toggle output latch bits (XOR mask into shadow)
+- `Status togglePin(Pin pin)` - Toggle a single output latch bit (1-byte write, no read)
 - `Status configureInputBits(uint16_t mask)` - Set masked pins to INPUT direction
 - `Status configureOutputBits(uint16_t mask)` - Set masked pins to OUTPUT direction
 - `Status setInvertBits(uint16_t mask)` - Enable polarity inversion for masked pins
@@ -210,14 +210,14 @@ later single-pin and recovery operations do not build on a failed update.
 | `i2cTimeoutMs` | `50` | I2C transaction timeout |
 | `offlineThreshold` | `5` | Consecutive failures before OFFLINE |
 | `configPort0/1` | `0xFF` | Pin direction (1=input, 0=output) |
+| `outputPort0/1` | `0xFF` | Initial output latch values |
+| `polarityPort0/1` | `0x00` | Polarity inversion (1=inverted) |
+| `requireConfigPortDefaults` | `true` | Require Configuration Port 0/1 = `0xFF` at `begin()` |
+| `applyInterruptErrata` | `true` | Enable interrupt errata workaround |
 
 Failed `begin()` calls clear stale runtime/cache state before returning. This
 prevents a later diagnostic snapshot from reporting old output, polarity, or
 configuration shadows after an unsuccessful initialization attempt.
-| `outputPort0/1` | `0xFF` | Initial output values |
-| `polarityPort0/1` | `0x00` | Polarity inversion (1=inverted) |
-| `requireConfigPortDefaults` | `true` | Require Configuration Port 0/1 = `0xFF` at `begin()` |
-| `applyInterruptErrata` | `true` | Enable interrupt errata workaround |
 
 ### I2C Address Selection
 
@@ -263,23 +263,23 @@ the register pointer away from 0x00.
 
 ## Device Notes
 
-- Reading the **Output Port** register returns the output latch (flip-flop), not the actual pin voltage. Use `readInput()` / `readPin()` when you need the physical pin level.
-- The **Input Port** register reflects the real pin level even when a pin is configured as an output, which is useful for output verification and fault checks.
+- Reading the **Output Port** register returns the output latch (flip-flop), not the actual pin voltage.
+- Reading the **Input Port** register reports the input-register sense after configured polarity inversion. With normal polarity this corresponds to the physical pin level, including when the pin is configured as an output.
 - Each PCA9555 I/O has an internal ~100 kOhm pull-up when configured as an input. Inputs held low draw extra standby current, so unused inputs should be left high or configured as outputs driven high in low-power designs.
 
 ## Examples
 
 ### 01_basic_bringup_cli
 
-Interactive serial CLI for device bringup and testing. Supports reading/writing all
-ports and individual pins, register dump, direction and polarity configuration,
-16-bit mask-based bit manipulation (`setbits`, `clearbits`, `togglebits`, `dirin`, `dirout`, `invertset`, `invertclr`),
-exact-pattern output drive (`pattern`), self-test, stress tests, driver health
-diagnostics, `cfg/settings` snapshots, single-pin latch/direction/polarity readback
-(`rout`, `rdir`, `rpol`), `pininfo`, full `pins` summaries, port-specific readback
-commands, pair-bounded low-level register access (`read regs` / `write regs`),
-and both terse and descriptive command aliases (`read inputs`, `write pin`, `read reg`, ...).
-The CLI help also includes a glossary for `port`, `pin`, `polarity`, and 16-bit mask `M`.
+Interactive serial CLI for device bringup and testing. It covers bus scan,
+driver health, settings snapshots, input/output readback, output latch writes,
+direction and polarity configuration, direct register access, exact 16-bit
+patterns, mask-based bit manipulation, self-test, and stress diagnostics.
+
+Run `help` on the serial console for the complete command list. Diagnostic
+output uses physical PCA9555 labels (`P00-P07`, `P10-P17`) while command
+arguments keep the driver API's linear pin numbering (`0-15`). Stress progress
+lines are intentionally plain except for the `ok=` and `fail=` result counts.
 
 Typical bring-up commands:
 
@@ -331,6 +331,7 @@ python tools/check_core_timing_guard.py
 ## Documentation
 
 - [CHANGELOG](CHANGELOG.md)
+- [Release Notes v1.1.0](docs/releases/v1.1.0.md)
 - [Release Notes v1.0.0](docs/releases/v1.0.0.md)
 - [PCA9555 Implementation Manual](PCA9555_io_expander_implementation_manual.md)
 - [Register Reference](docs/register_reference.md)

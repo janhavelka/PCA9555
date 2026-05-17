@@ -6,8 +6,8 @@ This reference summarizes the eight PCA9555 registers and the library rules that
 
 | Reg | Name | Access | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `0x00` | Input Port 0 | R | `0xFF` | Physical pin level for P00-P07 |
-| `0x01` | Input Port 1 | R | `0xFF` | Physical pin level for P10-P17 |
+| `0x00` | Input Port 0 | R | `0xFF` | Input-register sense for P00-P07 after configured polarity inversion |
+| `0x01` | Input Port 1 | R | `0xFF` | Input-register sense for P10-P17 after configured polarity inversion |
 | `0x02` | Output Port 0 | R/W | `0xFF` | Latched output state for P00-P07 |
 | `0x03` | Output Port 1 | R/W | `0xFF` | Latched output state for P10-P17 |
 | `0x04` | Polarity Inversion 0 | R/W | `0x00` | `1 = invert input sense` |

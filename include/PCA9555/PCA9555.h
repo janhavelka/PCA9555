@@ -62,7 +62,7 @@ public:
   // =========================================================================
   
   /// Initialize the driver with configuration.
-  /// Sets output values before configuring directions to avoid glitches.
+  /// Sets output latch values before configuring directions to avoid glitches.
   /// Clears pending interrupts by reading input ports.
   /// @param config Configuration including transport callbacks
   /// @return Status::Ok() on success, error otherwise
@@ -87,7 +87,8 @@ public:
   Status probe();
   
   /// Attempt to recover from DEGRADED/OFFLINE state.
-  /// Re-probes device and re-applies configuration if successful.
+  /// Performs a tracked configuration-register read and re-applies the current
+  /// runtime configuration if successful.
   /// @return Status::Ok() if device now responsive, error otherwise
   Status recover();
   
@@ -161,21 +162,26 @@ public:
   // =========================================================================
   
   /// Read both input ports in a single burst transaction.
+  /// Returned bits are the PCA9555 input-register sense, including any
+  /// configured polarity inversion.
   /// Applies interrupt errata workaround if configured.
   /// @param[out] data Port 0 and Port 1 input values
   /// @return Status::Ok() on success
   Status readInputs(PortData& data);
 
   /// Read a single input port.
+  /// Returned bits are the PCA9555 input-register sense, including any
+  /// configured polarity inversion.
   /// Applies interrupt errata workaround if configured.
   /// @param port Port to read (PORT_0 or PORT_1)
   /// @param[out] value 8-bit port value
   /// @return Status::Ok() on success
   Status readInput(Port port, uint8_t& value);
 
-  /// Read a single pin state (0 or 1).
+  /// Read a single input-register bit (0 or 1).
+  /// The reported sense includes any configured polarity inversion.
   /// @param pin Pin number 0–15 (0–7 = Port 0, 8–15 = Port 1)
-  /// @param[out] state true if pin is high, false if low
+  /// @param[out] state true if the input-register bit is 1, false if 0
   /// @return Status::Ok() on success
   Status readPin(Pin pin, bool& state);
   
@@ -183,14 +189,16 @@ public:
   // Output API
   // =========================================================================
   
-  /// Write both output ports in a single burst transaction.
-  /// @param data Port 0 and Port 1 output values
+  /// Write both output latch registers in a single burst transaction.
+  /// Physical pins follow these latches only when configured as outputs.
+  /// @param data Port 0 and Port 1 output latch values
   /// @return Status::Ok() on success
   Status writeOutputs(const PortData& data);
 
-  /// Write a single output port.
+  /// Write a single output latch register.
+  /// Physical pins follow this latch only when configured as outputs.
   /// @param port Port to write (PORT_0 or PORT_1)
-  /// @param value 8-bit port value
+  /// @param value 8-bit output latch value
   /// @return Status::Ok() on success
   Status writeOutput(Port port, uint8_t value);
 
@@ -201,10 +209,11 @@ public:
   /// @return Status::Ok() on success
   Status readOutput(Port port, uint8_t& value);
 
-  /// Set a single output pin high or low.
-  /// Uses read-modify-write on the output register.
+  /// Set a single output latch bit high or low.
+  /// Uses read-modify-write on the cached output register state.
+  /// The physical pin follows this latch only when configured as an output.
   /// @param pin Pin number 0–15
-  /// @param high true = drive high, false = drive low
+  /// @param high true = latch high, false = latch low
   /// @return Status::Ok() on success
   Status writePin(Pin pin, bool high);
 
@@ -224,7 +233,8 @@ public:
   // Bit Manipulation API
   // =========================================================================
 
-  /// Set specific output bits HIGH without affecting other bits.
+  /// Set specific output latch bits HIGH without affecting other bits.
+  /// Physical pins follow these latch bits only when configured as outputs.
   /// Applies mask via OR to cached output shadow registers and writes both
   /// ports in a single 2-byte burst. No I2C occurs if the mask causes no
   /// change (all targeted bits already HIGH).
@@ -232,21 +242,24 @@ public:
   /// @return Status::Ok() on success
   Status setOutputBits(uint16_t mask);
 
-  /// Clear specific output bits to LOW without affecting other bits.
+  /// Clear specific output latch bits to LOW without affecting other bits.
+  /// Physical pins follow these latch bits only when configured as outputs.
   /// Applies inverted mask via AND to cached output shadow registers and
   /// writes both ports in a single 2-byte burst. No I2C occurs if no change.
   /// @param mask 16-bit mask; 1 = clear to LOW
   /// @return Status::Ok() on success
   Status clearOutputBits(uint16_t mask);
 
-  /// Toggle specific output bits without affecting other bits.
+  /// Toggle specific output latch bits without affecting other bits.
+  /// Physical pins follow these latch bits only when configured as outputs.
   /// Applies mask via XOR to cached output shadow registers and writes both
   /// ports in a single 2-byte burst. No I2C occurs if mask is zero.
   /// @param mask 16-bit mask; 1 = toggle
   /// @return Status::Ok() on success
   Status toggleOutputBits(uint16_t mask);
 
-  /// Toggle a single output pin using the cached shadow register.
+  /// Toggle a single output latch bit using the cached shadow register.
+  /// The physical pin follows this latch only when configured as an output.
   /// Performs a single 1-byte I2C write without a preceding read.
   /// @param pin Pin number 0–15
   /// @return Status::Ok() on success
@@ -438,7 +451,7 @@ private:
   // =========================================================================
 
   /// Apply configuration from Config to device registers.
-  /// Order: output values → polarity → direction → read inputs (clear INT).
+  /// Order: output latch values -> polarity -> direction -> read inputs (clear INT).
   Status _applyConfig();
 
   /// Apply interrupt errata workaround: write a safe command byte after input reads.

@@ -11,6 +11,6 @@
 | `0x06` | Configuration Port 0 | Read/write | `0xFF` | `1` = input/high impedance, `0` = output. | datasheet, pp. 19-20 |
 | `0x07` | Configuration Port 1 | Read/write | `0xFF` | `1` = input/high impedance, `0` = output. | datasheet, pp. 19-20 |
 
-Output-register reads return the latch value, not necessarily the physical pin level. Input-register reads report physical pin state regardless of whether the pin is configured as input or output. Source: datasheet, p. 20.
+Output-register reads return the latch value, not necessarily the physical pin level. Input-register reads report the input-register sense; with normal polarity this is the physical pin state regardless of whether the pin is configured as input or output. Source: datasheet, p. 20.
 
 Command-byte format is `00000 B2 B1 B0`; only the low three bits select one of the eight registers. Source: datasheet, p. 19.

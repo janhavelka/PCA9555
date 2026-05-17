@@ -7,23 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+No changes yet.
+
+## [1.1.0] - 2026-05-17
+
 ### Added
 
 - `driverState()` and status-returning `getSettings(SettingsSnapshot&)` for cross-library diagnostics.
 - Native coverage proving latched `OFFLINE` blocks normal I2C operations without touching the bus while `recover()` remains the explicit recovery path.
+- CLI version reporting with library version, encoded version, build metadata, and git metadata.
 
 ### Changed
 
+- Bring-up CLI output now distinguishes linear API pin numbers (`0-15`) from physical PCA9555 pin labels (`P00-P07`, `P10-P17`) in `pininfo`, `pins`, `sweep`, and `walk`.
+- CLI output now uses "output latch" wording for latch operations so input-mode pins are not confused with actively driven outputs.
+- CLI input readback now uses "input sense" wording because polarity inversion can intentionally flip the reported input-register bit.
+- `selftest` labels now use `PORT_0` / `PORT_1` for port APIs and include physical labels for pin API examples.
+- `stress_mix` now prints a start banner, and stress progress keeps color only on `ok=` / `fail=` result counts.
+- Async `stress` command processing now waits until the active stress run finishes before consuming queued serial commands or printing the next prompt.
 - Doxyfile inputs now cover the root implementation manual and docs tree.
 - Reference documentation now uses a human-readable vendor PDF name and separates compact I/O-expander notes from full PDF extraction under `docs/extracted-md/` and `docs/pdf-extracted-md/`.
 - Explicit recovery bypass internals now use the shared `ScopedOfflineI2cAllowance` / `_reassertOfflineLatch()` procedure so failed recovery attempts that begin from `OFFLINE` keep the latch asserted.
 - Documented cache-safe output, direction, and polarity write semantics.
+- Public Doxygen comments now consistently distinguish output latch state, input-register sense, and physical pin behavior.
 - Bulk register helper docs now match PCA9555 auto-increment behavior: 1-2 byte transfers stay within a register pair and odd starts wrap to the pair mate.
 - Failed `begin()` clears stale runtime state, and `end()` skips safe-state bus writes when the driver is already `OFFLINE`.
 - Health behavior is now standardized on latched `OFFLINE`: normal public I2C operations return `BUSY` with `Driver is offline; call recover()` and do not touch I2C until `recover()` succeeds.
 
 ### Fixed
 
+- Fixed misleading CLI pin labels that printed linear pins 8-15 as `P08-P15`; physical labels now print as `P10-P17`.
+- Fixed README Config Fields table rendering by moving explanatory text out of the table body.
 - Removed duplicate Doxygen parameter sections from readback helper comments.
 - Guarded raw tracked read helpers against zero-length reads before transport dispatch.
 - Treated transport `IN_PROGRESS` statuses as neutral for health counters instead of counting them as failures.
@@ -65,5 +79,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Overlong CLI input lines are discarded instead of executing truncated commands.
 - Example helper parsers reject malformed numeric input and zero-length destination buffers instead of coercing invalid values.
 
-[Unreleased]: https://github.com/janhavelka/PCA9555/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/janhavelka/PCA9555/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/janhavelka/PCA9555/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/janhavelka/PCA9555/releases/tag/v1.0.0

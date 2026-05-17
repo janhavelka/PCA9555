@@ -398,7 +398,7 @@ All packages are 24 pins.
   (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.15)
 - **As output**: Push-pull structure. Q1 (pull-up to VCC) or Q2 (pull-down to GND) enabled depending on Output Port register state. Low-impedance path.
   (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.15)
-- Output port register default = 0xFF (high), so if a pin is switched from input to output, it will drive high initially.
+- Output port register default = 0xFF (all latch bits high), so if a pin is switched from input to output, it will drive high initially.
   (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.19)
 - **CAUTION**: Changing an I/O from output to input may cause a **false interrupt** if the pin state doesn't match the Input Port register contents.
   (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.16)
@@ -518,7 +518,7 @@ Auto-increment alternates **within** a pair only — it does NOT increment acros
 - Bit values only affect pins configured as **outputs** (Configuration register bit = 0).
 - Bits for pins configured as inputs have no effect on pins but **are stored** and can be read back.
 - **Reading** this register returns the value in the output flip-flop, **NOT the actual pin value**. To read actual pin levels, read the Input Port register.
-- Default = 0xFF (all high). This means newly-configured output pins will drive high initially.
+- Default = 0xFF (all latch bits high). This means newly-configured output pins will drive high initially.
 
 (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.20)
 
@@ -685,7 +685,7 @@ No explicit initialization sequence is prescribed in the datasheet. Based on reg
 1. **Wait for POR** to complete (VCC must rise above VPORR, ~1.5 V max). No explicit delay is required beyond ensuring VCC is stable — the internal POR handles initialization.
 
 2. **Set output port values** (if any pins will be outputs):
-   - Write to 0x02 (Output Port 0) and 0x03 (Output Port 1) with desired initial output values.
+   - Write to 0x02 (Output Port 0) and 0x03 (Output Port 1) with desired initial output latch values.
    - This should be done **before** configuring pins as outputs to avoid glitches, since the default output is 0xFF (all high).
 
 3. **Set polarity inversion** (if needed):
@@ -1076,7 +1076,7 @@ Key changes across datasheet revisions that may affect designs based on older re
 - [ ] **Bypass capacitor**: Place 0.1 μF (min) and optionally 10 μF capacitor close to VCC/GND pins.
 - [ ] **POR wait**: Ensure VCC is stable above VPORR (max 1.5 V) before first I2C transaction. No explicit delay documented — just ensure supply is stable.
 - [ ] **Verify communication**: Read any register (e.g., Configuration Port 0 at 0x06, expect 0xFF) to confirm I2C connectivity.
-- [ ] **Set output values before configuring as outputs**: Write Output Port registers (0x02, 0x03) to desired values before writing Configuration registers (0x06, 0x07) with 0 bits to avoid transient glitches.
+- [ ] **Set output latch values before configuring as outputs**: Write Output Port registers (0x02, 0x03) to desired latch values before writing Configuration registers (0x06, 0x07) with 0 bits to avoid transient glitches.
 - [ ] **Configure polarity inversion** if needed: Write to 0x04, 0x05.
 - [ ] **Configure pin directions**: Write to 0x06, 0x07. Bit=1 → input, Bit=0 → output.
 - [ ] **Clear pending interrupts**: Read Input Port 0 (0x00) and Input Port 1 (0x01).

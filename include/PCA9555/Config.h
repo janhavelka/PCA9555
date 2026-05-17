@@ -64,8 +64,8 @@ struct Config {
   // === Initial Pin Configuration ===
   uint8_t configPort0 = 0xFF;            ///< Pin direction Port 0 (1=input, 0=output). Default: all inputs
   uint8_t configPort1 = 0xFF;            ///< Pin direction Port 1 (1=input, 0=output). Default: all inputs
-  uint8_t outputPort0 = 0xFF;            ///< Initial output value Port 0. Default: all high
-  uint8_t outputPort1 = 0xFF;            ///< Initial output value Port 1. Default: all high
+  uint8_t outputPort0 = 0xFF;            ///< Initial output latch Port 0. Default: all latch bits high
+  uint8_t outputPort1 = 0xFF;            ///< Initial output latch Port 1. Default: all latch bits high
   uint8_t polarityPort0 = 0x00;          ///< Polarity inversion Port 0. Default: no inversion
   uint8_t polarityPort1 = 0x00;          ///< Polarity inversion Port 1. Default: no inversion
   bool requireConfigPortDefaults = true; ///< Require Configuration Port 0/1 = 0xFF at begin()

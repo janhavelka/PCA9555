@@ -7,8 +7,16 @@
 
 #pragma once
 
+#ifndef PCA9555_EXAMPLE_PLATFORM_IDF
+#define PCA9555_EXAMPLE_PLATFORM_IDF 0
+#endif
+
+#if PCA9555_EXAMPLE_PLATFORM_IDF
+#include "examples/common/IdfArduinoCompat.h"
+#else
 #include <Arduino.h>
 #include <Wire.h>
+#endif
 
 #include "examples/common/Log.h"
 

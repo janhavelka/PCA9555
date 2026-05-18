@@ -5,9 +5,31 @@
 
 #include "PCA9555/PCA9555.h"
 
-#include <Arduino.h>
 #include <cstring>
 #include <limits>
+
+#if defined(ARDUINO)
+#define PCA9555_HAS_ARDUINO_TIME 1
+#elif !defined(ESP_PLATFORM) && defined(__has_include)
+#if __has_include(<Arduino.h>)
+#define PCA9555_HAS_ARDUINO_TIME 1
+#endif
+#endif
+
+#ifndef PCA9555_HAS_ARDUINO_TIME
+#define PCA9555_HAS_ARDUINO_TIME 0
+#endif
+
+#if PCA9555_HAS_ARDUINO_TIME
+#include <Arduino.h>
+#elif defined(ESP_PLATFORM)
+#include <esp_timer.h>
+#define PCA9555_HAS_IDF_TIME 1
+#endif
+
+#ifndef PCA9555_HAS_IDF_TIME
+#define PCA9555_HAS_IDF_TIME 0
+#endif
 
 namespace PCA9555 {
 namespace {
@@ -1169,7 +1191,13 @@ uint32_t PCA9555::_nowMs() const {
   if (_config.nowMs != nullptr) {
     return _config.nowMs(_config.timeUser);
   }
+#if PCA9555_HAS_ARDUINO_TIME
   return millis();
+#elif PCA9555_HAS_IDF_TIME
+  return static_cast<uint32_t>(esp_timer_get_time() / 1000LL);
+#else
+  return 0U;
+#endif
 }
 
 } // namespace PCA9555

@@ -1,6 +1,6 @@
 # PCA9555 Driver Library
 
-Production-grade PCA9555 16-bit I/O expander I2C driver for ESP32 (Arduino/PlatformIO).
+Production-grade PCA9555 16-bit I/O expander I2C driver for ESP32 (Arduino/PlatformIO and ESP-IDF).
 
 ## Features
 
@@ -31,6 +31,25 @@ lib_deps =
 ### Manual
 
 Copy `include/PCA9555/` and `src/` to your project.
+
+### ESP-IDF Component
+
+This repository also builds as a pure ESP-IDF component. Add the repo as an
+extra component or dependency, then include `PCA9555/PCA9555.h` and provide
+`Config::i2cWrite` / `Config::i2cWriteRead` callbacks from your project-owned
+I2C master bus.
+
+The full bring-up CLI is shared between Arduino and ESP-IDF:
+
+```bash
+cd examples/espidf_basic
+idf.py set-target esp32s3
+idf.py build
+```
+
+The ESP-IDF example uses `driver/i2c_master.h` through
+`examples/common/IdfArduinoCompat.h` so it exposes the same commands and serial
+output as `examples/01_basic_bringup_cli`.
 
 ## Quick Start
 
@@ -86,7 +105,8 @@ void loop() {
 Provide your own `Config::i2cWrite` and `Config::i2cWriteRead` callbacks, or copy/adapt the
 ready-made Arduino helper from `examples/common/I2cTransport.h`. That helper is example-only
 and not part of the installed library package. If you do not inject `Config::nowMs`, the
-driver falls back to `millis()` on Arduino/native-test builds.
+driver falls back to `millis()` on Arduino/native-test builds and `esp_timer_get_time()`
+on ESP-IDF builds.
 
 ## Health Monitoring
 
@@ -293,6 +313,15 @@ pininfo 12
 pins
 ```
 
+### espidf_basic
+
+Pure ESP-IDF build of the same bring-up CLI. It includes the Arduino example
+source with `PCA9555_EXAMPLE_PLATFORM_IDF=1`, supplies a small fixed-capacity
+`String`/serial/GPIO/Wire-compatible shim, and backs I2C transactions with the
+ESP-IDF v6 `i2c_master_*` APIs. The command set, output wording, health
+diagnostics, self-test, stress commands, sweep, walk, and pattern flows stay
+aligned with the Arduino CLI.
+
 ### Example Helpers (`examples/common/`)
 
 | File | Purpose |
@@ -301,6 +330,7 @@ pins
 | `Log.h` | Colorized serial logging macros (`LOGI`, `LOGE`, `LOGV`, etc.) |
 | `BoardConfig.h` | Board-specific pin definitions and I2C init |
 | `I2cTransport.h` | Wire-based transport adapter mapping to `Status` |
+| `IdfArduinoCompat.h` | ESP-IDF-only example shim for the shared CLI |
 | `TransportAdapter.h` | Alias wrapper matching the standardized helper layout |
 | `I2cScanner.h` | I2C bus scanner utility |
 | `CommandHandler.h` | Serial command-line helpers |
@@ -322,6 +352,10 @@ pio run -e esp32s2dev
 
 # Run native unit tests (requires host GCC)
 pio test -e native
+
+# Build the ESP-IDF full CLI example (requires ESP-IDF on PATH)
+cd examples/espidf_basic
+idf.py build
 
 # Check repo-standardized CLI/helper and timing contracts
 python tools/check_cli_contract.py

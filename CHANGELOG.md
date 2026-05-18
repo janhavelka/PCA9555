@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- ESP-IDF component metadata and a pure ESP-IDF `examples/espidf_basic` build of the full bring-up CLI.
+- `examples/common/IdfArduinoCompat.h` example shim that provides the small Arduino surface used by the CLI while routing I2C through ESP-IDF v6 `i2c_master_*` APIs.
+- ESP-IDF port audit documentation in `docs/IDF_PORT.md`.
+
+### Changed
+
+- Core time fallback is now platform-aware: Arduino/native test builds use `millis()`, while ESP-IDF builds use `esp_timer_get_time()`.
+- Example helpers now gate Arduino headers behind `PCA9555_EXAMPLE_PLATFORM_IDF` so the same CLI source can compile for both frameworks.
+- `library.json` now declares both `arduino` and `espidf` framework support.
 
 ## [1.1.0] - 2026-05-17
 

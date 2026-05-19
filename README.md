@@ -372,8 +372,6 @@ python tools/check_core_timing_guard.py
 ## Documentation
 
 - [CHANGELOG](CHANGELOG.md)
-- [Release Notes v1.1.0](docs/releases/v1.1.0.md)
-- [Release Notes v1.0.0](docs/releases/v1.0.0.md)
 - [PCA9555 Implementation Manual](PCA9555_io_expander_implementation_manual.md)
 - [ESP-IDF Port Notes](docs/IDF_PORT.md)
 - [ESP-IDF Port Implementation Notes](docs/IDF_PORT_IMPLEMENTATION.md)

@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Core time fallback is now platform-aware: Arduino/native test builds use `millis()`, while ESP-IDF builds use `esp_timer_get_time()`.
 - Example helpers now gate Arduino headers behind `PCA9555_EXAMPLE_PLATFORM_IDF` so the same CLI source can compile for both frameworks.
 - `library.json` now declares both `arduino` and `espidf` framework support.
+- Removed the redundant explicit `Wire` dependency from `platformio.ini`; Arduino examples still use the framework-provided Wire library.
 - Doxygen input now covers the ESP-IDF port notes, implementation notes, shared CLI source, native IDF entry point, and example-only IDF shims.
 - `tools/check_cli_contract.py` now validates the ESP-IDF wrapper macro, shared-source include, and required CMake dependencies.
 - ESP-IDF port docs now spell out the static wrapper contract checks and

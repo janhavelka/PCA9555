@@ -51,6 +51,11 @@ The ESP-IDF example uses `driver/i2c_master.h` through
 `examples/common/IdfArduinoCompat.h` so it exposes the same commands and serial
 output as `examples/01_basic_bringup_cli`.
 
+Validation status: command parity is structural through shared source. Native
+tests and Arduino ESP32-S2/S3 example builds passed during this port pass; pure
+ESP-IDF `idf.py` builds and hardware smoke tests are still pending until an IDF
+toolchain and target devices are available.
+
 ## Quick Start
 
 ```cpp
@@ -320,7 +325,9 @@ source with `PCA9555_EXAMPLE_PLATFORM_IDF=1`, supplies a small fixed-capacity
 `String`/serial/GPIO/Wire-compatible shim, and backs I2C transactions with the
 ESP-IDF v6 `i2c_master_*` APIs. The command set, output wording, health
 diagnostics, self-test, stress commands, sweep, walk, and pattern flows stay
-aligned with the Arduino CLI.
+aligned with the Arduino CLI. `tools/check_cli_contract.py` also checks the IDF
+entry point and CMake dependency surface so future wrapper edits cannot silently
+drop parity.
 
 ### Example Helpers (`examples/common/`)
 
@@ -368,9 +375,13 @@ python tools/check_core_timing_guard.py
 - [Release Notes v1.1.0](docs/releases/v1.1.0.md)
 - [Release Notes v1.0.0](docs/releases/v1.0.0.md)
 - [PCA9555 Implementation Manual](PCA9555_io_expander_implementation_manual.md)
+- [ESP-IDF Port Notes](docs/IDF_PORT.md)
+- [ESP-IDF Port Implementation Notes](docs/IDF_PORT_IMPLEMENTATION.md)
 - [Register Reference](docs/register_reference.md)
 - [Auto-Increment Feature](docs/application_notes/auto_increment_feature.md)
 - [Contributing Guide](CONTRIBUTING.md)
+- `Doxyfile` indexes public headers, the ESP-IDF port notes, the shared Arduino
+  CLI source, the native IDF entry point, and example-only framework shims.
 
 ## License
 

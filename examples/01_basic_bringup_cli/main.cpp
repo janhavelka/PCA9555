@@ -2,15 +2,7 @@
 /// @brief Basic bringup example for PCA9555 16-bit I/O expander
 /// @note This is an EXAMPLE, not part of the library
 
-#ifndef PCA9555_EXAMPLE_PLATFORM_IDF
-#define PCA9555_EXAMPLE_PLATFORM_IDF 0
-#endif
-
-#if PCA9555_EXAMPLE_PLATFORM_IDF
-#include "examples/common/IdfArduinoCompat.h"
-#else
 #include <Arduino.h>
-#endif
 #include <cctype>
 #include <cerrno>
 #include <cstdlib>

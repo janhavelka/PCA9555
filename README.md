@@ -39,7 +39,8 @@ extra component or dependency, then include `PCA9555/PCA9555.h` and provide
 `Config::i2cWrite` / `Config::i2cWriteRead` callbacks from your project-owned
 I2C master bus.
 
-The full bring-up CLI is shared between Arduino and ESP-IDF:
+The ESP-IDF bring-up CLI is implemented as a native IDF example with the same
+command contract as the Arduino CLI:
 
 ```bash
 cd examples/espidf_basic
@@ -47,14 +48,12 @@ idf.py set-target esp32s3
 idf.py build
 ```
 
-The ESP-IDF example uses `driver/i2c_master.h` through
-`examples/common/IdfArduinoCompat.h` so it exposes the same commands and serial
-output as `examples/01_basic_bringup_cli`.
+The ESP-IDF example uses `app_main`, `driver/i2c_master.h`, `esp_timer`,
+`vTaskDelay`, and fixed C command buffers. It does not include Arduino CLI
+sources or compatibility facades.
 
-Validation status: command parity is structural through shared source. Native
-tests and Arduino ESP32-S2/S3 example builds passed during this port pass; pure
-ESP-IDF `idf.py` builds and hardware smoke tests are still pending until an IDF
-toolchain and target devices are available.
+Validation status: command parity is checked by repo-local contract scripts.
+Hardware smoke tests are still pending until target devices are available.
 
 ## Quick Start
 
@@ -109,9 +108,8 @@ void loop() {
 
 Provide your own `Config::i2cWrite` and `Config::i2cWriteRead` callbacks, or copy/adapt the
 ready-made Arduino helper from `examples/common/I2cTransport.h`. That helper is example-only
-and not part of the installed library package. If you do not inject `Config::nowMs`, the
-driver falls back to `millis()` on Arduino/native-test builds and `esp_timer_get_time()`
-on ESP-IDF builds.
+and not part of the installed library package. Applications that need meaningful health
+timestamps should inject `Config::nowMs`; otherwise timestamps remain `0`.
 
 ## Health Monitoring
 
@@ -320,14 +318,12 @@ pins
 
 ### espidf_basic
 
-Pure ESP-IDF build of the same bring-up CLI. It includes the Arduino example
-source with `PCA9555_EXAMPLE_PLATFORM_IDF=1`, supplies a small fixed-capacity
-`String`/serial/GPIO/Wire-compatible shim, and backs I2C transactions with the
-ESP-IDF v6 `i2c_master_*` APIs. The command set, output wording, health
-diagnostics, self-test, stress commands, sweep, walk, and pattern flows stay
-aligned with the Arduino CLI. `tools/check_cli_contract.py` checks the advertised
-CLI command/help surface plus the IDF entry point and CMake dependency surface
-so future wrapper edits cannot silently drop parity.
+Native ESP-IDF build of the bring-up CLI command contract. It uses `app_main`,
+`driver/i2c_master.h`, `esp_timer`, `vTaskDelay`, and fixed C buffers. The
+command set, output wording, health diagnostics, self-test, stress commands,
+sweep, walk, and pattern flows stay aligned with the Arduino CLI contract.
+`tools/check_idf_example_contract.py` rejects Arduino compatibility facades and
+checks the native IDF command surface.
 
 ### Example Helpers (`examples/common/`)
 
@@ -337,7 +333,6 @@ so future wrapper edits cannot silently drop parity.
 | `Log.h` | Colorized serial logging macros (`LOGI`, `LOGE`, `LOGV`, etc.) |
 | `BoardConfig.h` | Board-specific pin definitions and I2C init |
 | `I2cTransport.h` | Wire-based transport adapter mapping to `Status` |
-| `IdfArduinoCompat.h` | ESP-IDF-only example shim for the shared CLI |
 | `TransportAdapter.h` | Alias wrapper matching the standardized helper layout |
 | `I2cScanner.h` | I2C bus scanner utility |
 | `CommandHandler.h` | Serial command-line helpers |
@@ -378,8 +373,8 @@ python tools/check_core_timing_guard.py
 - [Register Reference](docs/register_reference.md)
 - [Auto-Increment Feature](docs/application_notes/auto_increment_feature.md)
 - [Contributing Guide](CONTRIBUTING.md)
-- `Doxyfile` indexes public headers, the ESP-IDF port notes, the shared Arduino
-  CLI source, the native IDF entry point, and example-only framework shims.
+- `Doxyfile` indexes public headers, the ESP-IDF port notes, the Arduino CLI,
+  and the native IDF entry point.
 
 ## License
 

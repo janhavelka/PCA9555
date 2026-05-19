@@ -54,7 +54,7 @@ struct Config {
   void* i2cUser = nullptr;               ///< User context for callbacks
 
   // === Timing Hooks (optional) ===
-  NowMsFn nowMs = nullptr;               ///< Monotonic millisecond source; falls back to the active platform timer when available
+  NowMsFn nowMs = nullptr;               ///< Optional monotonic millisecond source for health timestamps
   void* timeUser = nullptr;              ///< User context for timing hook
   
   // === Device Settings ===

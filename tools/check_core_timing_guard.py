@@ -13,17 +13,19 @@ VALID_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp"}
 FORBIDDEN_CALLS = {
     "millis": re.compile(r"\bmillis\s*\("),
     "micros": re.compile(r"\bmicros\s*\("),
+    "esp_timer_get_time": re.compile(r"\besp_timer_get_time\s*\("),
     "delayMicroseconds": re.compile(r"\bdelayMicroseconds\s*\("),
     "yield": re.compile(r"\byield\s*\("),
 }
 
 INCLUDE_ARDUINO_RE = re.compile(r'^\s*#\s*include\s*[<\"]Arduino\.h[>\"]', re.MULTILINE)
+INCLUDE_IDF_RE = re.compile(r'^\s*#\s*include\s*[<\"]esp_timer\.h[>\"]', re.MULTILINE)
 BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 LINE_COMMENT_RE = re.compile(r"//[^\n]*")
 STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'')
 
-ALLOWED_CALL_COUNTS: Dict[str, Dict[str, int]] = {"src/PCA9555.cpp": {"millis": 1}}
-ALLOWED_INCLUDE_COUNTS: Dict[str, int] = {"src/PCA9555.cpp": 1}
+ALLOWED_CALL_COUNTS: Dict[str, Dict[str, int]] = {}
+ALLOWED_INCLUDE_COUNTS: Dict[str, int] = {}
 
 
 def strip_non_code(text: str) -> str:
@@ -61,7 +63,7 @@ def main() -> int:
         if call_counts:
             observed_calls[rel] = call_counts
 
-        include_count = len(INCLUDE_ARDUINO_RE.findall(raw))
+        include_count = len(INCLUDE_ARDUINO_RE.findall(raw)) + len(INCLUDE_IDF_RE.findall(raw))
         if include_count > 0:
             observed_includes[rel] = include_count
 

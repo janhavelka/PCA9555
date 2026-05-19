@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import runpy
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -79,7 +80,6 @@ MANDATORY_COMMANDS = [
     "stress",
 ]
 
-IDF_EXAMPLE_MACRO = "PCA9555_EXAMPLE_PLATFORM_IDF"
 IDF_REQUIRED_COMPONENTS = [
     "PCA9555",
     "esp_driver_i2c",
@@ -161,12 +161,6 @@ def main() -> int:
         require_help(text, cmd)
 
     idf_text = idf_main.read_text(encoding="utf-8", errors="replace")
-    if f"#define {IDF_EXAMPLE_MACRO} 1" not in idf_text:
-        fail(f"{IDF_EXAMPLE_MACRO}=1 missing from ESP-IDF entry point")
-    if '#include "examples/common/IdfArduinoCompat.h"' not in idf_text:
-        fail("ESP-IDF entry point must include IdfArduinoCompat.h")
-    if '#include "examples/01_basic_bringup_cli/main.cpp"' not in idf_text:
-        fail("ESP-IDF entry point must include the Arduino CLI source")
     if 'extern "C" void app_main(void)' not in idf_text:
         fail("ESP-IDF entry point must define app_main()")
 
@@ -174,6 +168,9 @@ def main() -> int:
     for component in IDF_REQUIRED_COMPONENTS:
         if re.search(rf"\b{re.escape(component)}\b", cmake_text) is None:
             fail(f"ESP-IDF CMake file missing required component '{component}'")
+
+    idf_contract = runpy.run_path(str(ROOT / "tools" / "check_idf_example_contract.py"))
+    idf_contract["main"]()
 
     print("CLI contract PASSED")
     return 0

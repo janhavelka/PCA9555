@@ -11,16 +11,8 @@
 
 #pragma once
 
-#ifndef PCA9555_EXAMPLE_PLATFORM_IDF
-#define PCA9555_EXAMPLE_PLATFORM_IDF 0
-#endif
-
-#if PCA9555_EXAMPLE_PLATFORM_IDF
-#include "examples/common/IdfArduinoCompat.h"
-#else
 #include <Arduino.h>
 #include <Wire.h>
-#endif
 
 #include "PCA9555/Status.h"
 
@@ -64,9 +56,6 @@ inline PCA9555::Status wireWrite(uint8_t addr, const uint8_t* data, size_t len,
   if (wire == nullptr) {
     return PCA9555::Status::Error(PCA9555::Err::INVALID_CONFIG, "Wire instance is null");
   }
-#if PCA9555_EXAMPLE_PLATFORM_IDF
-  return wire->writeStatus(addr, data, len, timeoutMs);
-#else
   (void)timeoutMs;
   if (!data || len == 0) {
     return PCA9555::Status::Error(PCA9555::Err::INVALID_PARAM, "Invalid I2C write params");
@@ -87,7 +76,6 @@ inline PCA9555::Status wireWrite(uint8_t addr, const uint8_t* data, size_t len,
 
   uint8_t result = wire->endTransmission(true);  // Send STOP
   return mapWireResult(result, "I2C write failed");
-#endif
 }
 
 /**
@@ -112,9 +100,6 @@ inline PCA9555::Status wireWriteRead(uint8_t addr, const uint8_t* tx, size_t txL
   if (wire == nullptr) {
     return PCA9555::Status::Error(PCA9555::Err::INVALID_CONFIG, "Wire instance is null");
   }
-#if PCA9555_EXAMPLE_PLATFORM_IDF
-  return wire->writeReadStatus(addr, tx, txLen, rx, rxLen, timeoutMs);
-#else
   (void)timeoutMs;
   if ((txLen > 0 && tx == nullptr) || (rxLen > 0 && rx == nullptr)) {
     return PCA9555::Status::Error(PCA9555::Err::INVALID_PARAM, "Invalid I2C read params");
@@ -153,7 +138,6 @@ inline PCA9555::Status wireWriteRead(uint8_t addr, const uint8_t* tx, size_t txL
   }
 
   return PCA9555::Status::Ok();
-#endif
 }
 
 /**
@@ -186,13 +170,7 @@ inline bool initWire(int sda, int scl, uint32_t freq = 400000, uint16_t timeoutM
   delayMicroseconds(5);
 #endif
 
-#if PCA9555_EXAMPLE_PLATFORM_IDF
-  if (!Wire.begin(sda, scl)) {
-    return false;
-  }
-#else
   Wire.begin(sda, scl);
-#endif
   Wire.setClock(freq);
   Wire.setTimeOut(timeoutMs);
   return true;

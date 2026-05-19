@@ -57,6 +57,14 @@ Rules:
 - Transport errors MUST map to `Status` (no leaking `Wire`, `esp_err_t`, etc.).
 - The library MUST NOT configure bus timeouts or pins.
 
+## Framework Boundaries (Mandatory)
+
+- Core/public headers and `src/` MUST NOT require Arduino or ESP-IDF framework headers.
+- Arduino examples may use Arduino APIs.
+- ESP-IDF examples MUST be native IDF applications using `app_main`, `driver/i2c_master.h`, `esp_timer`, `vTaskDelay`, and fixed C buffers or native console APIs.
+- ESP-IDF examples MUST NOT include Arduino CLI sources or use Arduino compatibility facades such as `ArduinoCompat`, `IdfArduinoCompat`, `Arduino.h`, `Wire.h`, `String`, `Serial`, or `TwoWire`.
+- Maintain CLI command parity through repo-local command contracts/checkers, not by sharing Arduino implementation source.
+
 ---
 
 ## Status / Error Handling (Mandatory)

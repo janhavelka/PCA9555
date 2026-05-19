@@ -103,6 +103,15 @@ Completed locally:
 - `python -m platformio test -e native`
 - `python -m platformio run -e esp32s3dev`
 - `python -m platformio run -e esp32s2dev`
+- `python tools/check_cli_contract.py`
+- `python tools/check_core_timing_guard.py`
+- `python scripts/generate_version.py check`
+- `doxygen Doxyfile`
+
+`tools/check_cli_contract.py` verifies both the advertised Arduino CLI
+command/help surface and the ESP-IDF wrapper contract: platform macro,
+`IdfArduinoCompat.h`, shared source include, `app_main()`, and required IDF
+CMake dependencies.
 
 Pending in this shell:
 

@@ -60,5 +60,9 @@ Branch: `feature/pca9555-idf-port`.
 - `python -m platformio run -e esp32s3dev`: passed.
 - `python -m platformio run -e esp32s2dev`: passed.
 - `python tools/check_cli_contract.py`: passed.
+  - Checks advertised CLI dispatch/help coverage plus the native IDF wrapper
+    macro, shared-source include, `app_main()`, and CMake dependencies.
 - `python tools/check_core_timing_guard.py`: passed.
+- `python scripts/generate_version.py check`: passed.
+- `doxygen Doxyfile`: completed.
 - `git diff --check`: passed during the implementation pass.

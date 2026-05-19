@@ -24,14 +24,58 @@ REQUIRED_COMMON = [
 
 MANDATORY_COMMANDS = [
     "help",
+    "?",
+    "version",
+    "ver",
     "scan",
+    "read",
+    "inputs",
+    "rin",
+    "outputs",
+    "config",
+    "polarity",
+    "cfg",
+    "settings",
+    "rpin",
+    "rout",
+    "rdir",
+    "rpol",
+    "pininfo",
+    "pins",
+    "rreg",
+    "rregs",
+    "dump",
+    "wpin",
+    "toggle",
+    "dir",
+    "wport",
+    "dport",
+    "pol",
+    "wpol",
+    "setbits",
+    "sb",
+    "clearbits",
+    "cb",
+    "togglebits",
+    "tb",
+    "dirin",
+    "dirout",
+    "invertset",
+    "invertclr",
+    "wreg",
+    "wregs",
+    "drv",
     "probe",
     "recover",
-    "drv",
-    "read",
-    "rregs",
-    "wregs",
     "verbose",
+    "selftest",
+    "sweep",
+    "walk",
+    "allhigh",
+    "alllow",
+    "pattern",
+    "pat",
+    "stress_mix",
     "stress",
 ]
 
@@ -61,6 +105,34 @@ def ensure_missing(path: pathlib.Path, label: str) -> None:
         fail(f"forbidden {label} still present: {path.as_posix()}")
 
 
+def require_token(text: str, token: str, label: str) -> None:
+    if token == "?":
+        if '"?"' not in text:
+            fail(f"{label} '{token}' missing")
+        return
+    if re.search(rf"\b{re.escape(token)}\b", text) is None:
+        fail(f"{label} '{token}' missing")
+
+
+def require_dispatch(text: str, token: str) -> None:
+    quoted = re.escape(f'"{token}"')
+    starts_with_arg = rf'"{re.escape(token)}(?:\s|")'
+    patterns = [
+        rf"cmd\s*==\s*{quoted}",
+        rf"cmd\.startsWith\(\s*{starts_with_arg}",
+    ]
+    if not any(re.search(pattern, text) for pattern in patterns):
+        fail(f"mandatory command '{token}' missing from processCommand() dispatch")
+
+
+def require_help(text: str, token: str) -> None:
+    if token == "?":
+        return
+    pattern = rf"printHelpItem\s*\(\s*\"[^\"]*\b{re.escape(token)}\b"
+    if re.search(pattern, text) is None:
+        fail(f"mandatory command '{token}' missing from help text")
+
+
 def main() -> int:
     common_dir = ROOT / "examples" / "common"
     bringup_main = ROOT / "examples" / "01_basic_bringup_cli" / "main.cpp"
@@ -84,11 +156,9 @@ def main() -> int:
     text = bringup_main.read_text(encoding="utf-8", errors="replace")
 
     for cmd in MANDATORY_COMMANDS:
-        if re.search(rf"\b{re.escape(cmd)}\b", text) is None:
-            fail(f"mandatory command '{cmd}' missing in {bringup_main.as_posix()}")
-
-    if re.search(r"\bcfg\b", text) is None and re.search(r"\bsettings\b", text) is None:
-        fail("either 'cfg' or 'settings' command must be present")
+        require_token(text, cmd, "mandatory command")
+        require_dispatch(text, cmd)
+        require_help(text, cmd)
 
     idf_text = idf_main.read_text(encoding="utf-8", errors="replace")
     if f"#define {IDF_EXAMPLE_MACRO} 1" not in idf_text:

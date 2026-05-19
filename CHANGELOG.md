@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `library.json` now declares both `arduino` and `espidf` framework support.
 - Doxygen input now covers the ESP-IDF port notes, implementation notes, shared CLI source, native IDF entry point, and example-only IDF shims.
 - `tools/check_cli_contract.py` now validates the ESP-IDF wrapper macro, shared-source include, and required CMake dependencies.
+- ESP-IDF port docs now spell out the static wrapper contract checks and
+  Doxygen validation coverage.
 - The ESP-IDF CLI parity is structural through shared source; pure IDF `idf.py` builds and hardware validation remain pending until an IDF toolchain and target hardware are available.
 
 ## [1.1.0] - 2026-05-17

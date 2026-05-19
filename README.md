@@ -325,9 +325,9 @@ source with `PCA9555_EXAMPLE_PLATFORM_IDF=1`, supplies a small fixed-capacity
 `String`/serial/GPIO/Wire-compatible shim, and backs I2C transactions with the
 ESP-IDF v6 `i2c_master_*` APIs. The command set, output wording, health
 diagnostics, self-test, stress commands, sweep, walk, and pattern flows stay
-aligned with the Arduino CLI. `tools/check_cli_contract.py` also checks the IDF
-entry point and CMake dependency surface so future wrapper edits cannot silently
-drop parity.
+aligned with the Arduino CLI. `tools/check_cli_contract.py` checks the advertised
+CLI command/help surface plus the IDF entry point and CMake dependency surface
+so future wrapper edits cannot silently drop parity.
 
 ### Example Helpers (`examples/common/`)
 

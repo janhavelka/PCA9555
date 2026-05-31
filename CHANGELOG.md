@@ -7,7 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- Industry-readiness hardening reports, release checklist, and hardware validation matrix.
+- Pure ESP-IDF component metadata and a diagnostic ESP-IDF example.
+- Native fault-injection coverage for register, address, dirty-state, and transport-error paths.
+- Safe runtime output-enabling APIs and interrupt/errata service APIs.
+
+### Changed
+
+- Core library is framework-neutral and uses injected timing/I2C ownership only.
+- `PCA9555::PCA9555` instances are now explicitly non-copyable and non-movable;
+  keep driver instances in stable storage and pass them by reference or pointer.
+- Public documentation now distinguishes output latch state, input-register sense, configuration direction, and physical pin behavior.
+- Release wording is scoped to production-oriented hardening until the hardware validation matrix is executed.
+
+### Release Status
+
+- Version bump decision is pending. `library.json` remains the source of truth and currently still declares `1.1.0`.
+- Copy/move deletion is a source-compatibility change and must be considered before tagging.
+- Real hardware validation has not been run in this branch.
 
 ## [1.1.0] - 2026-05-17
 
@@ -46,7 +65,7 @@ No changes yet.
 ## [1.0.0] - 2026-04-06
 
 ### Added
-- Initial production release of the PCA9555 16-bit I/O expander driver for ESP32-S2 / ESP32-S3 on Arduino / PlatformIO.
+- Initial stable library release of the PCA9555 16-bit I/O expander driver for ESP32-S2 / ESP32-S3 on Arduino / PlatformIO.
 - Managed synchronous driver lifecycle with health states (`UNINIT`, `READY`, `DEGRADED`, `OFFLINE`) and tracked transport wrappers.
 - Injected I2C transport callbacks so library code never owns or touches `Wire` directly.
 - Full 16-bit I/O API for input reads, output writes, direction control, polarity inversion, and direct register access across both ports.

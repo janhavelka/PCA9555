@@ -5,7 +5,6 @@
 
 #include "PCA9555/PCA9555.h"
 
-#include <Arduino.h>
 #include <cstring>
 #include <limits>
 
@@ -28,6 +27,10 @@ static bool isValidPin(Pin pin) {
 
 static bool isValidPort(Port port) {
   return port == Port::PORT_0 || port == Port::PORT_1;
+}
+
+static bool isValidDirection(Direction direction) {
+  return direction == Direction::INPUT_MODE || direction == Direction::OUTPUT_MODE;
 }
 
 static bool isInputRegister(uint8_t reg) {
@@ -68,6 +71,9 @@ private:
 // ===========================================================================
 
 Status PCA9555::begin(const Config& config) {
+  const bool dirtyBeforeBegin = _hardwareStateDirty;
+  const Status dirtyErrorBeforeBegin = _hardwareStateDirtyError;
+
   _config = Config{};
   _initialized = false;
   _driverState = DriverState::UNINIT;
@@ -79,6 +85,8 @@ Status PCA9555::begin(const Config& config) {
   _consecutiveFailures = 0;
   _totalFailures = 0;
   _totalSuccess = 0;
+  _hardwareStateDirty = dirtyBeforeBegin;
+  _hardwareStateDirtyError = dirtyBeforeBegin ? dirtyErrorBeforeBegin : Status::Ok();
 
   _cachedOutput0 = Config{}.outputPort0;
   _cachedOutput1 = Config{}.outputPort1;
@@ -96,6 +104,13 @@ Status PCA9555::begin(const Config& config) {
     _consecutiveFailures = 0;
     _totalFailures = 0;
     _totalSuccess = 0;
+    const bool dirty = _hardwareStateDirty;
+    const Status dirtyError = _hardwareStateDirtyError;
+    _clearHardwareStateDirty();
+    if (dirty) {
+      _hardwareStateDirty = true;
+      _hardwareStateDirtyError = dirtyError;
+    }
     _cachedOutput0 = Config{}.outputPort0;
     _cachedOutput1 = Config{}.outputPort1;
     _cachedConfig0 = Config{}.configPort0;
@@ -105,6 +120,9 @@ Status PCA9555::begin(const Config& config) {
 
   if (config.i2cWrite == nullptr || config.i2cWriteRead == nullptr) {
     return Status::Error(Err::INVALID_CONFIG, "I2C callbacks not set");
+  }
+  if ((config.i2cLock == nullptr) != (config.i2cUnlock == nullptr)) {
+    return Status::Error(Err::INVALID_CONFIG, "I2C lock/unlock callbacks must both be set");
   }
   if (config.i2cTimeoutMs == 0) {
     return Status::Error(Err::INVALID_CONFIG, "I2C timeout must be > 0");
@@ -143,6 +161,7 @@ Status PCA9555::begin(const Config& config) {
 
   _initialized = true;
   _driverState = DriverState::READY;
+  _clearHardwareStateDirty();
 
   return Status::Ok();
 }
@@ -174,6 +193,7 @@ void PCA9555::end() {
   _consecutiveFailures = 0;
   _totalFailures = 0;
   _totalSuccess = 0;
+  _clearHardwareStateDirty();
 }
 
 SettingsSnapshot PCA9555::getSettings() const {
@@ -187,6 +207,8 @@ SettingsSnapshot PCA9555::getSettings() const {
   snapshot.consecutiveFailures = _consecutiveFailures;
   snapshot.totalFailures = _totalFailures;
   snapshot.totalSuccess = _totalSuccess;
+  snapshot.hardwareStateDirty = _hardwareStateDirty;
+  snapshot.hardwareStateDirtyError = _hardwareStateDirtyError;
   return snapshot;
 }
 
@@ -240,6 +262,9 @@ Status PCA9555::recover() {
   if (startedOffline && !result.ok() && !result.inProgress()) {
     _reassertOfflineLatch();
   }
+  if (result.ok()) {
+    _clearHardwareStateDirty();
+  }
   return result;
 }
 
@@ -252,25 +277,47 @@ Status PCA9555::readInputs(PortData& data) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
-  // Burst read both input ports (auto-increment within pair)
   uint8_t buf[2] = {};
-  Status st = readRegs(cmd::REG_INPUT_PORT_0, buf, 2);
-  if (!st.ok()) {
-    return st;
+  bool readCompleted = false;
+  Status st = _readInputRegistersCompound(cmd::REG_INPUT_PORT_0, buf, 2, readCompleted);
+  if (readCompleted) {
+    data.port0 = buf[0];
+    data.port1 = buf[1];
   }
 
-  data.port0 = buf[0];
-  data.port1 = buf[1];
+  return st;
+}
 
-  // Interrupt errata workaround
-  if (_config.applyInterruptErrata) {
-    st = _applyInterruptErrata();
-    if (!st.ok()) {
-      return st;
-    }
+Status PCA9555::readInputsAndClearInterrupt(uint16_t& value) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
-  return Status::Ok();
+  uint8_t buf[2] = {};
+  bool readCompleted = false;
+  Status st = _readInputRegistersCompound(cmd::REG_INPUT_PORT_0, buf, 2, readCompleted);
+  if (readCompleted) {
+    value = static_cast<uint16_t>((static_cast<uint16_t>(buf[1]) << 8) | buf[0]);
+  }
+  return st;
+}
+
+Status PCA9555::clearInterrupts() {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+
+  uint8_t buf[2] = {};
+  bool readCompleted = false;
+  return _readInputRegistersCompound(cmd::REG_INPUT_PORT_0, buf, 2, readCompleted);
+}
+
+Status PCA9555::applyInterruptErrataWorkaround() {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+
+  return _applyInterruptErrataUnlocked();
 }
 
 Status PCA9555::readInput(Port port, uint8_t& value) {
@@ -285,20 +332,13 @@ Status PCA9555::readInput(Port port, uint8_t& value) {
     ? cmd::REG_INPUT_PORT_0
     : cmd::REG_INPUT_PORT_1;
 
-  Status st = readRegs(reg, &value, 1);
-  if (!st.ok()) {
-    return st;
+  uint8_t buf = 0;
+  bool readCompleted = false;
+  Status st = _readInputRegistersCompound(reg, &buf, 1, readCompleted);
+  if (readCompleted) {
+    value = buf;
   }
-
-  // Interrupt errata workaround
-  if (_config.applyInterruptErrata) {
-    st = _applyInterruptErrata();
-    if (!st.ok()) {
-      return st;
-    }
-  }
-
-  return Status::Ok();
+  return st;
 }
 
 Status PCA9555::readPin(Pin pin, bool& state) {
@@ -310,14 +350,16 @@ Status PCA9555::readPin(Pin pin, bool& state) {
   }
 
   const Port port = (pin < cmd::PINS_PER_PORT) ? Port::PORT_0 : Port::PORT_1;
+  const uint8_t reg = (port == Port::PORT_0)
+    ? cmd::REG_INPUT_PORT_0
+    : cmd::REG_INPUT_PORT_1;
   uint8_t value = 0;
-  Status st = readInput(port, value);
-  if (!st.ok()) {
-    return st;
+  bool readCompleted = false;
+  Status st = _readInputRegistersCompound(reg, &value, 1, readCompleted);
+  if (readCompleted) {
+    state = (value & bitMaskForPin(pin)) != 0;
   }
-
-  state = (value & bitMaskForPin(pin)) != 0;
-  return Status::Ok();
+  return st;
 }
 
 // ===========================================================================
@@ -460,6 +502,47 @@ Status PCA9555::readOutputs(PortData& data) {
   return Status::Ok();
 }
 
+Status PCA9555::preloadOutput(Pin pin, bool high) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPin(pin)) {
+    return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
+  }
+
+  const uint16_t mask = static_cast<uint16_t>(1U << pin);
+  const uint16_t values = high ? mask : 0U;
+  return preloadOutputs(mask, values);
+}
+
+Status PCA9555::preloadOutputs(uint16_t mask, uint16_t values) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (mask == 0) {
+    return Status::Ok();
+  }
+
+  PortData data;
+  data.port0 = static_cast<uint8_t>((_cachedOutput0 & ~static_cast<uint8_t>(mask & 0xFFU)) |
+      (static_cast<uint8_t>(values) & static_cast<uint8_t>(mask)));
+  data.port1 = static_cast<uint8_t>((_cachedOutput1 &
+      ~static_cast<uint8_t>((mask >> 8) & 0xFFU)) |
+      (static_cast<uint8_t>(values >> 8) & static_cast<uint8_t>(mask >> 8)));
+
+  const uint8_t buf[2] = {data.port0, data.port1};
+  Status st = writeRegs(cmd::REG_OUTPUT_PORT_0, buf, 2);
+  if (!st.ok()) {
+    return st;
+  }
+
+  _cachedOutput0 = data.port0;
+  _cachedOutput1 = data.port1;
+  _config.outputPort0 = data.port0;
+  _config.outputPort1 = data.port1;
+  return Status::Ok();
+}
+
 // ===========================================================================
 // Bit Manipulation API
 // ===========================================================================
@@ -550,15 +633,16 @@ Status PCA9555::configureOutputBits(uint16_t mask) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
-  PortData data;
-  data.port0 = _cachedConfig0 & static_cast<uint8_t>(~mask & 0xFF);
-  data.port1 = _cachedConfig1 & static_cast<uint8_t>(~(mask >> 8) & 0xFF);
-
-  if (data.port0 == _cachedConfig0 && data.port1 == _cachedConfig1) {
+  const uint16_t currentConfig = static_cast<uint16_t>(
+      (static_cast<uint16_t>(_cachedConfig1) << 8) | _cachedConfig0);
+  const uint16_t transitionMask = static_cast<uint16_t>(currentConfig & mask);
+  if (transitionMask == 0) {
     return Status::Ok();
   }
 
-  return setConfiguration(data);
+  const uint16_t cachedOutputs = static_cast<uint16_t>(
+      (static_cast<uint16_t>(_cachedOutput1) << 8) | _cachedOutput0);
+  return configureOutputs(transitionMask, cachedOutputs);
 }
 
 Status PCA9555::setInvertBits(uint16_t mask) {
@@ -604,6 +688,22 @@ Status PCA9555::setConfiguration(const PortData& data) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
+  const uint16_t inputToOutputMask = static_cast<uint16_t>(
+      ((static_cast<uint16_t>(_cachedConfig1) << 8) | _cachedConfig0) &
+      ~((static_cast<uint16_t>(data.port1) << 8) | data.port0));
+  if (inputToOutputMask != 0) {
+    const uint16_t cachedOutputs = static_cast<uint16_t>(
+        (static_cast<uint16_t>(_cachedOutput1) << 8) | _cachedOutput0);
+    Status st = preloadOutputs(inputToOutputMask, cachedOutputs);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+
+  return _writeConfigurationNoPreload(data);
+}
+
+Status PCA9555::_writeConfigurationNoPreload(const PortData& data) {
   const uint8_t buf[2] = {data.port0, data.port1};
   Status st = writeRegs(cmd::REG_CONFIG_PORT_0, buf, 2);
   if (!st.ok()) {
@@ -625,6 +725,24 @@ Status PCA9555::setPortConfiguration(Port port, uint8_t value) {
     return Status::Error(Err::INVALID_PARAM, "Port out of range");
   }
 
+  const uint8_t currentConfig = (port == Port::PORT_0) ? _cachedConfig0 : _cachedConfig1;
+  const uint8_t inputToOutputMask = static_cast<uint8_t>(currentConfig & ~value);
+  if (inputToOutputMask != 0) {
+    const uint16_t mask = (port == Port::PORT_0)
+        ? inputToOutputMask
+        : static_cast<uint16_t>(inputToOutputMask) << 8;
+    const uint16_t cachedOutputs = static_cast<uint16_t>(
+        (static_cast<uint16_t>(_cachedOutput1) << 8) | _cachedOutput0);
+    Status st = preloadOutputs(mask, cachedOutputs);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+
+  return _writePortConfigurationNoPreload(port, value);
+}
+
+Status PCA9555::_writePortConfigurationNoPreload(Port port, uint8_t value) {
   const uint8_t reg = (port == Port::PORT_0)
     ? cmd::REG_CONFIG_PORT_0
     : cmd::REG_CONFIG_PORT_1;
@@ -840,6 +958,46 @@ Status PCA9555::setPinDirection(Pin pin, bool input) {
   return setPortConfiguration(port, newVal);
 }
 
+Status PCA9555::setDirection(Pin pin, Direction direction) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPin(pin)) {
+    return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
+  }
+  if (!isValidDirection(direction)) {
+    return Status::Error(Err::INVALID_PARAM, "Invalid direction");
+  }
+
+  return setPinDirection(pin, direction == Direction::INPUT_MODE);
+}
+
+Status PCA9555::configureOutputs(uint16_t outputMask, uint16_t outputValues) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (outputMask == 0) {
+    return Status::Ok();
+  }
+
+  Status st = preloadOutputs(outputMask, outputValues);
+  if (!st.ok()) {
+    return st;
+  }
+
+  PortData data;
+  data.port0 = static_cast<uint8_t>(_cachedConfig0 &
+      ~static_cast<uint8_t>(outputMask & 0xFFU));
+  data.port1 = static_cast<uint8_t>(_cachedConfig1 &
+      ~static_cast<uint8_t>((outputMask >> 8) & 0xFFU));
+
+  if (data.port0 == _cachedConfig0 && data.port1 == _cachedConfig1) {
+    return Status::Ok();
+  }
+
+  return _writeConfigurationNoPreload(data);
+}
+
 Status PCA9555::getPinDirection(Pin pin, bool& input) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
@@ -881,7 +1039,13 @@ Status PCA9555::readRegisters(uint8_t startReg, uint8_t* buf, size_t len) {
     return Status::Error(Err::INVALID_PARAM, "Read length too large");
   }
 
-  Status st = readRegs(startReg, buf, len);
+  Status st = Status::Ok();
+  if (isInputRegister(startReg)) {
+    bool readCompleted = false;
+    st = _readInputRegistersCompound(startReg, buf, len, readCompleted);
+  } else {
+    st = readRegs(startReg, buf, len);
+  }
   if (!st.ok()) {
     return st;
   }
@@ -890,12 +1054,6 @@ Status PCA9555::readRegisters(uint8_t startReg, uint8_t* buf, size_t len) {
     _syncShadowRegister(pairedRegisterAt(startReg, i), buf[i]);
   }
 
-  if (isInputRegister(startReg) && _config.applyInterruptErrata) {
-    st = _applyInterruptErrata();
-    if (!st.ok()) {
-      return st;
-    }
-  }
   return Status::Ok();
 }
 
@@ -981,6 +1139,9 @@ Status PCA9555::_i2cWriteTracked(const uint8_t* buf, size_t len) {
   if (st.code == Err::INVALID_CONFIG || st.code == Err::INVALID_PARAM) {
     return st;
   }
+  if (len > 1 && !st.ok() && !st.inProgress()) {
+    _markHardwareStateDirty(st);
+  }
   return _updateHealth(st);
 }
 
@@ -1019,6 +1180,41 @@ Status PCA9555::writeRegs(uint8_t startReg, const uint8_t* buf, size_t len) {
   std::memcpy(&payload[1], buf, len);
 
   return _i2cWriteTracked(payload, len + 1);
+}
+
+Status PCA9555::_readInputRegistersLocked(uint8_t startReg, uint8_t* buf, size_t len,
+                                          bool& readCompleted) {
+  readCompleted = false;
+  Status st = readRegs(startReg, buf, len);
+  if (!st.ok()) {
+    return st;
+  }
+
+  readCompleted = true;
+  if (_config.applyInterruptErrata) {
+    st = _applyInterruptErrataUnlocked();
+    if (!st.ok()) {
+      return st;
+    }
+  }
+
+  return Status::Ok();
+}
+
+Status PCA9555::_readInputRegistersCompound(uint8_t startReg, uint8_t* buf, size_t len,
+                                            bool& readCompleted) {
+  readCompleted = false;
+  bool locked = false;
+  if (_config.applyInterruptErrata) {
+    Status st = _lockBus(locked);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+
+  Status st = _readInputRegistersLocked(startReg, buf, len, readCompleted);
+  _unlockBus(locked);
+  return st;
 }
 
 Status PCA9555::_readRegisterRaw(uint8_t reg, uint8_t& value) {
@@ -1104,19 +1300,13 @@ Status PCA9555::_applyConfig() {
     return st;
   }
 
-  // Step 4: Read input ports to clear any pending interrupts.
+  // Step 4/5: Read input ports to clear any pending interrupts, then apply
+  // the errata workaround while holding any configured compound-sequence lock.
   uint8_t inputBuf[2] = {};
-  st = readRegs(cmd::REG_INPUT_PORT_0, inputBuf, 2);
+  bool readCompleted = false;
+  st = _readInputRegistersCompound(cmd::REG_INPUT_PORT_0, inputBuf, 2, readCompleted);
   if (!st.ok()) {
     return st;
-  }
-
-  // Step 5: Apply interrupt errata workaround.
-  if (_config.applyInterruptErrata) {
-    st = _applyInterruptErrata();
-    if (!st.ok()) {
-      return st;
-    }
   }
 
   // Update cached state
@@ -1128,12 +1318,36 @@ Status PCA9555::_applyConfig() {
   return Status::Ok();
 }
 
-Status PCA9555::_applyInterruptErrata() {
+Status PCA9555::_applyInterruptErrataUnlocked() {
   // Write a command byte != 0x00 to prevent false interrupt de-assertion
   // when another device on the bus is read.
   // We send just the command byte (register pointer) without data.
   const uint8_t safeCmd = cmd::ERRATA_SAFE_CMD;
   return _i2cWriteTracked(&safeCmd, 1);
+}
+
+Status PCA9555::_lockBus(bool& locked) {
+  locked = false;
+  if (_config.i2cLock == nullptr && _config.i2cUnlock == nullptr) {
+    return Status::Ok();
+  }
+  if (_config.i2cLock == nullptr || _config.i2cUnlock == nullptr) {
+    return Status::Error(Err::INVALID_CONFIG, "I2C lock/unlock callbacks must both be set");
+  }
+
+  Status st = _config.i2cLock(_config.lockUser, _config.i2cTimeoutMs);
+  if (!st.ok()) {
+    return st;
+  }
+
+  locked = true;
+  return Status::Ok();
+}
+
+void PCA9555::_unlockBus(bool locked) {
+  if (locked && _config.i2cUnlock != nullptr) {
+    _config.i2cUnlock(_config.lockUser);
+  }
 }
 
 void PCA9555::_syncShadowRegister(uint8_t reg, uint8_t value) {
@@ -1169,7 +1383,22 @@ uint32_t PCA9555::_nowMs() const {
   if (_config.nowMs != nullptr) {
     return _config.nowMs(_config.timeUser);
   }
-  return millis();
+  return 0;
+}
+
+void PCA9555::_markHardwareStateDirty(const Status& st) {
+  if (st.ok() || st.inProgress() ||
+      st.code == Err::INVALID_CONFIG || st.code == Err::INVALID_PARAM ||
+      st.code == Err::NOT_INITIALIZED || st.code == Err::BUSY) {
+    return;
+  }
+  _hardwareStateDirty = true;
+  _hardwareStateDirtyError = st;
+}
+
+void PCA9555::_clearHardwareStateDirty() {
+  _hardwareStateDirty = false;
+  _hardwareStateDirtyError = Status::Ok();
 }
 
 } // namespace PCA9555

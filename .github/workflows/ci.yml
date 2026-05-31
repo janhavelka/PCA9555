@@ -79,6 +79,9 @@ jobs:
       - name: Enforce ESP-IDF example contract
         run: python tools/check_idf_example_contract.py
 
+      - name: Enforce HIL runner contract
+        run: python tools/check_hil_contract.py
+
       - name: Run native tests
         run: pio test -e native
 

@@ -12,6 +12,9 @@ Baseline and release evidence:
 - [Pre-hardening industry readiness audit baseline](docs/PCA9555_INDUSTRY_READINESS_AUDIT.md)
 - [Release checklist](docs/PCA9555_RELEASE_CHECKLIST.md)
 - [Hardware validation matrix](docs/PCA9555_HARDWARE_VALIDATION_MATRIX.md)
+- [I2C HIL runbook](docs/I2C_HIL_RUNBOOK.md)
+- [I2C HIL target template](docs/I2C_HIL_TARGET_TEMPLATE.md)
+- [I2C HIL self-test report](docs/I2C_HIL_SELFTEST_REPORT.md)
 - [Prompt 07 documentation/release-gates report](docs/PCA9555_HARDENING_PROMPT_07_DOCS_RELEASE_GATES_REPORT.md)
 
 ## Features
@@ -532,6 +535,12 @@ python tools/check_core_timing_guard.py
 # Check the pure ESP-IDF example contract
 python tools/check_idf_example_contract.py
 
+# Check host-side I2C HIL runner/docs contract
+python tools/check_hil_contract.py
+
+# Plan a HIL run without opening serial or claiming hardware validation
+python tools/run_i2c_hil.py --dry-run
+
 # Build the pure ESP-IDF diagnostic example if idf.py is installed
 idf.py -C examples/esp_idf/basic set-target esp32s3 build
 idf.py -C examples/esp_idf/basic set-target esp32s2 build
@@ -542,6 +551,9 @@ idf.py -C examples/esp_idf/basic set-target esp32s2 build
 - [CHANGELOG](CHANGELOG.md)
 - [Release Checklist](docs/PCA9555_RELEASE_CHECKLIST.md)
 - [Hardware Validation Matrix](docs/PCA9555_HARDWARE_VALIDATION_MATRIX.md)
+- [I2C HIL Runbook](docs/I2C_HIL_RUNBOOK.md)
+- [I2C HIL Target Template](docs/I2C_HIL_TARGET_TEMPLATE.md)
+- [I2C HIL Self-Test Report](docs/I2C_HIL_SELFTEST_REPORT.md)
 - [Hardening Prompt 01 Report](docs/PCA9555_HARDENING_PROMPT_01_CORE_PORTABILITY_REPORT.md)
 - [Hardening Prompt 02 Report](docs/PCA9555_HARDENING_PROMPT_02_DIRTY_STATE_REPORT.md)
 - [Hardening Prompt 03 Report](docs/PCA9555_HARDENING_PROMPT_03_GLITCH_SAFE_DIRECTION_REPORT.md)

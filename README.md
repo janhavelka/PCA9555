@@ -1,6 +1,6 @@
 # PCA9555 Driver Library
 
-Production-grade PCA9555 16-bit I/O expander I2C driver for ESP32 (Arduino/PlatformIO).
+Production-grade PCA9555 16-bit I/O expander I2C driver for ESP32 (Arduino/PlatformIO and ESP-IDF).
 
 ## Features
 
@@ -31,6 +31,32 @@ lib_deps =
 ### Manual
 
 Copy `include/PCA9555/` and `src/` to your project.
+
+### ESP-IDF Component
+
+This repository also builds as a pure ESP-IDF component. Add the repo as an
+extra component or dependency, then include `PCA9555/PCA9555.h` and provide
+`Config::i2cWrite` / `Config::i2cWriteRead` callbacks from your project-owned
+I2C master bus.
+
+The ESP-IDF bring-up CLI is implemented as a native IDF example with the same
+command contract as the Arduino CLI:
+
+```bash
+cd examples/espidf_basic
+idf.py set-target esp32s3
+idf.py build
+```
+
+The ESP-IDF example uses `app_main`, `driver/i2c_master.h`, `esp_timer`,
+`vTaskDelay`, and fixed C command buffers. It does not include Arduino CLI
+sources or compatibility facades.
+
+Mutating ESP-IDF CLI commands require a final `confirm` token. Without it, the
+example prints what would change, why confirmation is required, and the exact
+confirmed command form. Validation status: command parity is checked by
+repo-local contract scripts. ESP-IDF hardware smoke tests and output-driving
+validation remain pending until target devices are available.
 
 ## Quick Start
 
@@ -85,8 +111,8 @@ void loop() {
 
 Provide your own `Config::i2cWrite` and `Config::i2cWriteRead` callbacks, or copy/adapt the
 ready-made Arduino helper from `examples/common/I2cTransport.h`. That helper is example-only
-and not part of the installed library package. If you do not inject `Config::nowMs`, the
-driver falls back to `millis()` on Arduino/native-test builds.
+and not part of the installed library package. Applications that need meaningful health
+timestamps should inject `Config::nowMs`; otherwise timestamps remain `0`.
 
 ## Health Monitoring
 
@@ -280,18 +306,33 @@ Run `help` on the serial console for the complete command list. Diagnostic
 output uses physical PCA9555 labels (`P00-P07`, `P10-P17`) while command
 arguments keep the driver API's linear pin numbering (`0-15`). Stress progress
 lines are intentionally plain except for the `ok=` and `fail=` result counts.
+In the native ESP-IDF CLI, output-driving, direction, polarity, raw write,
+pattern, recovery, self-test, sweep/walk, and stress commands require a final
+`confirm` token.
 
 Typical bring-up commands:
 
 ```text
 scan
 cfg
-pattern 0x00FF
+pattern 0x00FF confirm
 read input port 0
 read output port 1
 pininfo 12
 pins
 ```
+
+### espidf_basic
+
+Native ESP-IDF build of the bring-up CLI command contract. It uses `app_main`,
+`driver/i2c_master.h`, `esp_timer`, `vTaskDelay`, and fixed C buffers. The
+command set, output wording, health diagnostics, self-test, stress commands,
+sweep, walk, and pattern flows stay aligned with the Arduino CLI contract.
+`tools/check_idf_example_contract.py` rejects Arduino compatibility facades and
+checks the native IDF command surface, persistent device handle, and explicit
+confirmation guard. ESP-IDF hardware validation is pending; do not treat the
+native example as hardware-proven for output-driving workflows until that smoke
+test is completed.
 
 ### Example Helpers (`examples/common/`)
 
@@ -323,6 +364,10 @@ pio run -e esp32s2dev
 # Run native unit tests (requires host GCC)
 pio test -e native
 
+# Build the ESP-IDF full CLI example (requires ESP-IDF on PATH)
+cd examples/espidf_basic
+idf.py build
+
 # Check repo-standardized CLI/helper and timing contracts
 python tools/check_cli_contract.py
 python tools/check_core_timing_guard.py
@@ -331,12 +376,14 @@ python tools/check_core_timing_guard.py
 ## Documentation
 
 - [CHANGELOG](CHANGELOG.md)
-- [Release Notes v1.1.0](docs/releases/v1.1.0.md)
-- [Release Notes v1.0.0](docs/releases/v1.0.0.md)
 - [PCA9555 Implementation Manual](PCA9555_io_expander_implementation_manual.md)
+- [ESP-IDF Port Notes](docs/IDF_PORT.md)
+- [ESP-IDF Port Implementation Notes](docs/IDF_PORT_IMPLEMENTATION.md)
 - [Register Reference](docs/register_reference.md)
 - [Auto-Increment Feature](docs/application_notes/auto_increment_feature.md)
 - [Contributing Guide](CONTRIBUTING.md)
+- `Doxyfile` indexes public headers, the ESP-IDF port notes, the Arduino CLI,
+  and the native IDF entry point.
 
 ## License
 

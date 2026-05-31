@@ -5,7 +5,6 @@
 
 #include "PCA9555/PCA9555.h"
 
-#include <Arduino.h>
 #include <cstring>
 #include <limits>
 
@@ -1169,7 +1168,7 @@ uint32_t PCA9555::_nowMs() const {
   if (_config.nowMs != nullptr) {
     return _config.nowMs(_config.timeUser);
   }
-  return millis();
+  return 0U;
 }
 
 } // namespace PCA9555

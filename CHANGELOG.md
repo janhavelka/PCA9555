@@ -9,9 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ESP-IDF component metadata and a native ESP-IDF `examples/espidf_basic` build of the full bring-up CLI command contract.
-- ESP-IDF port audit documentation in `docs/IDF_PORT.md`.
-- ESP-IDF port implementation notes in `docs/IDF_PORT_IMPLEMENTATION.md`.
+- ESP-IDF component metadata and a native ESP-IDF `examples/espidf_basic` CLI example.
+- ESP-IDF port notes in `docs/IDF_PORT.md` and implementation notes in `docs/IDF_PORT_IMPLEMENTATION.md`.
+- Dirty-state diagnostics: `hardwareStateDirty()`, `hardwareStateDirtyError()`, and dirty-state fields in `SettingsSnapshot`.
+- Glitch-safe output enabling APIs: `preloadOutput()`, `preloadOutputs()`, `setDirection()`, and `configureOutputs()`.
+- Interrupt service APIs: `readInputsAndClearInterrupt()`, `clearInterrupts()`, and `applyInterruptErrataWorkaround()`.
+- Optional shared-bus lock hooks: `Config::i2cLock`, `Config::i2cUnlock`, and `Config::lockUser`.
+- Native fault-injection coverage for register writes, address handling, dirty state, interrupt/errata paths, and transport errors.
+- Release checklist and hardware validation matrix.
+- Host-side I2C HIL runner and operator templates.
 
 ### Changed
 
@@ -22,6 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tools/check_idf_example_contract.py` now validates the native ESP-IDF boundary, command surface, and required CMake dependencies.
 - ESP-IDF CLI parity is checked through repo-local command contracts; hardware validation remains pending until target hardware is available.
 - Native ESP-IDF mutating CLI commands now require explicit `confirm` suffixes and print a concrete preview plus confirmed command form when omitted.
+- Core library is framework-neutral and uses injected timing/I2C ownership only.
+- `PCA9555::PCA9555` instances are now explicitly non-copyable and non-movable;
+  keep driver instances in stable storage and pass them by reference or pointer.
+- Public documentation now distinguishes output latch state, input-register sense, configuration direction, and physical pin behavior.
+- Release wording is scoped to production-oriented hardening until the hardware validation matrix is executed.
+
+### Release Status
+
+- Versioning is deferred for this merge branch. `library.json` and `idf_component.yml` still declare `1.1.0`.
+- Copy/move deletion is source-compatibility significant and must be considered before tagging a release.
+- Pure ESP-IDF local builds still require `idf.py` evidence.
+- Real hardware validation has not been run in this branch.
 
 ## [1.1.0] - 2026-05-17
 
@@ -60,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2026-04-06
 
 ### Added
-- Initial production release of the PCA9555 16-bit I/O expander driver for ESP32-S2 / ESP32-S3 on Arduino / PlatformIO.
+- Initial stable library release of the PCA9555 16-bit I/O expander driver for ESP32-S2 / ESP32-S3 on Arduino / PlatformIO.
 - Managed synchronous driver lifecycle with health states (`UNINIT`, `READY`, `DEGRADED`, `OFFLINE`) and tracked transport wrappers.
 - Injected I2C transport callbacks so library code never owns or touches `Wire` directly.
 - Full 16-bit I/O API for input reads, output writes, direction control, polarity inversion, and direct register access across both ports.

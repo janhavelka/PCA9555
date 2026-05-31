@@ -28,6 +28,72 @@ REQUIRED_NATIVE_TOKENS = [
     "i2c_new_master_bus",
 ]
 
+FORBIDDEN_PLACEHOLDER_TEXT = [
+    "Command is present in the native IDF contract; use help for arguments.",
+    "Command is intentionally blocked in this native IDF example",
+    "Use hardware-specific test firmware for destructive/output-driving workflows.",
+]
+
+REQUIRED_CONFIRMATION_TOKENS = [
+    "Confirmation required.",
+    "Would change:",
+    "Why confirmation is required:",
+    "Confirmed command:",
+    "parseConfirmSuffix",
+    "requireConfirmation",
+]
+
+REQUIRED_IDF_SURFACE_TOKENS = [
+    "i2c_master_dev_handle_t device",
+    "ensureDevice",
+    "cmdWritePin",
+    "gDev.writePin",
+    "cmdTogglePin",
+    "gDev.togglePin",
+    "cmdSetDirection",
+    "gDev.setPinDirection",
+    "cmdWritePort",
+    "gDev.writeOutput",
+    "cmdSetPortDirection",
+    "gDev.setPortConfiguration",
+    "cmdSetPinPolarity",
+    "gDev.setPinPolarity",
+    "cmdSetPortPolarity",
+    "gDev.setPortPolarity",
+    "MaskCommand::SET_OUTPUT",
+    "gDev.setOutputBits",
+    "gDev.clearOutputBits",
+    "gDev.toggleOutputBits",
+    "gDev.configureInputBits",
+    "gDev.configureOutputBits",
+    "gDev.setInvertBits",
+    "gDev.clearInvertBits",
+    "cmdWriteReg",
+    "gDev.writeRegister",
+    "cmdWriteRegs",
+    "gDev.writeRegisters",
+    "cmdPattern",
+    "cmdSweep",
+    "cmdWalk",
+    "cmdSelfTest",
+    "cmdStress",
+    "cmdStressMix",
+    "cmdRecover",
+]
+
+REQUIRED_CONFIRMED_HELP_TEXT = [
+    "write pin <N> <0|1> / wpin <N> <0|1> [confirm]",
+    "dir pin <N> <in|out> / dir <N> <in|out> [confirm]",
+    "write port <P> <V> / wport <P> <V> [confirm]",
+    "dir port <P> <V> / dport <P> <V> [confirm]",
+    "polarity pin <N> <0|1> / pol <N> <0|1> [confirm]",
+    "polarity port <P> <V> / wpol <P> <V> [confirm]",
+    "write reg <R> <V> / wreg <R> <V> [confirm]",
+    "pattern <VALUE> / pat <VALUE> [confirm]",
+    "recover [confirm]",
+    "selftest [confirm] | stress [N] [confirm] | stress_mix [N] [confirm]",
+]
+
 
 def fail(msg: str) -> None:
     print(f"IDF example contract FAILED: {msg}")
@@ -49,6 +115,18 @@ def main() -> int:
     for token in REQUIRED_NATIVE_TOKENS:
         if token not in text:
             fail(f"native ESP-IDF token missing: {token}")
+    for token in FORBIDDEN_PLACEHOLDER_TEXT:
+        if token in text:
+            fail(f"old placeholder command text still present: {token}")
+    for token in REQUIRED_CONFIRMATION_TOKENS:
+        if token not in text:
+            fail(f"confirmation guard token missing: {token}")
+    for token in REQUIRED_IDF_SURFACE_TOKENS:
+        if token not in text:
+            fail(f"native IDF command surface token missing: {token}")
+    for token in REQUIRED_CONFIRMED_HELP_TEXT:
+        if token not in text:
+            fail(f"confirmed command help text missing: {token}")
     for cmd in commands:
         if cmd == "?":
             if '"?"' not in text and " / ?" not in text and " | ?" not in text:

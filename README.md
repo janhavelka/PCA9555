@@ -52,8 +52,11 @@ The ESP-IDF example uses `app_main`, `driver/i2c_master.h`, `esp_timer`,
 `vTaskDelay`, and fixed C command buffers. It does not include Arduino CLI
 sources or compatibility facades.
 
-Validation status: command parity is checked by repo-local contract scripts.
-Hardware smoke tests are still pending until target devices are available.
+Mutating ESP-IDF CLI commands require a final `confirm` token. Without it, the
+example prints what would change, why confirmation is required, and the exact
+confirmed command form. Validation status: command parity is checked by
+repo-local contract scripts. ESP-IDF hardware smoke tests and output-driving
+validation remain pending until target devices are available.
 
 ## Quick Start
 
@@ -303,13 +306,16 @@ Run `help` on the serial console for the complete command list. Diagnostic
 output uses physical PCA9555 labels (`P00-P07`, `P10-P17`) while command
 arguments keep the driver API's linear pin numbering (`0-15`). Stress progress
 lines are intentionally plain except for the `ok=` and `fail=` result counts.
+In the native ESP-IDF CLI, output-driving, direction, polarity, raw write,
+pattern, recovery, self-test, sweep/walk, and stress commands require a final
+`confirm` token.
 
 Typical bring-up commands:
 
 ```text
 scan
 cfg
-pattern 0x00FF
+pattern 0x00FF confirm
 read input port 0
 read output port 1
 pininfo 12
@@ -323,7 +329,10 @@ Native ESP-IDF build of the bring-up CLI command contract. It uses `app_main`,
 command set, output wording, health diagnostics, self-test, stress commands,
 sweep, walk, and pattern flows stay aligned with the Arduino CLI contract.
 `tools/check_idf_example_contract.py` rejects Arduino compatibility facades and
-checks the native IDF command surface.
+checks the native IDF command surface, persistent device handle, and explicit
+confirmation guard. ESP-IDF hardware validation is pending; do not treat the
+native example as hardware-proven for output-driving workflows until that smoke
+test is completed.
 
 ### Example Helpers (`examples/common/`)
 

@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Doxygen input now covers the ESP-IDF port notes, implementation notes, Arduino CLI source, and native IDF entry point.
 - `tools/check_idf_example_contract.py` now validates the native ESP-IDF boundary, command surface, and required CMake dependencies.
 - ESP-IDF CLI parity is checked through repo-local command contracts; hardware validation remains pending until target hardware is available.
+- Native ESP-IDF mutating CLI commands now require explicit `confirm` suffixes and print a concrete preview plus confirmed command form when omitted.
 
 ## [1.1.0] - 2026-05-17
 

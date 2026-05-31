@@ -11,6 +11,8 @@ Release evidence:
 
 - [Release checklist](docs/PCA9555_RELEASE_CHECKLIST.md)
 - [Hardware validation matrix](docs/PCA9555_HARDWARE_VALIDATION_MATRIX.md)
+- [I2C HIL runbook](docs/I2C_HIL_RUNBOOK.md)
+- [I2C HIL target template](docs/I2C_HIL_TARGET_TEMPLATE.md)
 
 ## Features
 
@@ -561,6 +563,12 @@ python tools/check_core_timing_guard.py
 
 # Check the pure ESP-IDF example contract
 python tools/check_idf_example_contract.py
+
+# Check host-side I2C HIL runner/docs contract
+python tools/check_hil_contract.py
+
+# Plan a HIL run without opening serial or claiming hardware validation
+python tools/run_i2c_hil.py --dry-run
 ```
 
 ## Documentation
@@ -568,6 +576,8 @@ python tools/check_idf_example_contract.py
 - [CHANGELOG](CHANGELOG.md)
 - [Release Checklist](docs/PCA9555_RELEASE_CHECKLIST.md)
 - [Hardware Validation Matrix](docs/PCA9555_HARDWARE_VALIDATION_MATRIX.md)
+- [I2C HIL Runbook](docs/I2C_HIL_RUNBOOK.md)
+- [I2C HIL Target Template](docs/I2C_HIL_TARGET_TEMPLATE.md)
 - [Release Notes v1.0.0](docs/releases/v1.0.0.md)
 - [PCA9555 Implementation Manual](PCA9555_io_expander_implementation_manual.md)
 - [ESP-IDF Port Notes](docs/IDF_PORT.md)

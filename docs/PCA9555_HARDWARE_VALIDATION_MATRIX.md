@@ -9,6 +9,8 @@ evidence.
 - MCU target: ESP32-S2 and/or ESP32-S3, exact board revision: TBD
 - Firmware path: `examples/01_basic_bringup_cli` for Arduino/PlatformIO and
   `examples/espidf_basic` or equivalent app for pure ESP-IDF
+- Host-side Arduino CLI HIL runner: `python tools/run_i2c_hil.py --port <PORT> --baud 115200 --address 0x20`
+- Dry-run planning only: `python tools/run_i2c_hil.py --dry-run`
 - Default Arduino CLI wiring: SDA GPIO8, SCL GPIO9, 400 kHz, address `0x20`,
   serial `115200`
 - PCA9555 VCC: TBD
@@ -26,6 +28,9 @@ evidence.
 - For brownout tests, switch only the intended rail and keep signal injection
   through safe impedance.
 - `probe()` proves address response only. It does not prove chip identity.
+- Automated HIL summaries under `hil_logs/` are evidence containers, not
+  production validation claims by themselves. Manual and visual rows remain
+  `OPERATOR_CHECK_REQUIRED` until evidence is attached.
 - `recover()` reapplies cached desired state. It cannot force a true PCA9555 POR.
 
 ## Matrix

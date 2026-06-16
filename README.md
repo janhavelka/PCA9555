@@ -8,13 +8,15 @@ Production-grade PCA9555 16-bit I/O expander I2C driver for ESP32 (Arduino/Platf
 - **Health monitoring** - automatic state tracking (READY/DEGRADED/OFFLINE)
 - **Deterministic behavior** - no unbounded loops, no heap allocations
 - **Managed synchronous lifecycle** - blocking I2C ops with clean begin/tick/end
+- **Chunked jobs** - caller-selected instruction budgets for input reads, output writes, and safe output configuration
 - **Settings snapshot** - access the active runtime config and health counters with `getSettings()`
 - **16-bit I/O** - two independent 8-bit ports (Port 0 and Port 1)
 - **Interrupt errata workaround** - configurable automatic errata mitigation
-- **Single-pin helpers** - pin-level readback plus atomic read-modify-write for output, direction, and polarity
+- **Single-pin helpers** - pin-level readback plus cached shadow updates for output, direction, and polarity
 - **Bit manipulation helpers** - 16-bit mask-based set/clear/toggle for outputs, direction, and polarity in a single I2C burst
 - **Bulk register helpers** - pair-bounded `readRegisters()` / `writeRegisters()` for low-level diagnostics
 - **Recoverable runtime state** - `recover()` reapplies the latest live output/config/polarity state
+- **Dirty-state diagnostics** - failed writes mark recoverable register pairs for later reapply
 
 ## Installation
 
@@ -124,13 +126,43 @@ Serial.printf("Failures: %u consecutive, %lu total\n",
 ### Lifecycle
 
 - `Status begin(const Config& config)` - Initialize driver, verify device, apply configuration
-- `void tick(uint32_t nowMs)` - Process pending operations (currently no-op, reserved)
+- `void tick(uint32_t nowMs)` - Process at most one pending chunked-job instruction
 - `void end()` - Shutdown driver, set all pins to input (safe state)
+
+### Chunked Job API
+
+Use these when the bus owner needs to limit backend transfers per poll. One register-pair
+read or write is one instruction. The interrupt errata pointer-park write is also one
+instruction. CPU-only no-ops do not consume instruction budget.
+
+- `Status startReadInputsJob()` - Read both input ports; with errata enabled, pointer-park is a second instruction
+- `Status startWriteOutputsJob(uint16_t mask, uint16_t value)` - Apply masked output bits in one output-pair write
+- `Status startConfigureOutputsJob(uint16_t mask, uint16_t value)` - Preload selected output latches, then configure selected pins as outputs
+- `Status pollJob(uint32_t nowMs, uint8_t maxInstructions)` - Advance the active job by at most `maxInstructions`
+- `bool jobActive()` - True while a chunked job is pending
+- `Status lastJobStatus()` - Last completed or failed chunked-job result
+- `Status getLastReadInputs(PortData& data)` - Copy the latest full input-pair read result
+
+Example one-transfer steady poll:
+
+```cpp
+if (!device.jobActive()) {
+  device.startReadInputsJob();
+}
+
+PCA9555::Status st = device.pollJob(millis(), 1);
+if (st.ok()) {
+  PCA9555::PortData inputs;
+  device.getLastReadInputs(inputs);
+}
+```
 
 ### Diagnostics
 
 - `Status probe()` - Check device presence via raw I2C (no health tracking)
 - `Status recover()` - Attempt recovery with health tracking + re-apply the current runtime config
+- `Status applyInterruptErrataWorkaround()` - Locked public pointer-park helper when lock hooks are configured
+- `Status applyInterruptErrataWorkaroundUnlocked()` - Pointer-park helper for callers that already own the bus lock
 
 ### Input API
 
@@ -174,6 +206,7 @@ mask causes no change.
 - `Status togglePin(Pin pin)` - Toggle single output pin (1-byte write, no read)
 - `Status configureInputBits(uint16_t mask)` - Set masked pins to INPUT direction
 - `Status configureOutputBits(uint16_t mask)` - Set masked pins to OUTPUT direction
+- `Status configureOutputs(uint16_t mask, uint16_t value)` - Preload selected output latches, then set selected pins to OUTPUT
 - `Status setInvertBits(uint16_t mask)` - Enable polarity inversion for masked pins
 - `Status clearInvertBits(uint16_t mask)` - Disable polarity inversion for masked pins
 
@@ -195,6 +228,8 @@ mask causes no change.
 - `Status lastError()` - Most recent error
 - `uint8_t consecutiveFailures()` - Failures since last success
 - `uint32_t totalFailures()` / `totalSuccess()` - Lifetime counters
+- `bool hasDirtyState()` - True when output, polarity, or config hardware may need reapply
+- `SettingsSnapshot::outputDirty/configDirty/polarityDirty` - Per-register-pair dirty diagnostics
 
 ## Configuration
 
@@ -210,6 +245,7 @@ mask causes no change.
 | `polarityPort0/1` | `0x00` | Polarity inversion (1=inverted) |
 | `requireConfigPortDefaults` | `true` | Require Configuration Port 0/1 = `0xFF` at `begin()` |
 | `applyInterruptErrata` | `true` | Enable interrupt errata workaround |
+| `i2cLock/i2cUnlock` | `nullptr` | Optional bounded lock hooks for APIs that explicitly document locked behavior |
 
 ### I2C Address Selection
 
@@ -229,16 +265,34 @@ Up to 8 devices can share one bus. The address pins must be tied high or low and
 ## Behavioral Contracts
 
 1. **Threading model**: Single-threaded by default. Not thread-safe.
-2. **Timing model**: `tick()` bounded; all I2C operations are blocking.
+2. **Timing model**: `tick()` is bounded to one pending job instruction; synchronous APIs are blocking.
 3. **Resource ownership**: Bus and pins provided by application via `Config`.
 4. **Memory behavior**: The library performs no dynamic allocation in `begin()` or steady state.
 5. **Error handling**: All fallible APIs return `Status`. Silent failure is not possible.
+6. **Offline gate**: Once the driver reaches `OFFLINE`, normal public I/O returns `Err::OFFLINE` without touching the bus. `recover()` is the controlled path that may transact and return the driver to `READY`.
+7. **Dirty state**: Failed or uncertain writes mark the affected output, polarity, or configuration pair dirty. A later full-pair write/read or dirty no-op replay clears the matching flag only after success.
 
 `begin()` verifies presence by reading both Configuration Port registers. By default it requires the
 POR default `0xFF/0xFF` state and returns `CONFIG_REG_MISMATCH` if the expander is already
 configured. If your MCU can reset without power-cycling the PCA9555, set
 `Config::requireConfigPortDefaults = false` so `begin()` will accept the existing device state and
 immediately apply the requested runtime configuration.
+
+## Production Adapter Scope
+
+For TunnelMonitor-style single-owner integrations, wrap a small stable subset instead
+of exposing the full low-level driver surface:
+
+- 16-bit mask helpers: `setOutputBits()`, `clearOutputBits()`, `toggleOutputBits()`,
+  `configureInputBits()`, `configureOutputBits()`, `configureOutputs()`,
+  `setInvertBits()`, and `clearInvertBits()`.
+- Full-port operations: `readInputs()`, `writeOutputs()`, `setConfiguration()`,
+  `getConfiguration()`, `setPolarity()`, and `getPolarity()`.
+- Diagnostics: `state()`, `isOnline()`, `lastError()`, `hasDirtyState()`,
+  `getSettings()`, and `recover()`.
+
+Keep direct register access and single-pin helpers for bring-up, tests, and local
+diagnostics unless the application has a clear reason to expose them.
 
 ## Interrupt Errata
 
@@ -248,6 +302,11 @@ PCA9555 may incorrectly interpret the address byte as a register write, potentia
 clearing the interrupt output. Setting `Config::applyInterruptErrata = true` (default)
 causes the driver to write a safe command byte (0x02) after every input read to move
 the register pointer away from 0x00.
+
+With the synchronous helpers, an input read plus errata is a compound operation:
+input register-pair read, then pointer-park write. With `startReadInputsJob()` and
+`pollJob()`, those two transfers can be split across polls unless the caller gives a
+budget of at least two instructions.
 
 ## Device Notes
 

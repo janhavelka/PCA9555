@@ -36,6 +36,16 @@ using I2cWriteReadFn = Status (*)(uint8_t addr, const uint8_t* txData, size_t tx
 /// @return Current monotonic milliseconds
 using NowMsFn = uint32_t (*)(void* user);
 
+/// Optional I2C bus lock callback.
+/// Implementations must be bounded; the driver never waits or retries here.
+/// @param user User context pointer passed through from Config
+/// @return Status::Ok() when the caller owns the lock
+using I2cLockFn = Status (*)(void* user);
+
+/// Optional I2C bus unlock callback.
+/// @param user User context pointer passed through from Config
+using I2cUnlockFn = void (*)(void* user);
+
 /// Port identifier
 enum class Port : uint8_t {
   PORT_0 = 0,  ///< Port 0 (P00–P07)
@@ -52,6 +62,11 @@ struct Config {
   I2cWriteFn i2cWrite = nullptr;        ///< I2C write function pointer
   I2cWriteReadFn i2cWriteRead = nullptr; ///< I2C write-read function pointer
   void* i2cUser = nullptr;               ///< User context for callbacks
+
+  // === Optional Bus Lock Hooks ===
+  I2cLockFn i2cLock = nullptr;           ///< Optional lock used only by APIs documenting locked behavior
+  I2cUnlockFn i2cUnlock = nullptr;       ///< Optional unlock paired with i2cLock
+  void* i2cLockUser = nullptr;           ///< User context for lock callbacks
 
   // === Timing Hooks (optional) ===
   NowMsFn nowMs = nullptr;               ///< Monotonic millisecond source

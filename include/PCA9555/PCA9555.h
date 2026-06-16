@@ -52,11 +52,20 @@ struct SettingsSnapshot {
   uint8_t consecutiveFailures = 0;
   uint32_t totalFailures = 0;
   uint32_t totalSuccess = 0;
+  bool outputDirty = false;    ///< Output latch state may differ from cached desired state
+  bool polarityDirty = false;  ///< Polarity state may differ from cached desired state
+  bool configDirty = false;    ///< Direction/config state may differ from cached desired state
 };
 
 /// PCA9555 driver class
 class PCA9555 {
 public:
+  PCA9555() = default;
+  PCA9555(const PCA9555&) = delete;
+  PCA9555& operator=(const PCA9555&) = delete;
+  PCA9555(PCA9555&&) = delete;
+  PCA9555& operator=(PCA9555&&) = delete;
+
   // =========================================================================
   // Lifecycle
   // =========================================================================
@@ -68,13 +77,64 @@ public:
   /// @return Status::Ok() on success, error otherwise
   Status begin(const Config& config);
   
-  /// Process pending operations (call regularly from loop).
-  /// Currently a no-op; reserved for future periodic polling support.
+  /// Process one pending job instruction, if a chunked job is active.
   /// @param nowMs Current timestamp in milliseconds
   void tick(uint32_t nowMs);
   
   /// Shutdown the driver (sets all pins to input/high-Z).
   void end();
+
+  // =========================================================================
+  // Chunked Job API
+  // =========================================================================
+
+  /// Start a chunked input-port read job.
+  /// The input register-pair read is one instruction. If
+  /// Config::applyInterruptErrata is true, the pointer-park write is a second
+  /// instruction. Read data becomes available through getLastReadInputs().
+  /// @return Err::IN_PROGRESS when scheduled, Status::Ok() if already complete,
+  ///         or an error when the job cannot be started
+  Status startReadInputsJob();
+
+  /// Start a chunked masked output update job.
+  /// Applies value bits selected by mask to the cached output shadow and writes
+  /// the output register pair as one instruction. No I2C occurs when mask causes
+  /// no change.
+  /// @param mask 16-bit mask (bit 0 = P00 ... bit 15 = P17)
+  /// @param value Desired output bits; only bits selected by mask are used
+  /// @return Err::IN_PROGRESS when scheduled, Status::Ok() for a CPU-only no-op,
+  ///         or an error when the job cannot be started
+  Status startWriteOutputsJob(uint16_t mask, uint16_t value);
+
+  /// Start a chunked safe output-configuration job.
+  /// Preloads the output latch for masked pins, then configures those pins as
+  /// outputs. Each register-pair write is one instruction; no-op writes are
+  /// skipped without consuming instruction budget.
+  /// @param mask 16-bit mask selecting pins to configure as outputs
+  /// @param value Desired output latch bits for the selected pins
+  /// @return Err::IN_PROGRESS when scheduled, Status::Ok() for a CPU-only no-op,
+  ///         or an error when the job cannot be started
+  Status startConfigureOutputsJob(uint16_t mask, uint16_t value);
+
+  /// Advance the active chunked job by at most maxInstructions I2C instructions.
+  /// One register-pair read/write counts as one instruction. The interrupt
+  /// errata pointer-park write also counts as one instruction.
+  /// @param nowMs Current timestamp in milliseconds for health updates
+  /// @param maxInstructions Maximum I2C instructions to execute this call
+  /// @return Status::Ok() when no job remains, Err::IN_PROGRESS while active,
+  ///         or the first transport error encountered
+  Status pollJob(uint32_t nowMs, uint8_t maxInstructions);
+
+  /// @return true while a chunked job is active
+  bool jobActive() const;
+
+  /// @return Status from the most recently completed or failed chunked job
+  Status lastJobStatus() const;
+
+  /// Copy the most recent chunked or blocking input read result.
+  /// @param[out] data Last input data read by the driver
+  /// @return Status::Ok()
+  Status getLastReadInputs(PortData& data) const;
   
   // =========================================================================
   // Diagnostics
@@ -90,6 +150,18 @@ public:
   /// Re-probes device and re-applies configuration if successful.
   /// @return Status::Ok() if device now responsive, error otherwise
   Status recover();
+
+  /// Apply the interrupt errata workaround using the optional Config lock hooks.
+  /// If Config::i2cLock/i2cUnlock are not configured, this is equivalent to
+  /// applyInterruptErrataWorkaroundUnlocked().
+  /// @return Status::Ok() on success
+  Status applyInterruptErrataWorkaround();
+
+  /// Apply the interrupt errata workaround without acquiring Config lock hooks.
+  /// This writes only the safe command byte and is intended for callers that
+  /// already own the bus lock.
+  /// @return Status::Ok() on success
+  Status applyInterruptErrataWorkaroundUnlocked();
   
   // =========================================================================
   // Driver State
@@ -146,19 +218,25 @@ public:
   /// Total success count (lifetime)
   /// @return Lifetime success count (wraps at max)
   uint32_t totalSuccess() const { return _totalSuccess; }
+
+  /// Check whether cached desired state may need hardware reapply.
+  /// @return true if any recoverable register pair is dirty
+  bool hasDirtyState() const { return _outputDirty || _polarityDirty || _configDirty; }
   
   // =========================================================================
   // Input API
   // =========================================================================
   
   /// Read both input ports in a single burst transaction.
-  /// Applies interrupt errata workaround if configured.
+  /// If Config::applyInterruptErrata is true, this is a compound synchronous
+  /// helper: one input-register read followed by one safe command-byte write.
   /// @param[out] data Port 0 and Port 1 input values
   /// @return Status::Ok() on success
   Status readInputs(PortData& data);
 
   /// Read a single input port.
-  /// Applies interrupt errata workaround if configured.
+  /// If Config::applyInterruptErrata is true, this is a compound synchronous
+  /// helper: one input-register read followed by one safe command-byte write.
   /// @param port Port to read (PORT_0 or PORT_1)
   /// @param[out] value 8-bit port value
   /// @return Status::Ok() on success
@@ -196,7 +274,9 @@ public:
   Status readOutput(Port port, uint8_t& value);
 
   /// Set a single output pin high or low.
-  /// Uses read-modify-write on the output register.
+  /// Uses the cached output shadow and writes the affected output port only
+  /// when the logical value changes. If the output pair is dirty, a logical
+  /// no-op replays the cached output pair.
   /// @param pin Pin number 0–15
   /// @param high true = drive high, false = drive low
   /// @return Status::Ok() on success
@@ -262,6 +342,17 @@ public:
   /// @param mask 16-bit mask; 1 = set direction to OUTPUT
   /// @return Status::Ok() on success
   Status configureOutputBits(uint16_t mask);
+
+  /// Safely configure masked pins as outputs with a desired initial latch value.
+  /// Bits set in mask are configured as outputs. Matching bits in value select
+  /// the output latch value: 1 = HIGH, 0 = LOW. Bits outside mask are ignored.
+  /// This blocking compound helper preloads the output latch before changing
+  /// direction and uses the same two-instruction sequence as
+  /// startConfigureOutputsJob() with enough budget to complete.
+  /// @param mask 16-bit mask selecting pins to configure as outputs
+  /// @param value Desired output latch bits for the selected pins
+  /// @return Status::Ok() on success
+  Status configureOutputs(uint16_t mask, uint16_t value);
 
   /// Enable polarity inversion for masked pins.
   /// Applies mask via OR to polarity registers and writes both ports in a
@@ -334,7 +425,9 @@ public:
   Status getPolarity(PortData& data);
 
   /// Configure polarity inversion for a single pin.
-  /// Uses read-modify-write on the cached polarity register state.
+  /// Uses the cached polarity register state and writes the affected polarity
+  /// port only when the logical value changes. If the polarity pair is dirty,
+  /// a logical no-op replays the cached polarity pair.
   /// @param pin Pin number 0-15
   /// @param inverted true = invert input sense, false = normal polarity
   /// @return Status::Ok() on success
@@ -350,7 +443,9 @@ public:
   Status getPinPolarity(Pin pin, bool& inverted);
 
   /// Configure a single pin as input or output.
-  /// Uses read-modify-write on the configuration register.
+  /// Uses the cached configuration shadow and writes the affected configuration
+  /// port only when the logical value changes. If the configuration pair is
+  /// dirty, a logical no-op replays the cached configuration pair.
   /// @param pin Pin number 0–15
   /// @param input true = configure as input, false = output
   /// @return Status::Ok() on success
@@ -378,6 +473,8 @@ public:
   /// Read multiple consecutive registers within a single register pair.
   /// Bulk reads are limited to 1-2 bytes and must not cross a pair boundary.
   /// The cached runtime state is synchronized for any writable registers read.
+  /// Input-register reads apply Config::applyInterruptErrata as a compound
+  /// synchronous pointer-park write after the read.
   /// @param startReg Starting register address (0x00-0x07)
   /// @param[out] buf Destination buffer
   /// @param len Number of bytes to read
@@ -400,6 +497,22 @@ public:
   Status writeRegisters(uint8_t startReg, const uint8_t* buf, size_t len);
 
 private:
+  enum class JobType : uint8_t {
+    NONE,
+    READ_INPUTS,
+    WRITE_OUTPUTS,
+    CONFIGURE_OUTPUTS
+  };
+
+  enum class JobStep : uint8_t {
+    NONE,
+    READ_INPUT_PAIR,
+    POINTER_PARK,
+    WRITE_OUTPUT_PAIR,
+    PRELOAD_OUTPUT_PAIR,
+    WRITE_CONFIG_PAIR
+  };
+
   // =========================================================================
   // Transport Wrappers
   // =========================================================================
@@ -439,6 +552,12 @@ private:
   /// Called ONLY from tracked transport wrappers.
   Status _updateHealth(const Status& st);
 
+  /// Require begin() and not-OFFLINE for public I/O entry points.
+  Status _requireReadyForPublicIo() const;
+
+  /// Return OFFLINE when tracked public I/O is blocked.
+  Status _offlineBlockedStatus() const;
+
   // =========================================================================
   // Internal Helpers
   // =========================================================================
@@ -450,8 +569,22 @@ private:
   /// Apply interrupt errata workaround: write a safe command byte after input reads.
   Status _applyInterruptErrata();
 
+  /// Acquire/release optional public API I2C lock hooks.
+  Status _lockI2c();
+  void _unlockI2c();
+
+  /// Execute one active chunked-job I2C instruction.
+  Status _executeJobInstruction();
+
+  /// Clear active chunked-job state and store final status.
+  void _finishJob(const Status& st);
+
   /// Synchronize cached runtime state after direct register access.
   void _syncShadowRegister(uint8_t reg, uint8_t value);
+
+  /// Mark/clear dirty state for a recoverable register pair.
+  void _markDirtyForRegister(uint8_t reg);
+  void _clearDirtyForRegisterPair(uint8_t startReg, size_t len);
 
   /// Get current timestamp in milliseconds
   uint32_t _nowMs() const;
@@ -463,6 +596,7 @@ private:
   Config _config;
   bool _initialized = false;
   DriverState _driverState = DriverState::UNINIT;
+  bool _allowOfflineIo = false;
   
   // Health counters
   uint32_t _lastOkMs = 0;
@@ -472,11 +606,28 @@ private:
   uint32_t _totalFailures = 0;
   uint32_t _totalSuccess = 0;
 
-  // Cached output register state (for read-modify-write on single pins)
+  // Chunked job state (single active job, no heap allocation)
+  JobType _jobType = JobType::NONE;
+  JobStep _jobStep = JobStep::NONE;
+  Status _lastJobStatus = Status::Ok();
+  PortData _lastInputData;
+  uint8_t _jobOutput0 = 0xFF;
+  uint8_t _jobOutput1 = 0xFF;
+  uint8_t _jobConfig0 = 0xFF;
+  uint8_t _jobConfig1 = 0xFF;
+  bool _jobNeedsConfigWrite = false;
+  bool _jobInstructionActive = false;
+  uint32_t _pollNowMs = 0;
+  bool _pollNowMsActive = false;
+
+  // Cached register state for single-pin and mask helpers
   uint8_t _cachedOutput0 = 0xFF;
   uint8_t _cachedOutput1 = 0xFF;
   uint8_t _cachedConfig0 = 0xFF;
   uint8_t _cachedConfig1 = 0xFF;
+  bool _outputDirty = false;
+  bool _polarityDirty = false;
+  bool _configDirty = false;
 };
 
 } // namespace PCA9555

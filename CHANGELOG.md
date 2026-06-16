@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Chunked job API for caller-budgeted I2C execution: `startReadInputsJob()`, `startWriteOutputsJob(mask, value)`, `startConfigureOutputsJob(mask, value)`, and `pollJob(nowMs, maxInstructions)`.
+- `configureOutputs(mask, value)` for safe output enable sequencing: preload output latches, then write direction/configuration.
+- `jobActive()`, `lastJobStatus()`, and `getLastReadInputs()` diagnostics for chunked jobs.
+- Optional `Config::i2cLock` / `Config::i2cUnlock` hooks plus locked and explicitly unlocked interrupt errata APIs.
+- Dirty-state diagnostics for output, polarity, and configuration register pairs.
+- `Err::OFFLINE` for explicit no-I/O blocking while the driver is offline.
+
+### Changed
+- `tick(nowMs)` now advances at most one pending chunked-job instruction.
+- Input reads with interrupt errata are documented as compound synchronous helpers; the chunked read job can split the input read and pointer-park write across polls.
+- Public I/O is blocked while the driver is `OFFLINE`; `recover()` is the controlled path that may touch the bus from offline state.
+- `PCA9555` instances are explicitly non-copyable and non-movable to avoid duplicated transport ownership state.
+- README now recommends a small production adapter subset for TunnelMonitor-style integrations instead of exposing the full low-level API.
+
+### Fixed
+- Added safe runtime output-configuration sequencing so callers can preload output latches before changing selected pins to output mode.
+- Failed writes now preserve dirty-state diagnostics so a later no-op logical update can still reapply cached desired hardware state.
+
 ## [1.0.0] - 2026-04-06
 
 ### Added

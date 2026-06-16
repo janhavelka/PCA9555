@@ -23,7 +23,8 @@ enum class Err : uint8_t {
   I2C_NACK_ADDR,             ///< I2C address not acknowledged
   I2C_NACK_DATA,             ///< I2C data byte not acknowledged
   I2C_TIMEOUT,               ///< I2C transaction timeout
-  I2C_BUS                    ///< I2C bus error (arbitration lost, etc.)
+  I2C_BUS,                   ///< I2C bus error (arbitration lost, etc.)
+  OFFLINE                    ///< Driver is offline; call recover() before normal I/O
 };
 
 /// Status structure returned by all fallible operations

@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include "examples/common/CliStyle.h"
 #include "examples/common/Log.h"
 #include "examples/common/BoardConfig.h"
 #include "examples/common/BusDiag.h"
@@ -91,6 +92,11 @@ const char* stateColor(PCA9555::DriverState st, bool online, uint8_t consecutive
   return LOG_COLOR_STATE(online, consecutiveFailures);
 }
 
+uint8_t autoIncrementPairRegister(uint8_t startReg, size_t offset) {
+  return static_cast<uint8_t>((startReg & 0xFEU) |
+                              ((startReg + static_cast<uint8_t>(offset)) & 0x01U));
+}
+
 const char* goodIfZeroColor(uint32_t value) {
   return (value == 0U) ? LOG_COLOR_GREEN : LOG_COLOR_RED;
 }
@@ -113,6 +119,14 @@ uint32_t stressProgressStep(uint32_t total) {
   return (step == 0U) ? 1U : step;
 }
 
+uint8_t physicalPortForPin(PCA9555::Pin pin) {
+  return (pin < PCA9555::cmd::PINS_PER_PORT) ? 0U : 1U;
+}
+
+uint8_t physicalBitForPin(PCA9555::Pin pin) {
+  return static_cast<uint8_t>(pin % PCA9555::cmd::PINS_PER_PORT);
+}
+
 void printStressProgress(uint32_t completed, uint32_t total, uint32_t okCount, uint32_t failCount) {
   if (completed == 0U || total == 0U) {
     return;
@@ -122,12 +136,10 @@ void printStressProgress(uint32_t completed, uint32_t total, uint32_t okCount, u
     return;
   }
   const float pct = (100.0f * static_cast<float>(completed)) / static_cast<float>(total);
-  Serial.printf("  Progress: %lu/%lu (%s%.0f%%%s, ok=%s%lu%s, fail=%s%lu%s)\n",
+  Serial.printf("  Progress: %lu/%lu (%.0f%%, ok=%s%lu%s, fail=%s%lu%s)\n",
                 static_cast<unsigned long>(completed),
                 static_cast<unsigned long>(total),
-                successRateColor(pct),
                 pct,
-                LOG_COLOR_RESET,
                 goodIfNonZeroColor(okCount),
                 static_cast<unsigned long>(okCount),
                 LOG_COLOR_RESET,
@@ -510,7 +522,11 @@ void cmdWritePin(const String& args) {
     printStatus(st);
     return;
   }
-  LOGI("Pin %u set to %d", static_cast<unsigned>(pin), high ? 1 : 0);
+  LOGI("Output latch pin %u (P%u%u) = %d",
+       static_cast<unsigned>(pin),
+       static_cast<unsigned>(physicalPortForPin(pin)),
+       static_cast<unsigned>(physicalBitForPin(pin)),
+       high ? 1 : 0);
 }
 
 void cmdReadPin(const String& args) {
@@ -526,7 +542,11 @@ void cmdReadPin(const String& args) {
     printStatus(st);
     return;
   }
-  LOGI("Pin %u input = %d", static_cast<unsigned>(pin), state ? 1 : 0);
+  LOGI("Input sense pin %u (P%u%u) = %d",
+       static_cast<unsigned>(pin),
+       static_cast<unsigned>(physicalPortForPin(pin)),
+       static_cast<unsigned>(physicalBitForPin(pin)),
+       state ? 1 : 0);
 }
 
 void cmdReadInputPort(const String& args) {
@@ -563,7 +583,11 @@ void cmdReadOutputPin(const String& args) {
     return;
   }
 
-  LOGI("Output latch pin %u = %d", static_cast<unsigned>(pin), high ? 1 : 0);
+  LOGI("Output latch pin %u (P%u%u) = %d",
+       static_cast<unsigned>(pin),
+       static_cast<unsigned>(physicalPortForPin(pin)),
+       static_cast<unsigned>(physicalBitForPin(pin)),
+       high ? 1 : 0);
 }
 
 void cmdReadDirectionPin(const String& args) {
@@ -581,7 +605,11 @@ void cmdReadDirectionPin(const String& args) {
     return;
   }
 
-  LOGI("Pin %u direction = %s", static_cast<unsigned>(pin), input ? "INPUT" : "OUTPUT");
+  LOGI("Pin %u (P%u%u) direction = %s",
+       static_cast<unsigned>(pin),
+       static_cast<unsigned>(physicalPortForPin(pin)),
+       static_cast<unsigned>(physicalBitForPin(pin)),
+       input ? "INPUT" : "OUTPUT");
 }
 
 void cmdReadPolarityPin(const String& args) {
@@ -599,7 +627,11 @@ void cmdReadPolarityPin(const String& args) {
     return;
   }
 
-  LOGI("Pin %u polarity = %s", static_cast<unsigned>(pin), inverted ? "INVERTED" : "NORMAL");
+  LOGI("Pin %u (P%u%u) polarity = %s",
+       static_cast<unsigned>(pin),
+       static_cast<unsigned>(physicalPortForPin(pin)),
+       static_cast<unsigned>(physicalBitForPin(pin)),
+       inverted ? "INVERTED" : "NORMAL");
 }
 
 void cmdPinInfo(const String& args) {
@@ -636,8 +668,13 @@ void cmdPinInfo(const String& args) {
     return;
   }
 
-  Serial.printf("=== Pin %u ===\n", static_cast<unsigned>(pin));
-  Serial.printf("  Actual level: %d\n", inputState ? 1 : 0);
+  Serial.printf("=== Pin %u (P%u%u) ===\n",
+                static_cast<unsigned>(pin),
+                static_cast<unsigned>(physicalPortForPin(pin)),
+                static_cast<unsigned>(physicalBitForPin(pin)));
+  Serial.printf("  Input sense: %d%s\n",
+                inputState ? 1 : 0,
+                polarityInverted ? " (polarity inverted)" : "");
   Serial.printf("  Output latch: %d\n", outputHigh ? 1 : 0);
   Serial.printf("  Direction: %s\n", directionInput ? "INPUT" : "OUTPUT");
   Serial.printf("  Polarity: %s\n", polarityInverted ? "INVERTED" : "NORMAL");
@@ -671,7 +708,7 @@ void cmdPins() {
   }
 
   Serial.println("=== Pin Summary ===");
-  Serial.println("  Pin  In  Out  Dir  Pol");
+  Serial.println("  Pin  Sense  Latch  Dir  Pol");
   for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
     const bool port1 = pin >= PCA9555::cmd::PINS_PER_PORT;
     const uint8_t shift = static_cast<uint8_t>(pin % PCA9555::cmd::PINS_PER_PORT);
@@ -684,8 +721,9 @@ void cmdPins() {
     const bool inputDir = ((configPort >> shift) & 0x01U) != 0U;
     const bool inverted = ((polarityPort >> shift) & 0x01U) != 0U;
 
-    Serial.printf("  P%02u   %d   %d   %-3s  %s\n",
-                  static_cast<unsigned>(pin),
+    Serial.printf("  P%u%u     %d      %d   %-3s  %s\n",
+                  static_cast<unsigned>(physicalPortForPin(pin)),
+                  static_cast<unsigned>(physicalBitForPin(pin)),
                   inputLevel ? 1 : 0,
                   outputLevel ? 1 : 0,
                   inputDir ? "IN" : "OUT",
@@ -706,7 +744,10 @@ void cmdTogglePin(const String& args) {
     printStatus(st);
     return;
   }
-  LOGI("Pin %u toggled", static_cast<unsigned>(pin));
+  LOGI("Output latch pin %u (P%u%u) toggled",
+       static_cast<unsigned>(pin),
+       static_cast<unsigned>(physicalPortForPin(pin)),
+       static_cast<unsigned>(physicalBitForPin(pin)));
 }
 
 void cmdSetDirection(const String& args) {
@@ -724,7 +765,11 @@ void cmdSetDirection(const String& args) {
     printStatus(st);
     return;
   }
-  LOGI("Pin %u set to %s", static_cast<unsigned>(pin), input ? "INPUT" : "OUTPUT");
+  LOGI("Pin %u (P%u%u) set to %s",
+       static_cast<unsigned>(pin),
+       static_cast<unsigned>(physicalPortForPin(pin)),
+       static_cast<unsigned>(physicalBitForPin(pin)),
+       input ? "INPUT" : "OUTPUT");
 }
 
 void cmdWritePort(const String& args) {
@@ -742,7 +787,7 @@ void cmdWritePort(const String& args) {
     printStatus(st);
     return;
   }
-  LOGI("Port %u output set to 0x%02X", static_cast<unsigned>(port), value);
+  LOGI("Port %u output latch set to 0x%02X", static_cast<unsigned>(port), value);
 }
 
 void cmdSetPortDirection(const String& args) {
@@ -798,8 +843,10 @@ void cmdSetPinPolarity(const String& args) {
     return;
   }
 
-  LOGI("Pin %u polarity set to %s",
+  LOGI("Pin %u (P%u%u) polarity set to %s",
        static_cast<unsigned>(pin),
+       static_cast<unsigned>(physicalPortForPin(pin)),
+       static_cast<unsigned>(physicalBitForPin(pin)),
        inverted ? "INVERTED" : "NORMAL");
 }
 
@@ -819,7 +866,7 @@ void cmdSetBits(const String& args) {
     printStatus(st);
     return;
   }
-  LOGI("Output bits set HIGH: mask=0x%04X", mask);
+  LOGI("Output latch bits set HIGH: mask=0x%04X", mask);
 }
 
 void cmdClearBits(const String& args) {
@@ -834,7 +881,7 @@ void cmdClearBits(const String& args) {
     printStatus(st);
     return;
   }
-  LOGI("Output bits cleared LOW: mask=0x%04X", mask);
+  LOGI("Output latch bits cleared LOW: mask=0x%04X", mask);
 }
 
 void cmdToggleBits(const String& args) {
@@ -849,7 +896,7 @@ void cmdToggleBits(const String& args) {
     printStatus(st);
     return;
   }
-  LOGI("Output bits toggled: mask=0x%04X", mask);
+  LOGI("Output latch bits toggled: mask=0x%04X", mask);
 }
 
 void cmdDirIn(const String& args) {
@@ -975,11 +1022,11 @@ void cmdRegsRead(const String& args) {
     return;
   }
 
-  Serial.printf("  Regs 0x%02X..0x%02X =",
-                static_cast<unsigned>(reg),
-                static_cast<unsigned>(reg + len - 1));
+  Serial.print("  Regs");
   for (long i = 0; i < len; ++i) {
-    Serial.printf(" 0x%02X", values[static_cast<size_t>(i)]);
+    Serial.printf(" 0x%02X=0x%02X",
+                  autoIncrementPairRegister(static_cast<uint8_t>(reg), static_cast<size_t>(i)),
+                  values[static_cast<size_t>(i)]);
   }
   Serial.print(" (");
   for (long i = 0; i < len; ++i) {
@@ -1024,10 +1071,10 @@ void cmdRegsWrite(const String& args) {
   if (len == 1) {
     LOGI("Reg 0x%02X set to 0x%02X", static_cast<int>(reg), values[0]);
   } else {
-    LOGI("Regs 0x%02X..0x%02X set to 0x%02X 0x%02X",
-         static_cast<int>(reg),
-         static_cast<int>(reg + 1),
+    LOGI("Regs 0x%02X=0x%02X 0x%02X=0x%02X",
+         autoIncrementPairRegister(static_cast<uint8_t>(reg), 0),
          values[0],
+         autoIncrementPairRegister(static_cast<uint8_t>(reg), 1),
          values[1]);
   }
 }
@@ -1099,17 +1146,17 @@ void runSelfTest() {
   reportCheck("readInputs", st.ok(), st.ok() ? "" : errToStr(st.code));
   uint8_t inputPort = 0;
   st = device.readInput(PCA9555::Port::PORT_0, inputPort);
-  reportCheck("readInput(P0)", st.ok(), st.ok() ? "" : errToStr(st.code));
+  reportCheck("readInput(PORT_0)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   // --- readOutputs ---
   st = device.readOutputs(data);
   reportCheck("readOutputs", st.ok(), st.ok() ? "" : errToStr(st.code));
   uint8_t outputPort = 0;
   st = device.readOutput(PCA9555::Port::PORT_0, outputPort);
-  reportCheck("readOutput(P0)", st.ok(), st.ok() ? "" : errToStr(st.code));
+  reportCheck("readOutput(PORT_0)", st.ok(), st.ok() ? "" : errToStr(st.code));
   bool outputPin = false;
   st = device.readOutputPin(0, outputPin);
-  reportCheck("readOutputPin(0)", st.ok(), st.ok() ? "" : errToStr(st.code));
+  reportCheck("readOutputPin(0/P00)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   // --- getConfiguration ---
   PCA9555::PortData configData;
@@ -1117,10 +1164,10 @@ void runSelfTest() {
   reportCheck("getConfiguration", st.ok(), st.ok() ? "" : errToStr(st.code));
   uint8_t configPort = 0;
   st = device.getPortConfiguration(PCA9555::Port::PORT_0, configPort);
-  reportCheck("getPortConfiguration(P0)", st.ok(), st.ok() ? "" : errToStr(st.code));
+  reportCheck("getPortConfiguration(PORT_0)", st.ok(), st.ok() ? "" : errToStr(st.code));
   bool pinDirection = false;
   st = device.getPinDirection(0, pinDirection);
-  reportCheck("getPinDirection(0)", st.ok(), st.ok() ? "" : errToStr(st.code));
+  reportCheck("getPinDirection(0/P00)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   // --- getPolarity ---
   PCA9555::PortData polData;
@@ -1128,10 +1175,10 @@ void runSelfTest() {
   reportCheck("getPolarity", st.ok(), st.ok() ? "" : errToStr(st.code));
   uint8_t polarityPort = 0;
   st = device.getPortPolarity(PCA9555::Port::PORT_0, polarityPort);
-  reportCheck("getPortPolarity(P0)", st.ok(), st.ok() ? "" : errToStr(st.code));
+  reportCheck("getPortPolarity(PORT_0)", st.ok(), st.ok() ? "" : errToStr(st.code));
   bool pinPolarity = false;
   st = device.getPinPolarity(0, pinPolarity);
-  reportCheck("getPinPolarity(0)", st.ok(), st.ok() ? "" : errToStr(st.code));
+  reportCheck("getPinPolarity(0/P00)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   // --- getSettings ---
   const PCA9555::SettingsSnapshot snapshot = device.getSettings();
@@ -1147,17 +1194,17 @@ void runSelfTest() {
   if (st.ok()) {
     PCA9555::PortData readback;
     device.readOutputs(readback);
-    reportCheck("writeOutput(P0, 0xAA) + readback", readback.port0 == 0xAA, "");
+    reportCheck("writeOutput(PORT_0, 0xAA) + readback", readback.port0 == 0xAA, "");
   } else {
-    reportCheck("writeOutput(P0, 0xAA)", false, errToStr(st.code));
+    reportCheck("writeOutput(PORT_0, 0xAA)", false, errToStr(st.code));
   }
   st = device.writeOutput(PCA9555::Port::PORT_1, 0x55);
   if (st.ok()) {
     PCA9555::PortData readback;
     device.readOutputs(readback);
-    reportCheck("writeOutput(P1, 0x55) + readback", readback.port1 == 0x55, "");
+    reportCheck("writeOutput(PORT_1, 0x55) + readback", readback.port1 == 0x55, "");
   } else {
-    reportCheck("writeOutput(P1, 0x55)", false, errToStr(st.code));
+    reportCheck("writeOutput(PORT_1, 0x55)", false, errToStr(st.code));
   }
   // Restore outputs
   device.writeOutput(PCA9555::Port::PORT_0, savedOut.port0);
@@ -1170,9 +1217,9 @@ void runSelfTest() {
   if (st.ok()) {
     PCA9555::PortData readback;
     device.getConfiguration(readback);
-    reportCheck("setPortConfiguration(P0, 0x0F) + readback", readback.port0 == 0x0F, "");
+    reportCheck("setPortConfiguration(PORT_0, 0x0F) + readback", readback.port0 == 0x0F, "");
   } else {
-    reportCheck("setPortConfiguration(P0, 0x0F)", false, errToStr(st.code));
+    reportCheck("setPortConfiguration(PORT_0, 0x0F)", false, errToStr(st.code));
   }
   // Restore config
   device.setPortConfiguration(PCA9555::Port::PORT_0, savedCfg.port0);
@@ -1185,17 +1232,17 @@ void runSelfTest() {
   if (st.ok()) {
     PCA9555::PortData readback;
     device.getPolarity(readback);
-    reportCheck("setPortPolarity(P0, 0x0F) + readback", readback.port0 == 0x0F, "");
+    reportCheck("setPortPolarity(PORT_0, 0x0F) + readback", readback.port0 == 0x0F, "");
   } else {
-    reportCheck("setPortPolarity(P0, 0x0F)", false, errToStr(st.code));
+    reportCheck("setPortPolarity(PORT_0, 0x0F)", false, errToStr(st.code));
   }
   st = device.setPinPolarity(8, true);
   if (st.ok()) {
     PCA9555::PortData readback;
     device.getPolarity(readback);
-    reportCheck("setPinPolarity(8, 1) + readback", (readback.port1 & 0x01U) != 0U, "");
+    reportCheck("setPinPolarity(8/P10, 1) + readback", (readback.port1 & 0x01U) != 0U, "");
   } else {
-    reportCheck("setPinPolarity(8, 1)", false, errToStr(st.code));
+    reportCheck("setPinPolarity(8/P10, 1)", false, errToStr(st.code));
   }
   // Restore polarity
   device.setPortPolarity(PCA9555::Port::PORT_0, savedPol.port0);
@@ -1295,11 +1342,11 @@ void runSelfTest() {
   if (st.ok()) {
     PCA9555::PortData readback;
     st = device.readOutputs(readback);
-    reportCheck("togglePin(0) + readback",
+    reportCheck("togglePin(0/P00) + readback",
                 st.ok() && readback.combined() == 0x0203U,
                 st.ok() ? "" : errToStr(st.code));
   } else {
-    reportCheck("togglePin(0)", false, errToStr(st.code));
+    reportCheck("togglePin(0/P00)", false, errToStr(st.code));
   }
 
   st = device.setConfiguration(PORTS_ALL_LOW);
@@ -1442,6 +1489,8 @@ void finishStressStats() {
 }
 
 void runStressMix(int count) {
+  LOGI("Starting stress_mix test: %d cycles", count);
+
   const uint32_t startMs = millis();
   const uint32_t succBefore = device.totalSuccess();
   const uint32_t failBefore = device.totalFailures();
@@ -1641,8 +1690,10 @@ void cmdSweep(const String& args) {
   for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
     st = device.writePin(pin, true);
     if (!st.ok()) {
-      Serial.printf("  P%02u: %s[FAIL]%s set high - %s\n",
-                    pin, LOG_COLOR_RED, LOG_COLOR_RESET, errToStr(st.code));
+      Serial.printf("  P%u%u: %s[FAIL]%s set high - %s\n",
+                    static_cast<unsigned>(physicalPortForPin(pin)),
+                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    LOG_COLOR_RED, LOG_COLOR_RESET, errToStr(st.code));
       fail++;
       continue;
     }
@@ -1654,13 +1705,17 @@ void cmdSweep(const String& args) {
     st = device.readOutputs(readback);
     const uint16_t expected = static_cast<uint16_t>((1U << (pin + 1)) - 1U);
     if (!st.ok() || readback.combined() != expected) {
-      Serial.printf("  P%02u: %s[FAIL]%s ON readback 0x%04X != 0x%04X\n",
-                    pin, LOG_COLOR_RED, LOG_COLOR_RESET,
+      Serial.printf("  P%u%u: %s[FAIL]%s ON readback 0x%04X != 0x%04X\n",
+                    static_cast<unsigned>(physicalPortForPin(pin)),
+                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    LOG_COLOR_RED, LOG_COLOR_RESET,
                     readback.combined(), expected);
       fail++;
     } else {
-      Serial.printf("  P%02u: %s[OK]%s ON (0x%04X)\n",
-                    pin, LOG_COLOR_GREEN, LOG_COLOR_RESET, expected);
+      Serial.printf("  P%u%u: %s[OK]%s ON (0x%04X)\n",
+                    static_cast<unsigned>(physicalPortForPin(pin)),
+                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    LOG_COLOR_GREEN, LOG_COLOR_RESET, expected);
       pass++;
     }
   }
@@ -1670,8 +1725,10 @@ void cmdSweep(const String& args) {
   for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
     st = device.writePin(pin, false);
     if (!st.ok()) {
-      Serial.printf("  P%02u: %s[FAIL]%s set low - %s\n",
-                    pin, LOG_COLOR_RED, LOG_COLOR_RESET, errToStr(st.code));
+      Serial.printf("  P%u%u: %s[FAIL]%s set low - %s\n",
+                    static_cast<unsigned>(physicalPortForPin(pin)),
+                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    LOG_COLOR_RED, LOG_COLOR_RESET, errToStr(st.code));
       fail++;
       continue;
     }
@@ -1685,13 +1742,17 @@ void cmdSweep(const String& args) {
         ? static_cast<uint16_t>(0xFFFFU << (pin + 1))
         : static_cast<uint16_t>(0x0000U);
     if (!st.ok() || readback.combined() != expected) {
-      Serial.printf("  P%02u: %s[FAIL]%s OFF readback 0x%04X != 0x%04X\n",
-                    pin, LOG_COLOR_RED, LOG_COLOR_RESET,
+      Serial.printf("  P%u%u: %s[FAIL]%s OFF readback 0x%04X != 0x%04X\n",
+                    static_cast<unsigned>(physicalPortForPin(pin)),
+                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    LOG_COLOR_RED, LOG_COLOR_RESET,
                     readback.combined(), expected);
       fail++;
     } else {
-      Serial.printf("  P%02u: %s[OK]%s OFF (0x%04X)\n",
-                    pin, LOG_COLOR_GREEN, LOG_COLOR_RESET, expected);
+      Serial.printf("  P%u%u: %s[OK]%s OFF (0x%04X)\n",
+                    static_cast<unsigned>(physicalPortForPin(pin)),
+                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    LOG_COLOR_GREEN, LOG_COLOR_RESET, expected);
       pass++;
     }
   }
@@ -1746,13 +1807,17 @@ void cmdWalk(const String& args) {
     PCA9555::PortData readback;
     st = device.readOutputs(readback);
     if (!st.ok() || readback.combined() != pattern) {
-      Serial.printf("  P%02u: %s[FAIL]%s readback 0x%04X != 0x%04X\n",
-                    pin, LOG_COLOR_RED, LOG_COLOR_RESET,
+      Serial.printf("  P%u%u: %s[FAIL]%s readback 0x%04X != 0x%04X\n",
+                    static_cast<unsigned>(physicalPortForPin(pin)),
+                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    LOG_COLOR_RED, LOG_COLOR_RESET,
                     readback.combined(), pattern);
       fail++;
     } else {
-      Serial.printf("  P%02u: %s[OK]%s P0=0x%02X P1=0x%02X\n",
-                    pin, LOG_COLOR_GREEN, LOG_COLOR_RESET, out.port0, out.port1);
+      Serial.printf("  P%u%u: %s[OK]%s P0=0x%02X P1=0x%02X\n",
+                    static_cast<unsigned>(physicalPortForPin(pin)),
+                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    LOG_COLOR_GREEN, LOG_COLOR_RESET, out.port0, out.port1);
       pass++;
     }
   }
@@ -1769,7 +1834,7 @@ void cmdWalk(const String& args) {
 }
 
 void cmdAllHigh() {
-  // Set output values before direction to avoid glitches
+  // Set output latch values before direction to avoid glitches
   PCA9555::Status st = device.writeOutputs(PORTS_ALL_HIGH);
   if (!st.ok()) { printStatus(st); return; }
   st = device.setConfiguration(PORTS_ALL_LOW);
@@ -1778,7 +1843,7 @@ void cmdAllHigh() {
 }
 
 void cmdAllLow() {
-  // Set output values before direction to avoid glitches
+  // Set output latch values before direction to avoid glitches
   PCA9555::Status st = device.writeOutputs(PORTS_ALL_LOW);
   if (!st.ok()) { printStatus(st); return; }
   st = device.setConfiguration(PORTS_ALL_LOW);
@@ -1806,7 +1871,7 @@ void cmdPattern(const String& args) {
     return;
   }
 
-  LOGI("Pattern applied: mask=0x%04X -> P0=0x%02X P1=0x%02X (all pins OUTPUT)",
+  LOGI("Pattern applied: value=0x%04X -> P0=0x%02X P1=0x%02X (all pins OUTPUT)",
        pattern,
        outputs.port0,
        outputs.port1);
@@ -1817,89 +1882,83 @@ void cmdPattern(const String& args) {
 // ============================================================================
 
 void printHelp() {
-  auto helpSection = [](const char* title) {
-    Serial.printf("\n%s[%s]%s\n", LOG_COLOR_GREEN, title, LOG_COLOR_RESET);
-  };
-  auto helpItem = [](const char* cmd, const char* desc) {
-    Serial.printf("  %s%-32s%s - %s\n", LOG_COLOR_CYAN, cmd, LOG_COLOR_RESET, desc);
-  };
   auto helpNote = [](const char* text) {
     Serial.printf("  %s%s%s\n", LOG_COLOR_YELLOW, text, LOG_COLOR_RESET);
   };
 
   Serial.println();
-  Serial.printf("%s=== PCA9555 CLI Help ===%s\n", LOG_COLOR_CYAN, LOG_COLOR_RESET);
+  cli::printHelpHeader("PCA9555 CLI Help");
 
-  helpSection("CLI Terms");
+  cli::printHelpSection("CLI Terms");
   helpNote("<P> = port index: 0 -> P00-P07, 1 -> P10-P17");
   helpNote("<N> = pin index: 0-7 -> P00-P07, 8-15 -> P10-P17");
   helpNote("polarity affects input sense only: NORMAL reads raw level, INVERTED flips 0/1");
   helpNote("<M> = 16-bit mask: bit 0=P00 ... bit 7=P07, bit 8=P10 ... bit 15=P17");
   helpNote("mask examples: 0x0003 -> P00+P01, 0x0100 -> P10, 0x8001 -> P00+P17");
 
-  helpSection("Common");
-  helpItem("help / ?", "Show this help");
-  helpItem("version / ver", "Print firmware and library version info");
-  helpItem("scan", "Scan I2C bus");
+  cli::printHelpSection("Common");
+  cli::printHelpItem("help / ?", "Show this help");
+  cli::printHelpItem("version / ver", "Print firmware and library version info");
+  cli::printHelpItem("scan", "Scan I2C bus");
 
-  helpSection("Read");
-  helpItem("read / inputs", "Read both input ports");
-  helpItem("read input port <P> / rin <P>", "Read one input port");
-  helpItem("read outputs / outputs", "Read output registers");
-  helpItem("read output port <P>", "Read one output-port latch register");
-  helpItem("read config / config", "Read configuration (direction) registers");
-  helpItem("read config port <P>", "Read one configuration register");
-  helpItem("read polarity / polarity", "Read polarity inversion registers");
-  helpItem("read polarity port <P>", "Read one polarity register");
-  helpItem("read pin <N> / rpin <N>", "Read input pin N (0-15)");
-  helpItem("read outpin <N> / rout <N>", "Read output latch bit for pin N");
-  helpItem("read dirpin <N> / rdir <N>", "Read pin direction for pin N");
-  helpItem("read polpin <N> / rpol <N>", "Read pin polarity inversion for pin N");
-  helpItem("pininfo <N>", "Show actual level, latch, direction, and polarity");
-  helpItem("pins", "Show a 16-pin summary table");
-  helpItem("cfg / settings", "Print active driver settings snapshot");
-  helpItem("dump", "Dump all 8 registers");
+  cli::printHelpSection("Read");
+  cli::printHelpItem("read / inputs", "Read both input ports");
+  cli::printHelpItem("read input port <P> / rin <P>", "Read one input port");
+  cli::printHelpItem("read outputs / outputs", "Read output registers");
+  cli::printHelpItem("read output port <P>", "Read one output-port latch register");
+  cli::printHelpItem("read config / config", "Read configuration (direction) registers");
+  cli::printHelpItem("read config port <P>", "Read one configuration register");
+  cli::printHelpItem("read polarity / polarity", "Read polarity inversion registers");
+  cli::printHelpItem("read polarity port <P>", "Read one polarity register");
+  cli::printHelpItem("read pin <N> / rpin <N>", "Read input sense for pin N (0-15)");
+  cli::printHelpItem("read outpin <N> / rout <N>", "Read output latch bit for pin N");
+  cli::printHelpItem("read dirpin <N> / rdir <N>", "Read pin direction for pin N");
+  cli::printHelpItem("read polpin <N> / rpol <N>", "Read pin polarity inversion for pin N");
+  cli::printHelpItem("pininfo <N>", "Show input sense, latch, direction, and polarity");
+  cli::printHelpItem("pins", "Show a 16-pin summary table");
+  cli::printHelpItem("cfg / settings", "Print active driver settings snapshot");
+  cli::printHelpItem("dump", "Dump all 8 registers");
 
-  helpSection("Write");
-  helpItem("write pin <N> <0|1> / wpin <N> <0|1>", "Set output latch bit for pin N to 0 or 1");
-  helpItem("toggle <N>", "Toggle output pin N");
-  helpItem("dir pin <N> <in|out> / dir <N> <in|out>", "Set pin N direction (in=input, out=output)");
-  helpItem("write port <P> <V> / wport <P> <V>", "Write output latch for port P (8 bits)");
-  helpItem("dir port <P> <V> / dport <P> <V>", "Set port direction bits (1=input, 0=output)");
-  helpItem("polarity pin <N> <0|1> / pol <N> <0|1>", "Set input polarity for one pin (1=inverted)");
-  helpItem("polarity port <P> <V> / wpol <P> <V>", "Set input polarity bits for one port");
+  cli::printHelpSection("Write");
+  cli::printHelpItem("write pin <N> <0|1> / wpin <N> <0|1>", "Set output latch bit for pin N to 0 or 1");
+  cli::printHelpItem("toggle <N>", "Toggle output latch bit for pin N");
+  cli::printHelpItem("dir pin <N> <in|out> / dir <N> <in|out>", "Set pin N direction (in=input, out=output)");
+  cli::printHelpItem("write port <P> <V> / wport <P> <V>", "Write output latch for port P (8 bits)");
+  cli::printHelpItem("dir port <P> <V> / dport <P> <V>", "Set port direction bits (1=input, 0=output)");
+  cli::printHelpItem("polarity pin <N> <0|1> / pol <N> <0|1>", "Set input polarity for one pin (1=inverted)");
+  cli::printHelpItem("polarity port <P> <V> / wpol <P> <V>", "Set input polarity bits for one port");
 
-  helpSection("Bit Manipulation (M=16-bit mask, one 2-byte I2C burst)");
-  helpItem("setbits <M> / sb <M>", "Set masked output bits HIGH, leave all other bits unchanged");
-  helpItem("clearbits <M> / cb <M>", "Clear masked output bits LOW, leave all other bits unchanged");
-  helpItem("togglebits <M> / tb <M>", "Toggle only the masked output bits");
-  helpItem("dirin <M>", "Set masked pins to INPUT, leave other direction bits unchanged");
-  helpItem("dirout <M>", "Set masked pins to OUTPUT, leave other direction bits unchanged");
-  helpItem("invertset <M>", "Enable input polarity inversion for masked pins");
-  helpItem("invertclr <M>", "Disable input polarity inversion for masked pins");
+  cli::printHelpSection("Bit Manipulation (M=16-bit mask, one 2-byte I2C burst)");
+  cli::printHelpItem("setbits <M> / sb <M>", "Set masked output bits HIGH, leave all other bits unchanged");
+  cli::printHelpItem("clearbits <M> / cb <M>", "Clear masked output bits LOW, leave all other bits unchanged");
+  cli::printHelpItem("togglebits <M> / tb <M>", "Toggle only the masked output bits");
+  cli::printHelpItem("dirin <M>", "Set masked pins to INPUT, leave other direction bits unchanged");
+  cli::printHelpItem("dirout <M>", "Set masked pins to OUTPUT, leave other direction bits unchanged");
+  cli::printHelpItem("invertset <M>", "Enable input polarity inversion for masked pins");
+  cli::printHelpItem("invertclr <M>", "Disable input polarity inversion for masked pins");
 
-  helpSection("Raw Register");
-  helpItem("read reg <R> / rreg <R>", "Read register R (0-7)");
-  helpItem("read regs <R> <N> / rregs <R> <N>", "Read 1-2 registers in one pair");
-  helpItem("write reg <R> <V> / wreg <R> <V>", "Write register R (2-7) to V");
-  helpItem("write regs <R> <V0> [V1] / wregs <R> <V0> [V1]",
-           "Write 1-2 registers in one pair");
+  cli::printHelpSection("Raw Register");
+  cli::printHelpItem("read reg <R> / rreg <R>", "Read register R (0-7)");
+  cli::printHelpItem("read regs <R> <N> / rregs <R> <N>", "Read 1-2 regs in one pair; odd starts wrap to pair mate");
+  cli::printHelpItem("write reg <R> <V> / wreg <R> <V>", "Write register R (2-7) to V");
+  cli::printHelpItem("write regs <R> <V0> [V1] / wregs <R> <V0> [V1]",
+           "Write 1-2 regs in one pair; odd starts wrap to pair mate");
 
-  helpSection("Testing");
-  helpItem("pattern <M> / pat <M>", "Drive exact 16-bit output pattern M and force all pins OUTPUT");
-  helpItem("sweep [delay_ms]", "Fill ON then drain OFF, pin by pin (accumulating)");
-  helpItem("walk [delay_ms]", "Walking-1: single pin HIGH moves across all 16");
-  helpItem("allhigh", "Set all 16 pins to output HIGH");
-  helpItem("alllow", "Set all 16 pins to output LOW");
+  cli::printHelpSection("Testing");
+  cli::printHelpItem("pattern <VALUE> / pat <VALUE>", "Drive exact 16-bit output pattern and force all pins OUTPUT");
+  cli::printHelpItem("sweep [delay_ms]", "Fill ON then drain OFF, pin by pin (accumulating)");
+  cli::printHelpItem("walk [delay_ms]", "Walking-1: single pin HIGH moves across all 16");
+  cli::printHelpItem("allhigh", "Set all 16 pins to output HIGH");
+  cli::printHelpItem("alllow", "Set all 16 pins to output LOW");
 
-  helpSection("Diagnostics");
-  helpItem("drv", "Show driver state and health");
-  helpItem("probe", "Probe device (no health tracking)");
-  helpItem("recover", "Manual recovery attempt");
-  helpItem("verbose [0|1]", "Enable/disable verbose output");
-  helpItem("selftest", "Run safe API self-test incl. readback, masks, direction, and polarity");
-  helpItem("stress [N]", "Run N readInputs cycles (default 10)");
-  helpItem("stress_mix [N]", "Run N mixed read/write/config/polarity/mask cycles (default 50)");
+  cli::printHelpSection("Diagnostics");
+  cli::printHelpItem("drv", "Show driver state and health");
+  cli::printHelpItem("probe", "Probe device (no health tracking)");
+  cli::printHelpItem("recover", "Manual recovery attempt");
+  cli::printHelpItem("verbose [0|1]", "Enable/disable verbose output");
+  cli::printHelpItem("selftest", "Run safe API self-test incl. readback, masks, direction, and polarity");
+  cli::printHelpItem("stress [N]", "Run N readInputs cycles (default 10)");
+  cli::printHelpItem("stress_mix [N]", "Run N mixed read/write/config/polarity/mask cycles (default 50)");
 }
 
 // ============================================================================
@@ -2364,7 +2423,7 @@ void setup() {
   LOGI("PCA9555 initialized at 0x%02X", cfg.i2cAddress);
   printDriverHealth();
   printHelp();
-  Serial.print("> ");
+  cli::printPrompt();
 }
 
 void loop() {
@@ -2394,13 +2453,17 @@ void loop() {
                         static_cast<uint32_t>(stressStats.failCount));
     if (stressRemaining == 0) {
       finishStressStats();
-      Serial.print("> ");
+      cli::printPrompt();
     }
+
+    return;
   }
 
   String inputLine;
   if (cli_shell::readLine(inputLine)) {
     processCommand(inputLine);
-    Serial.print("> ");
+    if (!stressStats.active) {
+      cli::printPrompt();
+    }
   }
 }

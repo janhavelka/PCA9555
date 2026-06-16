@@ -10,8 +10,10 @@
 #include <Arduino.h>
 
 #include <cerrno>
+#include <cstring>
 #include <cstdlib>
 #include <limits>
+#include <strings.h>
 
 #include "examples/common/Log.h"
 

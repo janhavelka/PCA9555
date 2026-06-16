@@ -6,7 +6,7 @@
 
 namespace PCA9555 {
 
-/// Error codes for all PCA9555 operations
+/// @brief Error codes for all PCA9555 operations.
 enum class Err : uint8_t {
   OK = 0,                    ///< Operation successful
   NOT_INITIALIZED,           ///< begin() not called
@@ -17,7 +17,7 @@ enum class Err : uint8_t {
   DEVICE_NOT_FOUND,          ///< Device not responding on I2C bus
   CONFIG_REG_MISMATCH,       ///< Configuration register != expected default
   BUSY,                      ///< Device is busy
-  IN_PROGRESS,               ///< Operation scheduled; call tick() to complete
+  IN_PROGRESS,               ///< Operation/job is in progress; transport IN_PROGRESS remains health-neutral
 
   // I2C transport details (append-only to preserve existing values)
   I2C_NACK_ADDR,             ///< I2C address not acknowledged
@@ -27,7 +27,7 @@ enum class Err : uint8_t {
   OFFLINE                    ///< Driver is offline; call recover() before normal I/O
 };
 
-/// Status structure returned by all fallible operations
+/// @brief Status structure returned by all fallible operations.
 struct Status {
   Err code = Err::OK;        ///< Error code (OK on success)
   int32_t detail = 0;        ///< Implementation-specific detail (e.g., I2C error code)

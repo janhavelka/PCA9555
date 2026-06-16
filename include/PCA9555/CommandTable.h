@@ -15,30 +15,30 @@ namespace cmd {
 // Auto-increment alternates within a pair only, not across pairs.
 // ============================================================================
 
-/// Input Port 0 — reflects logic level of P00–P07 (read only)
+/// Input Port 0 - input-register sense for P00-P07 (read only; polarity may invert)
 static constexpr uint8_t REG_INPUT_PORT_0 = 0x00;
 
-/// Input Port 1 — reflects logic level of P10–P17 (read only)
+/// Input Port 1 - input-register sense for P10-P17 (read only; polarity may invert)
 static constexpr uint8_t REG_INPUT_PORT_1 = 0x01;
 
-/// Output Port 0 — latched output value for P00–P07 (R/W, default 0xFF)
+/// Output Port 0 - latched output value for P00-P07 (R/W, default 0xFF)
 static constexpr uint8_t REG_OUTPUT_PORT_0 = 0x02;
 
-/// Output Port 1 — latched output value for P10–P17 (R/W, default 0xFF)
+/// Output Port 1 - latched output value for P10-P17 (R/W, default 0xFF)
 static constexpr uint8_t REG_OUTPUT_PORT_1 = 0x03;
 
-/// Polarity Inversion Port 0 — invert input sense for P00–P07 (R/W, default 0x00)
+/// Polarity Inversion Port 0 - invert input sense for P00-P07 (R/W, default 0x00)
 static constexpr uint8_t REG_POLARITY_INV_0 = 0x04;
 
-/// Polarity Inversion Port 1 — invert input sense for P10–P17 (R/W, default 0x00)
+/// Polarity Inversion Port 1 - invert input sense for P10-P17 (R/W, default 0x00)
 static constexpr uint8_t REG_POLARITY_INV_1 = 0x05;
 
-/// Configuration Port 0 — direction for P00–P07 (R/W, default 0xFF)
+/// Configuration Port 0 - direction for P00-P07 (R/W, default 0xFF)
 /// Bit = 1: input (high-Z, internal pullup active)
 /// Bit = 0: output (push-pull, driven by Output Port register)
 static constexpr uint8_t REG_CONFIG_PORT_0 = 0x06;
 
-/// Configuration Port 1 — direction for P10–P17 (R/W, default 0xFF)
+/// Configuration Port 1 - direction for P10-P17 (R/W, default 0xFF)
 /// Bit = 1: input (high-Z, internal pullup active)
 /// Bit = 0: output (push-pull, driven by Output Port register)
 static constexpr uint8_t REG_CONFIG_PORT_1 = 0x07;
@@ -47,7 +47,7 @@ static constexpr uint8_t REG_CONFIG_PORT_1 = 0x07;
 // Register Defaults (after Power-On Reset)
 // ============================================================================
 
-/// Default output port value (all high)
+/// Default output latch value (all latch bits high)
 static constexpr uint8_t DEFAULT_OUTPUT = 0xFF;
 
 /// Default polarity inversion (no inversion)

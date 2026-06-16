@@ -2,7 +2,7 @@
 # Generated and maintained for unified API documentation.
 
 PROJECT_NAME           = "PCA9555"
-PROJECT_NUMBER         = "1.0.0"
+PROJECT_NUMBER         = "1.1.0"
 PROJECT_BRIEF          = "PCA9555 embedded library API documentation"
 OUTPUT_DIRECTORY       = docs/doxygen
 CREATE_SUBDIRS         = NO
@@ -31,11 +31,11 @@ REFERENCED_BY_RELATION = YES
 REFERENCES_RELATION    = YES
 STRIP_CODE_COMMENTS    = NO
 
-INPUT                  = README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md include docs/application_notes
-FILE_PATTERNS          = *.h *.md
+INPUT                  = README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md include docs PCA9555_io_expander_implementation_manual.md examples/common examples/01_basic_bringup_cli examples/espidf_basic
+FILE_PATTERNS          = *.h *.cpp *.md
 RECURSIVE              = YES
-EXCLUDE_PATTERNS       = */.pio/* */.git/* */test/*
-EXAMPLE_PATH           = examples/01_basic_bringup_cli
+EXCLUDE_PATTERNS       = */.pio/* */.git/* */test/* */docs/doxygen/*
+EXAMPLE_PATH           = examples/01_basic_bringup_cli examples/espidf_basic examples/common
 
 USE_MDFILE_AS_MAINPAGE = README.md
 FULL_PATH_NAMES        = NO

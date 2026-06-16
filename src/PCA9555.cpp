@@ -5,7 +5,6 @@
 
 #include "PCA9555/PCA9555.h"
 
-#include <Arduino.h>
 #include <cstring>
 #include <limits>
 
@@ -30,13 +29,40 @@ static bool isValidPort(Port port) {
   return port == Port::PORT_0 || port == Port::PORT_1;
 }
 
+static bool isValidDirection(Direction direction) {
+  return direction == Direction::INPUT_MODE || direction == Direction::OUTPUT_MODE;
+}
+
 static bool isInputRegister(uint8_t reg) {
   return reg == cmd::REG_INPUT_PORT_0 || reg == cmd::REG_INPUT_PORT_1;
+}
+
+static uint8_t pairedRegisterAt(uint8_t startReg, size_t offset) {
+  return static_cast<uint8_t>((startReg & 0xFEU) |
+                              ((startReg + static_cast<uint8_t>(offset)) & 0x01U));
 }
 
 static uint8_t bitMaskForPin(Pin pin) {
   return static_cast<uint8_t>(1U << (pin % cmd::PINS_PER_PORT));
 }
+
+class ScopedOfflineI2cAllowance {
+public:
+  explicit ScopedOfflineI2cAllowance(bool& flag, bool allow) : _flag(flag), _old(flag) {
+    _flag = allow;
+  }
+
+  ~ScopedOfflineI2cAllowance() {
+    _flag = _old;
+  }
+
+  ScopedOfflineI2cAllowance(const ScopedOfflineI2cAllowance&) = delete;
+  ScopedOfflineI2cAllowance& operator=(const ScopedOfflineI2cAllowance&) = delete;
+
+private:
+  bool& _flag;
+  bool _old;
+};
 
 }  // namespace
 
@@ -45,8 +71,13 @@ static uint8_t bitMaskForPin(Pin pin) {
 // ===========================================================================
 
 Status PCA9555::begin(const Config& config) {
+  const bool dirtyBeforeBegin = _hardwareStateDirty;
+  const Status dirtyErrorBeforeBegin = _hardwareStateDirtyError;
+
+  _config = Config{};
   _initialized = false;
   _driverState = DriverState::UNINIT;
+  _allowOfflineI2c = false;
 
   _lastOkMs = 0;
   _lastErrorMs = 0;
@@ -54,34 +85,60 @@ Status PCA9555::begin(const Config& config) {
   _consecutiveFailures = 0;
   _totalFailures = 0;
   _totalSuccess = 0;
-  _allowOfflineIo = false;
-  _outputDirty = false;
-  _polarityDirty = false;
-  _configDirty = false;
-
-  _jobType = JobType::NONE;
-  _jobStep = JobStep::NONE;
-  _lastJobStatus = Status::Ok();
+  _hardwareStateDirty = dirtyBeforeBegin;
+  _hardwareStateDirtyError = dirtyBeforeBegin ? dirtyErrorBeforeBegin : Status::Ok();
+  _finishJob(Status::Ok());
   _lastInputData = PortData{};
-  _jobOutput0 = config.outputPort0;
-  _jobOutput1 = config.outputPort1;
-  _jobConfig0 = config.configPort0;
-  _jobConfig1 = config.configPort1;
-  _jobNeedsConfigWrite = false;
-  _jobInstructionActive = false;
+  _jobOutput0 = Config{}.outputPort0;
+  _jobOutput1 = Config{}.outputPort1;
+  _jobConfig0 = Config{}.configPort0;
+  _jobConfig1 = Config{}.configPort1;
   _pollNowMs = 0;
   _pollNowMsActive = false;
 
-  _cachedOutput0 = config.outputPort0;
-  _cachedOutput1 = config.outputPort1;
-  _cachedConfig0 = config.configPort0;
-  _cachedConfig1 = config.configPort1;
+  _cachedOutput0 = Config{}.outputPort0;
+  _cachedOutput1 = Config{}.outputPort1;
+  _cachedConfig0 = Config{}.configPort0;
+  _cachedConfig1 = Config{}.configPort1;
+
+  auto resetAfterFailedBegin = [this](Status failure) -> Status {
+    _config = Config{};
+    _initialized = false;
+    _driverState = DriverState::UNINIT;
+    _allowOfflineI2c = false;
+    _lastOkMs = 0;
+    _lastErrorMs = 0;
+    _lastError = Status::Ok();
+    _consecutiveFailures = 0;
+    _totalFailures = 0;
+    _totalSuccess = 0;
+    _finishJob(Status::Ok());
+    _lastInputData = PortData{};
+    _jobOutput0 = Config{}.outputPort0;
+    _jobOutput1 = Config{}.outputPort1;
+    _jobConfig0 = Config{}.configPort0;
+    _jobConfig1 = Config{}.configPort1;
+    _pollNowMs = 0;
+    _pollNowMsActive = false;
+    const bool dirty = _hardwareStateDirty;
+    const Status dirtyError = _hardwareStateDirtyError;
+    _clearHardwareStateDirty();
+    if (dirty) {
+      _hardwareStateDirty = true;
+      _hardwareStateDirtyError = dirtyError;
+    }
+    _cachedOutput0 = Config{}.outputPort0;
+    _cachedOutput1 = Config{}.outputPort1;
+    _cachedConfig0 = Config{}.configPort0;
+    _cachedConfig1 = Config{}.configPort1;
+    return failure;
+  };
 
   if (config.i2cWrite == nullptr || config.i2cWriteRead == nullptr) {
     return Status::Error(Err::INVALID_CONFIG, "I2C callbacks not set");
   }
   if ((config.i2cLock == nullptr) != (config.i2cUnlock == nullptr)) {
-    return Status::Error(Err::INVALID_CONFIG, "I2C lock/unlock callbacks must be paired");
+    return Status::Error(Err::INVALID_CONFIG, "I2C lock/unlock callbacks must both be set");
   }
   if (config.i2cTimeoutMs == 0) {
     return Status::Error(Err::INVALID_CONFIG, "I2C timeout must be > 0");
@@ -100,24 +157,27 @@ Status PCA9555::begin(const Config& config) {
   uint8_t startReg = cmd::REG_CONFIG_PORT_0;
   Status st = _i2cWriteReadRaw(&startReg, 1, configRegs, sizeof(configRegs));
   if (!st.ok()) {
-    return Status::Error(Err::DEVICE_NOT_FOUND, "Device not responding", st.detail);
+    return resetAfterFailedBegin(
+        Status::Error(Err::DEVICE_NOT_FOUND, "Device not responding", st.detail));
   }
   if (_config.requireConfigPortDefaults &&
       (configRegs[0] != cmd::DEFAULT_CONFIG || configRegs[1] != cmd::DEFAULT_CONFIG)) {
     const int32_t detail =
         static_cast<int32_t>((static_cast<uint16_t>(configRegs[1]) << 8) | configRegs[0]);
-    return Status::Error(Err::CONFIG_REG_MISMATCH,
-                         "Configuration registers not at POR defaults",
-                         detail);
+    return resetAfterFailedBegin(
+        Status::Error(Err::CONFIG_REG_MISMATCH,
+                      "Configuration registers not at POR defaults",
+                      detail));
   }
 
   st = _applyConfig();
   if (!st.ok()) {
-    return st;
+    return resetAfterFailedBegin(st);
   }
 
   _initialized = true;
   _driverState = DriverState::READY;
+  _clearHardwareStateDirty();
 
   return Status::Ok();
 }
@@ -127,7 +187,7 @@ void PCA9555::tick(uint32_t nowMs) {
 }
 
 void PCA9555::end() {
-  if (_initialized) {
+  if (_initialized && _driverState != DriverState::OFFLINE) {
     // Best-effort: set all pins to input (safe high-Z state).
     // Uses raw I2C to avoid health tracking during shutdown.
     const uint8_t payload[3] = {cmd::REG_CONFIG_PORT_0, 0xFF, 0xFF};
@@ -136,15 +196,27 @@ void PCA9555::end() {
 
   _initialized = false;
   _driverState = DriverState::UNINIT;
-  _finishJob(Status::Error(Err::NOT_INITIALIZED, "begin() not called"));
   _cachedOutput0 = 0xFF;
   _cachedOutput1 = 0xFF;
   _cachedConfig0 = 0xFF;
   _cachedConfig1 = 0xFF;
-  _allowOfflineIo = false;
-  _outputDirty = false;
-  _polarityDirty = false;
-  _configDirty = false;
+  _config = Config{};
+  _allowOfflineI2c = false;
+  _lastOkMs = 0;
+  _lastErrorMs = 0;
+  _lastError = Status::Ok();
+  _consecutiveFailures = 0;
+  _totalFailures = 0;
+  _totalSuccess = 0;
+  _finishJob(Status::Ok());
+  _lastInputData = PortData{};
+  _jobOutput0 = 0xFF;
+  _jobOutput1 = 0xFF;
+  _jobConfig0 = 0xFF;
+  _jobConfig1 = 0xFF;
+  _pollNowMs = 0;
+  _pollNowMsActive = false;
+  _clearHardwareStateDirty();
 }
 
 // ===========================================================================
@@ -156,7 +228,7 @@ Status PCA9555::startReadInputsJob() {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
   if (_driverState == DriverState::OFFLINE) {
-    return Status::Error(Err::OFFLINE, "Driver offline; call recover()");
+    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
   }
   if (_jobType != JobType::NONE) {
     return Status::Error(Err::BUSY, "Chunked job already active");
@@ -173,7 +245,7 @@ Status PCA9555::startWriteOutputsJob(uint16_t mask, uint16_t value) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
   if (_driverState == DriverState::OFFLINE) {
-    return Status::Error(Err::OFFLINE, "Driver offline; call recover()");
+    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
   }
   if (_jobType != JobType::NONE) {
     return Status::Error(Err::BUSY, "Chunked job already active");
@@ -181,16 +253,17 @@ Status PCA9555::startWriteOutputsJob(uint16_t mask, uint16_t value) {
 
   const uint16_t cached = static_cast<uint16_t>(
       (static_cast<uint16_t>(_cachedOutput1) << 8) | _cachedOutput0);
-  const uint16_t next = static_cast<uint16_t>((cached & ~mask) | (value & mask));
-  if (next == cached && !_outputDirty) {
+  const uint16_t next = static_cast<uint16_t>(
+      (cached & static_cast<uint16_t>(~mask)) | (value & mask));
+  if (next == cached) {
     _lastJobStatus = Status::Ok();
     return Status::Ok();
   }
 
   _jobType = JobType::WRITE_OUTPUTS;
   _jobStep = JobStep::WRITE_OUTPUT_PAIR;
-  _jobOutput0 = static_cast<uint8_t>(next & 0xFF);
-  _jobOutput1 = static_cast<uint8_t>((next >> 8) & 0xFF);
+  _jobOutput0 = static_cast<uint8_t>(next & 0xFFU);
+  _jobOutput1 = static_cast<uint8_t>((next >> 8) & 0xFFU);
   _jobNeedsConfigWrite = false;
   _lastJobStatus = Status::Error(Err::IN_PROGRESS, "Job in progress");
   return _lastJobStatus;
@@ -201,7 +274,7 @@ Status PCA9555::startConfigureOutputsJob(uint16_t mask, uint16_t value) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
   if (_driverState == DriverState::OFFLINE) {
-    return Status::Error(Err::OFFLINE, "Driver offline; call recover()");
+    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
   }
   if (_jobType != JobType::NONE) {
     return Status::Error(Err::BUSY, "Chunked job already active");
@@ -211,11 +284,14 @@ Status PCA9555::startConfigureOutputsJob(uint16_t mask, uint16_t value) {
       (static_cast<uint16_t>(_cachedOutput1) << 8) | _cachedOutput0);
   const uint16_t cachedConfig = static_cast<uint16_t>(
       (static_cast<uint16_t>(_cachedConfig1) << 8) | _cachedConfig0);
-  const uint16_t nextOutput = static_cast<uint16_t>((cachedOutput & ~mask) | (value & mask));
-  const uint16_t nextConfig = static_cast<uint16_t>(cachedConfig & ~mask);
+  const uint16_t nextOutput = static_cast<uint16_t>(
+      (cachedOutput & static_cast<uint16_t>(~mask)) | (value & mask));
+  const uint16_t nextConfig = static_cast<uint16_t>(
+      cachedConfig & static_cast<uint16_t>(~mask));
+  const uint16_t transitionMask = static_cast<uint16_t>(cachedConfig & mask);
 
-  const bool needsOutputWrite = (nextOutput != cachedOutput) || _outputDirty;
-  const bool needsConfigWrite = (nextConfig != cachedConfig) || _configDirty;
+  const bool needsOutputWrite = (nextOutput != cachedOutput) || (transitionMask != 0U);
+  const bool needsConfigWrite = (nextConfig != cachedConfig);
   if (!needsOutputWrite && !needsConfigWrite) {
     _lastJobStatus = Status::Ok();
     return Status::Ok();
@@ -223,10 +299,10 @@ Status PCA9555::startConfigureOutputsJob(uint16_t mask, uint16_t value) {
 
   _jobType = JobType::CONFIGURE_OUTPUTS;
   _jobStep = needsOutputWrite ? JobStep::PRELOAD_OUTPUT_PAIR : JobStep::WRITE_CONFIG_PAIR;
-  _jobOutput0 = static_cast<uint8_t>(nextOutput & 0xFF);
-  _jobOutput1 = static_cast<uint8_t>((nextOutput >> 8) & 0xFF);
-  _jobConfig0 = static_cast<uint8_t>(nextConfig & 0xFF);
-  _jobConfig1 = static_cast<uint8_t>((nextConfig >> 8) & 0xFF);
+  _jobOutput0 = static_cast<uint8_t>(nextOutput & 0xFFU);
+  _jobOutput1 = static_cast<uint8_t>((nextOutput >> 8) & 0xFFU);
+  _jobConfig0 = static_cast<uint8_t>(nextConfig & 0xFFU);
+  _jobConfig1 = static_cast<uint8_t>((nextConfig >> 8) & 0xFFU);
   _jobNeedsConfigWrite = needsConfigWrite;
   _lastJobStatus = Status::Error(Err::IN_PROGRESS, "Job in progress");
   return _lastJobStatus;
@@ -240,7 +316,7 @@ Status PCA9555::pollJob(uint32_t nowMs, uint8_t maxInstructions) {
     return Status::Ok();
   }
   if (_driverState == DriverState::OFFLINE) {
-    const Status st = Status::Error(Err::OFFLINE, "Driver offline; call recover()");
+    const Status st = Status::Error(Err::BUSY, "Driver is offline; call recover()");
     _finishJob(st);
     return st;
   }
@@ -258,6 +334,11 @@ Status PCA9555::pollJob(uint32_t nowMs, uint8_t maxInstructions) {
     _jobInstructionActive = false;
     ++executed;
 
+    if (st.inProgress()) {
+      _lastJobStatus = st;
+      _pollNowMsActive = false;
+      return st;
+    }
     if (!st.ok()) {
       _pollNowMsActive = false;
       _finishJob(st);
@@ -270,7 +351,8 @@ Status PCA9555::pollJob(uint32_t nowMs, uint8_t maxInstructions) {
   if (_jobType == JobType::NONE) {
     return Status::Ok();
   }
-  return Status::Error(Err::IN_PROGRESS, "Job in progress", executed);
+  _lastJobStatus = Status::Error(Err::IN_PROGRESS, "Job in progress", executed);
+  return _lastJobStatus;
 }
 
 bool PCA9555::jobActive() const {
@@ -297,10 +379,14 @@ SettingsSnapshot PCA9555::getSettings() const {
   snapshot.consecutiveFailures = _consecutiveFailures;
   snapshot.totalFailures = _totalFailures;
   snapshot.totalSuccess = _totalSuccess;
-  snapshot.outputDirty = _outputDirty;
-  snapshot.polarityDirty = _polarityDirty;
-  snapshot.configDirty = _configDirty;
+  snapshot.hardwareStateDirty = _hardwareStateDirty;
+  snapshot.hardwareStateDirtyError = _hardwareStateDirtyError;
   return snapshot;
+}
+
+Status PCA9555::getSettings(SettingsSnapshot& out) const {
+  out = getSettings();
+  return Status::Ok();
 }
 
 // ===========================================================================
@@ -311,12 +397,8 @@ Status PCA9555::probe() {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
-  Status ready = _requireReadyForPublicIo();
-  if (!ready.ok()) {
-    return ready;
-  }
   if (_jobType != JobType::NONE) {
-    return Status::Error(Err::BUSY, "Chunked job active");
+    return Status::Error(Err::BUSY, "Chunked job already active");
   }
 
   uint8_t configVal = 0;
@@ -332,53 +414,36 @@ Status PCA9555::recover() {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
-
-  const bool previousAllowOfflineIo = _allowOfflineIo;
-  _allowOfflineIo = true;
-
-  // Use tracked read to update health counters
-  uint8_t configVal = 0;
-  Status st = readRegs(cmd::REG_CONFIG_PORT_0, &configVal, 1);
-  if (!st.ok()) {
-    _allowOfflineIo = previousAllowOfflineIo;
-    return st;
+  if (_jobType != JobType::NONE) {
+    return Status::Error(Err::BUSY, "Chunked job already active");
   }
 
-  // Re-apply configuration: after a power glitch the device registers
-  // revert to defaults.
-  st = _applyConfig();
-  if (!st.ok()) {
-    _allowOfflineIo = previousAllowOfflineIo;
-    return st;
+  const bool startedOffline = (_driverState == DriverState::OFFLINE);
+  ScopedOfflineI2cAllowance allowOfflineI2c(_allowOfflineI2c, true);
+  Status result = [&]() -> Status {
+    // Use tracked read to update health counters.
+    uint8_t configVal = 0;
+    Status st = readRegs(cmd::REG_CONFIG_PORT_0, &configVal, 1);
+    if (!st.ok()) {
+      return st;
+    }
+
+    // Re-apply configuration: after a power glitch the device registers
+    // revert to defaults.
+    st = _applyConfig();
+    if (!st.ok()) {
+      return st;
+    }
+
+    return Status::Ok();
+  }();
+  if (startedOffline && !result.ok() && !result.inProgress()) {
+    _reassertOfflineLatch();
   }
-
-  _allowOfflineIo = previousAllowOfflineIo;
-  return Status::Ok();
-}
-
-Status PCA9555::applyInterruptErrataWorkaround() {
-  Status st = _requireReadyForPublicIo();
-  if (!st.ok()) {
-    return st;
+  if (result.ok()) {
+    _clearHardwareStateDirty();
   }
-
-  st = _lockI2c();
-  if (!st.ok()) {
-    return st;
-  }
-
-  const Status ioStatus = _applyInterruptErrata();
-  _unlockI2c();
-  return ioStatus;
-}
-
-Status PCA9555::applyInterruptErrataWorkaroundUnlocked() {
-  Status st = _requireReadyForPublicIo();
-  if (!st.ok()) {
-    return st;
-  }
-
-  return _applyInterruptErrata();
+  return result;
 }
 
 // ===========================================================================
@@ -390,26 +455,77 @@ Status PCA9555::readInputs(PortData& data) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
-  // Burst read both input ports (auto-increment within pair)
   uint8_t buf[2] = {};
-  Status st = readRegs(cmd::REG_INPUT_PORT_0, buf, 2);
+  bool readCompleted = false;
+  Status st = _readInputRegistersCompound(cmd::REG_INPUT_PORT_0, buf, 2, readCompleted);
+  if (readCompleted) {
+    data.port0 = buf[0];
+    data.port1 = buf[1];
+    _lastInputData = data;
+  }
+
+  return st;
+}
+
+Status PCA9555::readInputsAndClearInterrupt(uint16_t& value) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+
+  uint8_t buf[2] = {};
+  bool readCompleted = false;
+  Status st = _readInputRegistersCompound(cmd::REG_INPUT_PORT_0, buf, 2, readCompleted);
+  if (readCompleted) {
+    value = static_cast<uint16_t>((static_cast<uint16_t>(buf[1]) << 8) | buf[0]);
+    _lastInputData.port0 = buf[0];
+    _lastInputData.port1 = buf[1];
+  }
+  return st;
+}
+
+Status PCA9555::clearInterrupts() {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+
+  uint8_t buf[2] = {};
+  bool readCompleted = false;
+  Status st = _readInputRegistersCompound(cmd::REG_INPUT_PORT_0, buf, 2, readCompleted);
+  if (readCompleted) {
+    _lastInputData.port0 = buf[0];
+    _lastInputData.port1 = buf[1];
+  }
+  return st;
+}
+
+Status PCA9555::applyInterruptErrataWorkaround() {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (_jobType != JobType::NONE) {
+    return Status::Error(Err::BUSY, "Chunked job already active");
+  }
+
+  bool locked = false;
+  Status st = _lockBus(locked);
   if (!st.ok()) {
     return st;
   }
 
-  data.port0 = buf[0];
-  data.port1 = buf[1];
-  _lastInputData = data;
+  st = _applyInterruptErrataUnlocked();
+  _unlockBus(locked);
+  return st;
+}
 
-  // Interrupt errata workaround
-  if (_config.applyInterruptErrata) {
-    st = _applyInterruptErrata();
-    if (!st.ok()) {
-      return st;
-    }
+Status PCA9555::applyInterruptErrataWorkaroundUnlocked() {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (_jobType != JobType::NONE) {
+    return Status::Error(Err::BUSY, "Chunked job already active");
   }
 
-  return Status::Ok();
+  return _applyInterruptErrataUnlocked();
 }
 
 Status PCA9555::readInput(Port port, uint8_t& value) {
@@ -424,20 +540,13 @@ Status PCA9555::readInput(Port port, uint8_t& value) {
     ? cmd::REG_INPUT_PORT_0
     : cmd::REG_INPUT_PORT_1;
 
-  Status st = readRegs(reg, &value, 1);
-  if (!st.ok()) {
-    return st;
+  uint8_t buf = 0;
+  bool readCompleted = false;
+  Status st = _readInputRegistersCompound(reg, &buf, 1, readCompleted);
+  if (readCompleted) {
+    value = buf;
   }
-
-  // Interrupt errata workaround
-  if (_config.applyInterruptErrata) {
-    st = _applyInterruptErrata();
-    if (!st.ok()) {
-      return st;
-    }
-  }
-
-  return Status::Ok();
+  return st;
 }
 
 Status PCA9555::readPin(Pin pin, bool& state) {
@@ -449,14 +558,16 @@ Status PCA9555::readPin(Pin pin, bool& state) {
   }
 
   const Port port = (pin < cmd::PINS_PER_PORT) ? Port::PORT_0 : Port::PORT_1;
+  const uint8_t reg = (port == Port::PORT_0)
+    ? cmd::REG_INPUT_PORT_0
+    : cmd::REG_INPUT_PORT_1;
   uint8_t value = 0;
-  Status st = readInput(port, value);
-  if (!st.ok()) {
-    return st;
+  bool readCompleted = false;
+  Status st = _readInputRegistersCompound(reg, &value, 1, readCompleted);
+  if (readCompleted) {
+    state = (value & bitMaskForPin(pin)) != 0;
   }
-
-  state = (value & bitMaskForPin(pin)) != 0;
-  return Status::Ok();
+  return st;
 }
 
 // ===========================================================================
@@ -531,9 +642,8 @@ Status PCA9555::readOutput(Port port, uint8_t& value) {
 }
 
 Status PCA9555::writePin(Pin pin, bool high) {
-  Status ready = _requireReadyForPublicIo();
-  if (!ready.ok()) {
-    return ready;
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
   if (!isValidPin(pin)) {
     return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
@@ -551,11 +661,6 @@ Status PCA9555::writePin(Pin pin, bool high) {
   }
 
   if (newVal == cached) {
-    if (_outputDirty) {
-      return writeOutputs(PortData::fromCombined(
-          static_cast<uint16_t>((static_cast<uint16_t>(_cachedOutput1) << 8) |
-                                _cachedOutput0)));
-    }
     return Status::Ok();
   }
 
@@ -601,8 +706,48 @@ Status PCA9555::readOutputs(PortData& data) {
   _cachedOutput1 = buf[1];
   _config.outputPort0 = buf[0];
   _config.outputPort1 = buf[1];
-  _clearDirtyForRegisterPair(cmd::REG_OUTPUT_PORT_0, 2);
 
+  return Status::Ok();
+}
+
+Status PCA9555::preloadOutput(Pin pin, bool high) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPin(pin)) {
+    return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
+  }
+
+  const uint16_t mask = static_cast<uint16_t>(1U << pin);
+  const uint16_t values = high ? mask : 0U;
+  return preloadOutputs(mask, values);
+}
+
+Status PCA9555::preloadOutputs(uint16_t mask, uint16_t values) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (mask == 0) {
+    return Status::Ok();
+  }
+
+  PortData data;
+  data.port0 = static_cast<uint8_t>((_cachedOutput0 & ~static_cast<uint8_t>(mask & 0xFFU)) |
+      (static_cast<uint8_t>(values) & static_cast<uint8_t>(mask)));
+  data.port1 = static_cast<uint8_t>((_cachedOutput1 &
+      ~static_cast<uint8_t>((mask >> 8) & 0xFFU)) |
+      (static_cast<uint8_t>(values >> 8) & static_cast<uint8_t>(mask >> 8)));
+
+  const uint8_t buf[2] = {data.port0, data.port1};
+  Status st = writeRegs(cmd::REG_OUTPUT_PORT_0, buf, 2);
+  if (!st.ok()) {
+    return st;
+  }
+
+  _cachedOutput0 = data.port0;
+  _cachedOutput1 = data.port1;
+  _config.outputPort0 = data.port0;
+  _config.outputPort1 = data.port1;
   return Status::Ok();
 }
 
@@ -611,9 +756,8 @@ Status PCA9555::readOutputs(PortData& data) {
 // ===========================================================================
 
 Status PCA9555::setOutputBits(uint16_t mask) {
-  Status ready = _requireReadyForPublicIo();
-  if (!ready.ok()) {
-    return ready;
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
   PortData data;
@@ -621,9 +765,6 @@ Status PCA9555::setOutputBits(uint16_t mask) {
   data.port1 = _cachedOutput1 | static_cast<uint8_t>((mask >> 8) & 0xFF);
 
   if (data.port0 == _cachedOutput0 && data.port1 == _cachedOutput1) {
-    if (_outputDirty) {
-      return writeOutputs(data);
-    }
     return Status::Ok();
   }
 
@@ -631,9 +772,8 @@ Status PCA9555::setOutputBits(uint16_t mask) {
 }
 
 Status PCA9555::clearOutputBits(uint16_t mask) {
-  Status ready = _requireReadyForPublicIo();
-  if (!ready.ok()) {
-    return ready;
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
   PortData data;
@@ -641,9 +781,6 @@ Status PCA9555::clearOutputBits(uint16_t mask) {
   data.port1 = _cachedOutput1 & static_cast<uint8_t>(~(mask >> 8) & 0xFF);
 
   if (data.port0 == _cachedOutput0 && data.port1 == _cachedOutput1) {
-    if (_outputDirty) {
-      return writeOutputs(data);
-    }
     return Status::Ok();
   }
 
@@ -651,17 +788,11 @@ Status PCA9555::clearOutputBits(uint16_t mask) {
 }
 
 Status PCA9555::toggleOutputBits(uint16_t mask) {
-  Status ready = _requireReadyForPublicIo();
-  if (!ready.ok()) {
-    return ready;
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
   if (mask == 0) {
-    if (_outputDirty) {
-      return writeOutputs(PortData::fromCombined(
-          static_cast<uint16_t>((static_cast<uint16_t>(_cachedOutput1) << 8) |
-                                _cachedOutput0)));
-    }
     return Status::Ok();
   }
 
@@ -690,9 +821,8 @@ Status PCA9555::togglePin(Pin pin) {
 }
 
 Status PCA9555::configureInputBits(uint16_t mask) {
-  Status ready = _requireReadyForPublicIo();
-  if (!ready.ok()) {
-    return ready;
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
   PortData data;
@@ -700,9 +830,6 @@ Status PCA9555::configureInputBits(uint16_t mask) {
   data.port1 = _cachedConfig1 | static_cast<uint8_t>((mask >> 8) & 0xFF);
 
   if (data.port0 == _cachedConfig0 && data.port1 == _cachedConfig1) {
-    if (_configDirty) {
-      return setConfiguration(data);
-    }
     return Status::Ok();
   }
 
@@ -710,38 +837,25 @@ Status PCA9555::configureInputBits(uint16_t mask) {
 }
 
 Status PCA9555::configureOutputBits(uint16_t mask) {
-  Status ready = _requireReadyForPublicIo();
-  if (!ready.ok()) {
-    return ready;
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
-  PortData data;
-  data.port0 = _cachedConfig0 & static_cast<uint8_t>(~mask & 0xFF);
-  data.port1 = _cachedConfig1 & static_cast<uint8_t>(~(mask >> 8) & 0xFF);
-
-  if (data.port0 == _cachedConfig0 && data.port1 == _cachedConfig1) {
-    if (_configDirty) {
-      return setConfiguration(data);
-    }
+  const uint16_t currentConfig = static_cast<uint16_t>(
+      (static_cast<uint16_t>(_cachedConfig1) << 8) | _cachedConfig0);
+  const uint16_t transitionMask = static_cast<uint16_t>(currentConfig & mask);
+  if (transitionMask == 0) {
     return Status::Ok();
   }
 
-  return setConfiguration(data);
-}
-
-Status PCA9555::configureOutputs(uint16_t mask, uint16_t value) {
-  Status st = startConfigureOutputsJob(mask, value);
-  if (!st.inProgress()) {
-    return st;
-  }
-
-  return pollJob(_nowMs(), 2);
+  const uint16_t cachedOutputs = static_cast<uint16_t>(
+      (static_cast<uint16_t>(_cachedOutput1) << 8) | _cachedOutput0);
+  return configureOutputs(transitionMask, cachedOutputs);
 }
 
 Status PCA9555::setInvertBits(uint16_t mask) {
-  Status ready = _requireReadyForPublicIo();
-  if (!ready.ok()) {
-    return ready;
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
   PortData data;
@@ -750,9 +864,6 @@ Status PCA9555::setInvertBits(uint16_t mask) {
 
   if (data.port0 == _config.polarityPort0 &&
       data.port1 == _config.polarityPort1) {
-    if (_polarityDirty) {
-      return setPolarity(data);
-    }
     return Status::Ok();
   }
 
@@ -760,9 +871,8 @@ Status PCA9555::setInvertBits(uint16_t mask) {
 }
 
 Status PCA9555::clearInvertBits(uint16_t mask) {
-  Status ready = _requireReadyForPublicIo();
-  if (!ready.ok()) {
-    return ready;
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
   PortData data;
@@ -771,9 +881,6 @@ Status PCA9555::clearInvertBits(uint16_t mask) {
 
   if (data.port0 == _config.polarityPort0 &&
       data.port1 == _config.polarityPort1) {
-    if (_polarityDirty) {
-      return setPolarity(data);
-    }
     return Status::Ok();
   }
 
@@ -789,6 +896,22 @@ Status PCA9555::setConfiguration(const PortData& data) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
 
+  const uint16_t inputToOutputMask = static_cast<uint16_t>(
+      ((static_cast<uint16_t>(_cachedConfig1) << 8) | _cachedConfig0) &
+      ~((static_cast<uint16_t>(data.port1) << 8) | data.port0));
+  if (inputToOutputMask != 0) {
+    const uint16_t cachedOutputs = static_cast<uint16_t>(
+        (static_cast<uint16_t>(_cachedOutput1) << 8) | _cachedOutput0);
+    Status st = preloadOutputs(inputToOutputMask, cachedOutputs);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+
+  return _writeConfigurationNoPreload(data);
+}
+
+Status PCA9555::_writeConfigurationNoPreload(const PortData& data) {
   const uint8_t buf[2] = {data.port0, data.port1};
   Status st = writeRegs(cmd::REG_CONFIG_PORT_0, buf, 2);
   if (!st.ok()) {
@@ -810,6 +933,24 @@ Status PCA9555::setPortConfiguration(Port port, uint8_t value) {
     return Status::Error(Err::INVALID_PARAM, "Port out of range");
   }
 
+  const uint8_t currentConfig = (port == Port::PORT_0) ? _cachedConfig0 : _cachedConfig1;
+  const uint8_t inputToOutputMask = static_cast<uint8_t>(currentConfig & ~value);
+  if (inputToOutputMask != 0) {
+    const uint16_t mask = (port == Port::PORT_0)
+        ? inputToOutputMask
+        : static_cast<uint16_t>(inputToOutputMask) << 8;
+    const uint16_t cachedOutputs = static_cast<uint16_t>(
+        (static_cast<uint16_t>(_cachedOutput1) << 8) | _cachedOutput0);
+    Status st = preloadOutputs(mask, cachedOutputs);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+
+  return _writePortConfigurationNoPreload(port, value);
+}
+
+Status PCA9555::_writePortConfigurationNoPreload(Port port, uint8_t value) {
   const uint8_t reg = (port == Port::PORT_0)
     ? cmd::REG_CONFIG_PORT_0
     : cmd::REG_CONFIG_PORT_1;
@@ -868,7 +1009,6 @@ Status PCA9555::getConfiguration(PortData& data) {
   _cachedConfig1 = buf[1];
   _config.configPort0 = buf[0];
   _config.configPort1 = buf[1];
-  _clearDirtyForRegisterPair(cmd::REG_CONFIG_PORT_0, 2);
 
   return Status::Ok();
 }
@@ -950,14 +1090,12 @@ Status PCA9555::getPolarity(PortData& data) {
   data.port1 = buf[1];
   _config.polarityPort0 = buf[0];
   _config.polarityPort1 = buf[1];
-  _clearDirtyForRegisterPair(cmd::REG_POLARITY_INV_0, 2);
   return Status::Ok();
 }
 
 Status PCA9555::setPinPolarity(Pin pin, bool inverted) {
-  Status ready = _requireReadyForPublicIo();
-  if (!ready.ok()) {
-    return ready;
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
   if (!isValidPin(pin)) {
     return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
@@ -975,12 +1113,6 @@ Status PCA9555::setPinPolarity(Pin pin, bool inverted) {
   }
 
   if (newVal == current) {
-    if (_polarityDirty) {
-      PortData data;
-      data.port0 = _config.polarityPort0;
-      data.port1 = _config.polarityPort1;
-      return setPolarity(data);
-    }
     return Status::Ok();
   }
 
@@ -1008,9 +1140,8 @@ Status PCA9555::getPinPolarity(Pin pin, bool& inverted) {
 }
 
 Status PCA9555::setPinDirection(Pin pin, bool input) {
-  Status ready = _requireReadyForPublicIo();
-  if (!ready.ok()) {
-    return ready;
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
   if (!isValidPin(pin)) {
     return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
@@ -1028,17 +1159,51 @@ Status PCA9555::setPinDirection(Pin pin, bool input) {
   }
 
   if (newVal == cached) {
-    if (_configDirty) {
-      PortData data;
-      data.port0 = _cachedConfig0;
-      data.port1 = _cachedConfig1;
-      return setConfiguration(data);
-    }
     return Status::Ok();
   }
 
   const Port port = isPort0 ? Port::PORT_0 : Port::PORT_1;
   return setPortConfiguration(port, newVal);
+}
+
+Status PCA9555::setDirection(Pin pin, Direction direction) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!isValidPin(pin)) {
+    return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
+  }
+  if (!isValidDirection(direction)) {
+    return Status::Error(Err::INVALID_PARAM, "Invalid direction");
+  }
+
+  return setPinDirection(pin, direction == Direction::INPUT_MODE);
+}
+
+Status PCA9555::configureOutputs(uint16_t outputMask, uint16_t outputValues) {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (outputMask == 0) {
+    return Status::Ok();
+  }
+
+  Status st = preloadOutputs(outputMask, outputValues);
+  if (!st.ok()) {
+    return st;
+  }
+
+  PortData data;
+  data.port0 = static_cast<uint8_t>(_cachedConfig0 &
+      ~static_cast<uint8_t>(outputMask & 0xFFU));
+  data.port1 = static_cast<uint8_t>(_cachedConfig1 &
+      ~static_cast<uint8_t>((outputMask >> 8) & 0xFFU));
+
+  if (data.port0 == _cachedConfig0 && data.port1 == _cachedConfig1) {
+    return Status::Ok();
+  }
+
+  return _writeConfigurationNoPreload(data);
 }
 
 Status PCA9555::getPinDirection(Pin pin, bool& input) {
@@ -1082,23 +1247,21 @@ Status PCA9555::readRegisters(uint8_t startReg, uint8_t* buf, size_t len) {
     return Status::Error(Err::INVALID_PARAM, "Read length too large");
   }
 
-  Status st = readRegs(startReg, buf, len);
+  Status st = Status::Ok();
+  if (isInputRegister(startReg)) {
+    bool readCompleted = false;
+    st = _readInputRegistersCompound(startReg, buf, len, readCompleted);
+  } else {
+    st = readRegs(startReg, buf, len);
+  }
   if (!st.ok()) {
     return st;
   }
 
   for (size_t i = 0; i < len; ++i) {
-    _syncShadowRegister(static_cast<uint8_t>(startReg + static_cast<uint8_t>(i)),
-                       buf[i]);
+    _syncShadowRegister(pairedRegisterAt(startReg, i), buf[i]);
   }
-  _clearDirtyForRegisterPair(startReg, len);
 
-  if (isInputRegister(startReg) && _config.applyInterruptErrata) {
-    st = _applyInterruptErrata();
-    if (!st.ok()) {
-      return st;
-    }
-  }
   return Status::Ok();
 }
 
@@ -1122,8 +1285,7 @@ Status PCA9555::writeRegisters(uint8_t startReg, const uint8_t* buf, size_t len)
   }
 
   for (size_t i = 0; i < len; ++i) {
-    _syncShadowRegister(static_cast<uint8_t>(startReg + static_cast<uint8_t>(i)),
-                       buf[i]);
+    _syncShadowRegister(pairedRegisterAt(startReg, i), buf[i]);
   }
   return Status::Ok();
 }
@@ -1134,7 +1296,7 @@ Status PCA9555::writeRegisters(uint8_t startReg, const uint8_t* buf, size_t len)
 
 Status PCA9555::_i2cWriteReadRaw(const uint8_t* txBuf, size_t txLen,
                                  uint8_t* rxBuf, size_t rxLen) {
-  if (txBuf == nullptr || txLen == 0 || (rxLen > 0 && rxBuf == nullptr)) {
+  if (txBuf == nullptr || txLen == 0 || rxBuf == nullptr || rxLen == 0) {
     return Status::Error(Err::INVALID_PARAM, "Invalid I2C buffer");
   }
   if (_config.i2cWriteRead == nullptr) {
@@ -1157,13 +1319,12 @@ Status PCA9555::_i2cWriteRaw(const uint8_t* buf, size_t len) {
 
 Status PCA9555::_i2cWriteReadTracked(const uint8_t* txBuf, size_t txLen,
                                      uint8_t* rxBuf, size_t rxLen) {
-  if (txBuf == nullptr || txLen == 0 || (rxLen > 0 && rxBuf == nullptr)) {
-    return Status::Error(Err::INVALID_PARAM, "Invalid I2C buffer");
+  if (_initialized && _driverState == DriverState::OFFLINE && !_allowOfflineI2c) {
+    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
   }
 
-  Status blocked = _offlineBlockedStatus();
-  if (!blocked.ok()) {
-    return blocked;
+  if (txBuf == nullptr || txLen == 0 || rxBuf == nullptr || rxLen == 0) {
+    return Status::Error(Err::INVALID_PARAM, "Invalid I2C buffer");
   }
 
   Status st = _i2cWriteReadRaw(txBuf, txLen, rxBuf, rxLen);
@@ -1174,18 +1335,20 @@ Status PCA9555::_i2cWriteReadTracked(const uint8_t* txBuf, size_t txLen,
 }
 
 Status PCA9555::_i2cWriteTracked(const uint8_t* buf, size_t len) {
-  if (buf == nullptr || len == 0) {
-    return Status::Error(Err::INVALID_PARAM, "Invalid I2C buffer");
+  if (_initialized && _driverState == DriverState::OFFLINE && !_allowOfflineI2c) {
+    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
   }
 
-  Status blocked = _offlineBlockedStatus();
-  if (!blocked.ok()) {
-    return blocked;
+  if (buf == nullptr || len == 0) {
+    return Status::Error(Err::INVALID_PARAM, "Invalid I2C buffer");
   }
 
   Status st = _i2cWriteRaw(buf, len);
   if (st.code == Err::INVALID_CONFIG || st.code == Err::INVALID_PARAM) {
     return st;
+  }
+  if (len > 1 && !st.ok() && !st.inProgress()) {
+    _markHardwareStateDirty(st);
   }
   return _updateHealth(st);
 }
@@ -1195,18 +1358,17 @@ Status PCA9555::_i2cWriteTracked(const uint8_t* buf, size_t len) {
 // ===========================================================================
 
 Status PCA9555::readRegs(uint8_t startReg, uint8_t* buf, size_t len) {
-  if (_jobType != JobType::NONE && !_jobInstructionActive) {
-    return Status::Error(Err::BUSY, "Chunked job active");
-  }
   if (buf == nullptr || len == 0) {
     return Status::Error(Err::INVALID_PARAM, "Invalid read buffer");
   }
   if (!isValidRegister(startReg)) {
     return Status::Error(Err::INVALID_PARAM, "Register address out of range");
   }
-  const size_t pairRemaining = 2U - static_cast<size_t>(startReg & 0x01U);
-  if (len > pairRemaining) {
-    return Status::Error(Err::INVALID_PARAM, "Read crosses register pair boundary");
+  if (len > MAX_BULK_LEN) {
+    return Status::Error(Err::INVALID_PARAM, "Read length too large");
+  }
+  if (_jobType != JobType::NONE && !_jobInstructionActive) {
+    return Status::Error(Err::BUSY, "Chunked job already active");
   }
 
   uint8_t reg = startReg;
@@ -1214,9 +1376,6 @@ Status PCA9555::readRegs(uint8_t startReg, uint8_t* buf, size_t len) {
 }
 
 Status PCA9555::writeRegs(uint8_t startReg, const uint8_t* buf, size_t len) {
-  if (_jobType != JobType::NONE && !_jobInstructionActive) {
-    return Status::Error(Err::BUSY, "Chunked job active");
-  }
   if (buf == nullptr || len == 0) {
     return Status::Error(Err::INVALID_PARAM, "Invalid write buffer");
   }
@@ -1226,24 +1385,53 @@ Status PCA9555::writeRegs(uint8_t startReg, const uint8_t* buf, size_t len) {
   if (len > MAX_BULK_LEN) {
     return Status::Error(Err::INVALID_PARAM, "Write length too large");
   }
-  const size_t pairRemaining = 2U - static_cast<size_t>(startReg & 0x01U);
-  if (len > pairRemaining) {
-    return Status::Error(Err::INVALID_PARAM, "Write crosses register pair boundary");
+  if (_jobType != JobType::NONE && !_jobInstructionActive) {
+    return Status::Error(Err::BUSY, "Chunked job already active");
   }
 
   uint8_t payload[MAX_BULK_LEN + 1] = {};
   payload[0] = startReg;
   std::memcpy(&payload[1], buf, len);
 
-  Status st = _i2cWriteTracked(payload, len + 1);
+  return _i2cWriteTracked(payload, len + 1);
+}
+
+Status PCA9555::_readInputRegistersLocked(uint8_t startReg, uint8_t* buf, size_t len,
+                                          bool& readCompleted) {
+  readCompleted = false;
+  Status st = readRegs(startReg, buf, len);
   if (!st.ok()) {
-    if (st.code != Err::OFFLINE) {
-      _markDirtyForRegister(startReg);
-    }
     return st;
   }
 
-  _clearDirtyForRegisterPair(startReg, len);
+  readCompleted = true;
+  if (_config.applyInterruptErrata) {
+    st = _applyInterruptErrataUnlocked();
+    if (!st.ok()) {
+      return st;
+    }
+  }
+
+  return Status::Ok();
+}
+
+Status PCA9555::_readInputRegistersCompound(uint8_t startReg, uint8_t* buf, size_t len,
+                                            bool& readCompleted) {
+  readCompleted = false;
+  if (_jobType != JobType::NONE && !_jobInstructionActive) {
+    return Status::Error(Err::BUSY, "Chunked job already active");
+  }
+
+  bool locked = false;
+  if (_config.applyInterruptErrata) {
+    Status st = _lockBus(locked);
+    if (!st.ok()) {
+      return st;
+    }
+  }
+
+  Status st = _readInputRegistersLocked(startReg, buf, len, readCompleted);
+  _unlockBus(locked);
   return st;
 }
 
@@ -1258,6 +1446,9 @@ Status PCA9555::_readRegisterRaw(uint8_t reg, uint8_t& value) {
 
 Status PCA9555::_updateHealth(const Status& st) {
   if (!_initialized) {
+    return st;
+  }
+  if (st.inProgress()) {
     return st;
   }
 
@@ -1293,21 +1484,12 @@ Status PCA9555::_updateHealth(const Status& st) {
   return st;
 }
 
-Status PCA9555::_requireReadyForPublicIo() const {
-  if (!_initialized) {
-    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+void PCA9555::_reassertOfflineLatch() {
+  _driverState = DriverState::OFFLINE;
+  const uint8_t threshold = _config.offlineThreshold == 0 ? 1 : _config.offlineThreshold;
+  if (_consecutiveFailures < threshold) {
+    _consecutiveFailures = threshold;
   }
-  if (_jobType != JobType::NONE && !_jobInstructionActive) {
-    return Status::Error(Err::BUSY, "Chunked job active");
-  }
-  return _offlineBlockedStatus();
-}
-
-Status PCA9555::_offlineBlockedStatus() const {
-  if (_initialized && _driverState == DriverState::OFFLINE && !_allowOfflineIo) {
-    return Status::Error(Err::OFFLINE, "Driver offline; call recover()");
-  }
-  return Status::Ok();
 }
 
 // ===========================================================================
@@ -1319,10 +1501,6 @@ Status PCA9555::_applyConfig() {
   const uint8_t outBuf[2] = {_config.outputPort0, _config.outputPort1};
   Status st = writeRegs(cmd::REG_OUTPUT_PORT_0, outBuf, 2);
   if (!st.ok()) {
-    if (st.code != Err::OFFLINE) {
-      _polarityDirty = true;
-      _configDirty = true;
-    }
     return st;
   }
 
@@ -1330,9 +1508,6 @@ Status PCA9555::_applyConfig() {
   const uint8_t polBuf[2] = {_config.polarityPort0, _config.polarityPort1};
   st = writeRegs(cmd::REG_POLARITY_INV_0, polBuf, 2);
   if (!st.ok()) {
-    if (st.code != Err::OFFLINE) {
-      _configDirty = true;
-    }
     return st;
   }
 
@@ -1343,19 +1518,13 @@ Status PCA9555::_applyConfig() {
     return st;
   }
 
-  // Step 4: Read input ports to clear any pending interrupts.
+  // Step 4/5: Read input ports to clear any pending interrupts, then apply
+  // the errata workaround while holding any configured compound-sequence lock.
   uint8_t inputBuf[2] = {};
-  st = readRegs(cmd::REG_INPUT_PORT_0, inputBuf, 2);
+  bool readCompleted = false;
+  st = _readInputRegistersCompound(cmd::REG_INPUT_PORT_0, inputBuf, 2, readCompleted);
   if (!st.ok()) {
     return st;
-  }
-
-  // Step 5: Apply interrupt errata workaround.
-  if (_config.applyInterruptErrata) {
-    st = _applyInterruptErrata();
-    if (!st.ok()) {
-      return st;
-    }
   }
 
   // Update cached state
@@ -1367,7 +1536,7 @@ Status PCA9555::_applyConfig() {
   return Status::Ok();
 }
 
-Status PCA9555::_applyInterruptErrata() {
+Status PCA9555::_applyInterruptErrataUnlocked() {
   // Write a command byte != 0x00 to prevent false interrupt de-assertion
   // when another device on the bus is read.
   // We send just the command byte (register pointer) without data.
@@ -1375,16 +1544,27 @@ Status PCA9555::_applyInterruptErrata() {
   return _i2cWriteTracked(&safeCmd, 1);
 }
 
-Status PCA9555::_lockI2c() {
-  if (_config.i2cLock == nullptr) {
+Status PCA9555::_lockBus(bool& locked) {
+  locked = false;
+  if (_config.i2cLock == nullptr && _config.i2cUnlock == nullptr) {
     return Status::Ok();
   }
-  return _config.i2cLock(_config.i2cLockUser);
+  if (_config.i2cLock == nullptr || _config.i2cUnlock == nullptr) {
+    return Status::Error(Err::INVALID_CONFIG, "I2C lock/unlock callbacks must both be set");
+  }
+
+  Status st = _config.i2cLock(_config.lockUser, _config.i2cTimeoutMs);
+  if (!st.ok()) {
+    return st;
+  }
+
+  locked = true;
+  return Status::Ok();
 }
 
-void PCA9555::_unlockI2c() {
-  if (_config.i2cUnlock != nullptr) {
-    _config.i2cUnlock(_config.i2cLockUser);
+void PCA9555::_unlockBus(bool locked) {
+  if (locked && _config.i2cUnlock != nullptr) {
+    _config.i2cUnlock(_config.lockUser);
   }
 }
 
@@ -1408,7 +1588,7 @@ Status PCA9555::_executeJobInstruction() {
     }
 
     case JobStep::POINTER_PARK: {
-      Status st = _applyInterruptErrata();
+      Status st = _applyInterruptErrataUnlocked();
       if (!st.ok()) {
         return st;
       }
@@ -1427,7 +1607,6 @@ Status PCA9555::_executeJobInstruction() {
       _cachedOutput1 = _jobOutput1;
       _config.outputPort0 = _jobOutput0;
       _config.outputPort1 = _jobOutput1;
-      _outputDirty = false;
       _finishJob(Status::Ok());
       return Status::Ok();
     }
@@ -1443,7 +1622,6 @@ Status PCA9555::_executeJobInstruction() {
       _cachedOutput1 = _jobOutput1;
       _config.outputPort0 = _jobOutput0;
       _config.outputPort1 = _jobOutput1;
-      _outputDirty = false;
       if (_jobNeedsConfigWrite) {
         _jobStep = JobStep::WRITE_CONFIG_PAIR;
       } else {
@@ -1463,7 +1641,6 @@ Status PCA9555::_executeJobInstruction() {
       _cachedConfig1 = _jobConfig1;
       _config.configPort0 = _jobConfig0;
       _config.configPort1 = _jobConfig1;
-      _configDirty = false;
       _finishJob(Status::Ok());
       return Status::Ok();
     }
@@ -1512,42 +1689,6 @@ void PCA9555::_syncShadowRegister(uint8_t reg, uint8_t value) {
   }
 }
 
-void PCA9555::_markDirtyForRegister(uint8_t reg) {
-  switch (reg & 0xFEU) {
-    case cmd::REG_OUTPUT_PORT_0:
-      _outputDirty = true;
-      break;
-    case cmd::REG_POLARITY_INV_0:
-      _polarityDirty = true;
-      break;
-    case cmd::REG_CONFIG_PORT_0:
-      _configDirty = true;
-      break;
-    default:
-      break;
-  }
-}
-
-void PCA9555::_clearDirtyForRegisterPair(uint8_t startReg, size_t len) {
-  if ((startReg & 0x01U) != 0 || len < 2) {
-    return;
-  }
-
-  switch (startReg) {
-    case cmd::REG_OUTPUT_PORT_0:
-      _outputDirty = false;
-      break;
-    case cmd::REG_POLARITY_INV_0:
-      _polarityDirty = false;
-      break;
-    case cmd::REG_CONFIG_PORT_0:
-      _configDirty = false;
-      break;
-    default:
-      break;
-  }
-}
-
 uint32_t PCA9555::_nowMs() const {
   if (_pollNowMsActive) {
     return _pollNowMs;
@@ -1555,7 +1696,22 @@ uint32_t PCA9555::_nowMs() const {
   if (_config.nowMs != nullptr) {
     return _config.nowMs(_config.timeUser);
   }
-  return millis();
+  return 0U;
+}
+
+void PCA9555::_markHardwareStateDirty(const Status& st) {
+  if (st.ok() || st.inProgress() ||
+      st.code == Err::INVALID_CONFIG || st.code == Err::INVALID_PARAM ||
+      st.code == Err::NOT_INITIALIZED || st.code == Err::BUSY) {
+    return;
+  }
+  _hardwareStateDirty = true;
+  _hardwareStateDirtyError = st;
+}
+
+void PCA9555::_clearHardwareStateDirty() {
+  _hardwareStateDirty = false;
+  _hardwareStateDirtyError = Status::Ok();
 }
 
 } // namespace PCA9555

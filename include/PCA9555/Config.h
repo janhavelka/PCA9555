@@ -78,7 +78,7 @@ enum class Port : uint8_t {
 
 /// @brief Pin direction.
 enum class Direction : uint8_t {
-  INPUT_MODE = 0,   ///< High-Z input
+  INPUT_MODE = 0,   ///< Input; output driver high-Z, internal pull-up present
   OUTPUT_MODE = 1   ///< Push-pull output driven by the output latch
 };
 

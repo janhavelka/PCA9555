@@ -17,8 +17,8 @@ Primary source:
 | `0x03` | Output Port 1 | R/W | `0xFF` | Latched output state for P10-P17. Pins follow these bits only when configured as outputs. |
 | `0x04` | Polarity Inversion 0 | R/W | `0x00` | `1 = invert input sense`, `0 = normal input sense` for P00-P07. |
 | `0x05` | Polarity Inversion 1 | R/W | `0x00` | `1 = invert input sense`, `0 = normal input sense` for P10-P17. |
-| `0x06` | Configuration 0 | R/W | `0xFF` | `1 = input/high-Z`, `0 = push-pull output` for P00-P07. POR makes all pins inputs. |
-| `0x07` | Configuration 1 | R/W | `0xFF` | `1 = input/high-Z`, `0 = push-pull output` for P10-P17. POR makes all pins inputs. |
+| `0x06` | Configuration 0 | R/W | `0xFF` | `1 = input with output driver high-Z and internal pull-up present`, `0 = push-pull output` for P00-P07. POR makes all pins inputs. |
+| `0x07` | Configuration 1 | R/W | `0xFF` | `1 = input with output driver high-Z and internal pull-up present`, `0 = push-pull output` for P10-P17. POR makes all pins inputs. |
 
 Combined defaults after a true PCA9555 power-on reset:
 
@@ -51,7 +51,8 @@ one pair.
 - Input registers are read-only; writes to `0x00` or `0x01` are rejected by the
   public direct write APIs.
 - Successful direct access synchronizes the corresponding cached runtime state.
-- Failed direct writes mark `hardwareStateDirty()` because hardware may have
+- Failed direct writes mark `hardwareStateDirty()` and preserve the original
+  write error through `hardwareStateDirtyError()` because hardware may have
   accepted one data byte while the driver cache remained unchanged.
 
 ## Presence, Defaults, and Recovery
@@ -68,6 +69,9 @@ one pair.
 - INT is active-low/open-drain and requires a pull-up.
 - Reading an input port clears interrupt state for that port only. Reading Port 0
   does not clear Port 1, and reading Port 1 does not clear Port 0.
+- The clear point is tied to the read ACK/NACK phase; an input transition during
+  that clock can be lost or produce a very short INT pulse. Re-read or debounce
+  at the application level when edge certainty matters.
 - `readInputs()`, `readInputsAndClearInterrupt()`, and `clearInterrupts()` read
   both input ports and therefore clear both port sources.
 - Pins configured as outputs do not generate input-change interrupts.

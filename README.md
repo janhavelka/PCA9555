@@ -36,6 +36,8 @@ Release evidence:
   application-provided transport owns all bus setup and serialization.
 - PCA9555 outputs are push-pull. Verify external loads before enabling outputs;
   the device is rated for limited source/sink current and is not a power driver.
+- Active-low LED loads tied to VCC can increase off-state standby current; keep
+  board-level LED drive circuits within the chip notes and current budgets.
 - Use `configureOutputs(mask, values)` or `preloadOutput()` before enabling
   outputs at runtime so the output latch is written before the direction bit is
   cleared.
@@ -44,6 +46,8 @@ Release evidence:
   voltage.
 - INT is active-low/open-drain and requires a pull-up. I2C APIs are not ISR-safe;
   service INT by notifying task/main context and then reading input ports.
+- INT clear timing is tied to the input-read ACK/NACK phase, so debounce or
+  re-read at application level when edges can arrive during service.
 - Output-to-input direction changes can cause false interrupt behavior. Treat
   the first post-change interrupt as a rebaseline event.
 - `probe()` only proves that an address responded on the bus. The PCA9555 has no
@@ -490,6 +494,9 @@ those polls when the errata workaround matters on a shared bus.
 - Reading the **Input Port** register reports the input-register sense after configured polarity inversion. With normal polarity this corresponds to the physical pin level, including when the pin is configured as an output.
 - Only pins configured as inputs generate input-change interrupts.
 - Each PCA9555 I/O has an internal ~100 kOhm pull-up when configured as an input. Inputs held low draw extra standby current, so unused inputs should be left high or configured as outputs driven high in low-power designs.
+- Input mode leaves the output driver high-Z, but the internal pull-up is still
+  present and is not software configurable.
+- Hardware limits, POR behavior, current budgets, interrupt caveats, and layout notes are preserved in [docs/chip_notes.md](docs/chip_notes.md).
 
 ## Examples
 

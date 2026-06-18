@@ -106,8 +106,8 @@ public:
   
   /// Shutdown the driver.
   /// If initialized and not OFFLINE, attempts a best-effort raw write to set
-  /// all pins to input/high-Z. If already OFFLINE, clears local state without
-  /// touching the bus.
+  /// all pins to input mode (output drivers high-Z; internal pull-ups remain
+  /// present). If already OFFLINE, clears local state without touching the bus.
   void end();
 
   // =========================================================================

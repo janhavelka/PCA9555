@@ -9,6 +9,8 @@ live in Doxygen comments under `include/`.
 - [Register reference](register_reference.md): PCA9555 register map, pair
   auto-increment behavior, direct access rules, interrupt notes, and errata
   summary.
+- [Chip notes](chip_notes.md): durable electrical, reset, current, interrupt,
+  and layout facts extracted from the source chip documentation.
 - [Hardware validation](hardware_validation.md): HIL runner usage, target run
   template, evidence checklist, and hardware validation matrix.
 - [ESP-IDF notes](espidf.md): native ESP-IDF component/example boundary,

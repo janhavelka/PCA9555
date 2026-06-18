@@ -179,6 +179,7 @@ and fault/recovery evidence is reviewed.
 | INT port 0 clear | INT pulled up; Port 0 input switchable | Baseline inputs, toggle Port 0 input, read Port 0 | INT asserts on change and clears after reading Port 0 | NOT RUN | |
 | INT port 1 clear | INT pulled up; Port 1 input switchable | Baseline inputs, toggle Port 1 input, read Port 1 | INT asserts on change and clears after reading Port 1 | NOT RUN | |
 | Both-port INT clear | One input on each port switchable | Toggle both, call `readInputsAndClearInterrupt()` or `clearInterrupts()` | INT clears after both input ports are read | NOT RUN | |
+| INT service edge policy | INT pulled up; one switchable input; firmware can re-read/debounce | Toggle near service timing or simulate repeated changes while servicing INT | Application re-read/debounce policy prevents missed or ambiguous input state | NOT RUN | |
 | Errata pointer park | PCA9555 plus a second readable I2C slave; I2C analyzer | Run input reads, then other-slave reads through serialized bus manager | Pointer parks at command `0x02`; no unrelated transaction interleaves in synchronous path | NOT RUN | |
 | Wrong address/NACK | Unused address or safe disconnect | Run `probe`, `begin`, `drv`, and selected calls | Errors map to documented `Status`; health/offline behavior matches contract | NOT RUN | |
 | Unplug/replug recovery | PCA9555 can be safely disconnected/reconnected | Reach OFFLINE, reconnect, run `recover`, then `drv` and inputs | Normal I/O is blocked while offline; `recover()` returns READY after reconnect | NOT RUN | |

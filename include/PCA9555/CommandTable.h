@@ -34,12 +34,12 @@ static constexpr uint8_t REG_POLARITY_INV_0 = 0x04;
 static constexpr uint8_t REG_POLARITY_INV_1 = 0x05;
 
 /// Configuration Port 0 - direction for P00-P07 (R/W, default 0xFF)
-/// Bit = 1: input (high-Z, internal pullup active)
+/// Bit = 1: input (output driver high-Z, internal pull-up present)
 /// Bit = 0: output (push-pull, driven by Output Port register)
 static constexpr uint8_t REG_CONFIG_PORT_0 = 0x06;
 
 /// Configuration Port 1 - direction for P10-P17 (R/W, default 0xFF)
-/// Bit = 1: input (high-Z, internal pullup active)
+/// Bit = 1: input (output driver high-Z, internal pull-up present)
 /// Bit = 0: output (push-pull, driven by Output Port register)
 static constexpr uint8_t REG_CONFIG_PORT_1 = 0x07;
 

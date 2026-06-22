@@ -66,6 +66,7 @@ MANDATORY_COMMANDS = [
     "wreg",
     "wregs",
     "drv",
+    "health",
     "probe",
     "recover",
     "verbose",

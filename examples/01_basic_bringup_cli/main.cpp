@@ -1952,7 +1952,7 @@ void printHelp() {
   cli::printHelpItem("alllow", "Set all 16 pins to output LOW");
 
   cli::printHelpSection("Diagnostics");
-  cli::printHelpItem("drv", "Show driver state and health");
+  cli::printHelpItem("drv / health", "Show driver state and health");
   cli::printHelpItem("probe", "Probe device (no health tracking)");
   cli::printHelpItem("recover", "Manual recovery attempt");
   cli::printHelpItem("verbose [0|1]", "Enable/disable verbose output");
@@ -2251,7 +2251,7 @@ void processCommand(const String& cmdLine) {
   }
 
   // ---- Diagnostics ----
-  if (cmd == "drv") {
+  if (cmd == "drv" || cmd == "health") {
     printDriverHealth();
     return;
   }

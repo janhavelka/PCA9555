@@ -499,6 +499,16 @@ void assertErrataWriteAt(const FakeBus& bus, size_t idx) {
   TEST_ASSERT_EQUAL_HEX8(cmd::ERRATA_SAFE_CMD, bus.commandPointer);
 }
 
+void assertBusyNoI2c(const FakeBus& bus, const Status& st,
+                     uint32_t readsBefore, uint32_t writesBefore) {
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUSY),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Driver is offline; call recover()", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(readsBefore, bus.readCalls);
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
+  TEST_ASSERT_EQUAL_UINT(0u, bus.transactionCount);
+}
+
 }  // namespace
 
 void setUp() {
@@ -641,6 +651,34 @@ void test_begin_reports_device_absent_or_wrong_address_as_not_found() {
     TEST_ASSERT_EQUAL_UINT(1u, bus.transactionCount);
     TEST_ASSERT_EQUAL_HEX8(cfg.i2cAddress, bus.transactions[0].address);
     TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_NACK_ADDR),
+                            static_cast<uint8_t>(bus.transactions[0].status.code));
+  }
+}
+
+void test_begin_presence_read_preserves_non_address_transport_errors() {
+  const Status errors[] = {
+    Status::Error(Err::I2C_NACK_DATA, "begin nack data", -81),
+    Status::Error(Err::I2C_TIMEOUT, "begin timeout", -82),
+    Status::Error(Err::I2C_BUS, "begin bus", -83),
+    Status::Error(Err::I2C_ERROR, "begin generic", -84)
+  };
+
+  for (size_t i = 0; i < sizeof(errors) / sizeof(errors[0]); ++i) {
+    FakeBus bus;
+    PCA9555::PCA9555 dev;
+    Config cfg = makeConfig(bus);
+    bus.readErrorRemaining = 1;
+    bus.readError = errors[i];
+
+    Status st = dev.begin(cfg);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(errors[i].code),
+                            static_cast<uint8_t>(st.code));
+    TEST_ASSERT_EQUAL_INT32(errors[i].detail, st.detail);
+    TEST_ASSERT_FALSE(dev.isInitialized());
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
+                            static_cast<uint8_t>(dev.state()));
+    TEST_ASSERT_EQUAL_UINT(1u, bus.transactionCount);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(errors[i].code),
                             static_cast<uint8_t>(bus.transactions[0].status.code));
   }
 }
@@ -957,7 +995,7 @@ void test_probe_failure_does_not_update_health() {
   bus.readErrorRemaining = 1;
   bus.readError = Status::Error(Err::I2C_ERROR, "forced probe error", -7);
   Status st = dev.probe();
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::DEVICE_NOT_FOUND),
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_ERROR),
                           static_cast<uint8_t>(st.code));
   TEST_ASSERT_EQUAL_UINT32(beforeSuccess, dev.totalSuccess());
   TEST_ASSERT_EQUAL_UINT32(beforeFailures, dev.totalFailures());
@@ -965,7 +1003,7 @@ void test_probe_failure_does_not_update_health() {
                           static_cast<uint8_t>(dev.state()));
 }
 
-void test_probe_error_matrix_maps_to_device_not_found_preserving_detail() {
+void test_probe_error_matrix_preserves_transport_error_kind() {
   const Status errors[] = {
     Status::Error(Err::I2C_NACK_ADDR, "probe nack addr", -80),
     Status::Error(Err::I2C_NACK_DATA, "probe nack data", -81),
@@ -986,7 +1024,10 @@ void test_probe_error_matrix_maps_to_device_not_found_preserving_detail() {
     bus.readError = errors[i];
 
     Status st = dev.probe();
-    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::DEVICE_NOT_FOUND),
+    const Err expected = (errors[i].code == Err::I2C_NACK_ADDR)
+        ? Err::DEVICE_NOT_FOUND
+        : errors[i].code;
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(expected),
                             static_cast<uint8_t>(st.code));
     TEST_ASSERT_EQUAL_INT32(errors[i].detail, st.detail);
     TEST_ASSERT_EQUAL_UINT32(beforeSuccess, dev.totalSuccess());
@@ -1098,6 +1139,61 @@ void test_offline_latches_normal_read_without_i2c_until_recover() {
                           static_cast<uint8_t>(dev.state()));
 }
 
+void test_probe_blocks_offline_without_i2c() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.offlineThreshold = 1;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.readErrorRemaining = 1;
+  bus.readError = Status::Error(Err::TIMEOUT, "forced timeout", -12);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                          static_cast<uint8_t>(dev.recover().code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+
+  const uint32_t readsBefore = bus.readCalls;
+  resetFakeTransactionLog(bus);
+  Status st = dev.probe();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUSY),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Driver is offline; call recover()", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(readsBefore, bus.readCalls);
+  TEST_ASSERT_EQUAL_UINT(0u, bus.transactionCount);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+}
+
+void test_offline_input_read_checks_latch_before_lock() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.offlineThreshold = 1;
+  enableFakeLock(cfg, bus);
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.readErrorRemaining = 1;
+  bus.readError = Status::Error(Err::TIMEOUT, "forced timeout", -16);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                          static_cast<uint8_t>(dev.recover().code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+
+  const uint32_t readsBefore = bus.readCalls;
+  resetFakeLockStats(bus);
+  resetFakeTransactionLog(bus);
+  PortData data;
+  Status st = dev.readInputs(data);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUSY),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Driver is offline; call recover()", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(0u, bus.lockCalls);
+  TEST_ASSERT_EQUAL_UINT32(0u, bus.unlockCalls);
+  TEST_ASSERT_EQUAL_UINT32(readsBefore, bus.readCalls);
+  TEST_ASSERT_EQUAL_UINT(0u, bus.transactionCount);
+}
+
 void test_failed_recover_from_offline_preserves_latch_after_partial_success() {
   FakeBus bus;
   PCA9555::PCA9555 dev;
@@ -1131,6 +1227,40 @@ void test_failed_recover_from_offline_preserves_latch_after_partial_success() {
                           static_cast<uint8_t>(st.code));
   TEST_ASSERT_EQUAL_STRING("Driver is offline; call recover()", st.msg);
   TEST_ASSERT_EQUAL_UINT32(readsBefore, bus.readCalls);
+}
+
+void test_failed_recover_from_offline_preserves_latch_on_in_progress() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.offlineThreshold = 1;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.readErrorRemaining = 1;
+  bus.readError = Status::Error(Err::TIMEOUT, "forced timeout", -14);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                          static_cast<uint8_t>(dev.recover().code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+
+  bus.writeErrorRemaining = 1;
+  bus.writeError = Status::Error(Err::IN_PROGRESS, "forced in progress", -15);
+  Status st = dev.recover();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::IN_PROGRESS),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_TRUE(dev.consecutiveFailures() >= 1u);
+
+  const uint32_t readsBefore = bus.readCalls;
+  resetFakeTransactionLog(bus);
+  PortData data;
+  st = dev.readInputs(data);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUSY),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Driver is offline; call recover()", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(readsBefore, bus.readCalls);
+  TEST_ASSERT_EQUAL_UINT(0u, bus.transactionCount);
 }
 
 // ===========================================================================
@@ -3358,6 +3488,26 @@ void test_end_sets_safe_input_state() {
                           static_cast<uint8_t>(dev.state()));
 }
 
+void test_end_safe_state_write_failure_remains_observable() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.configPort0 = 0x00;
+  cfg.configPort1 = 0x00;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.writeErrorRemaining = 1;
+  bus.writeError = Status::Error(Err::I2C_TIMEOUT, "forced end timeout", -18);
+  dev.end();
+
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
+                          static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_TRUE(dev.hardwareStateDirty());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_TIMEOUT),
+                          static_cast<uint8_t>(dev.hardwareStateDirtyError().code));
+  TEST_ASSERT_EQUAL_INT32(-18, dev.hardwareStateDirtyError().detail);
+}
+
 void test_end_while_offline_does_not_touch_bus() {
   FakeBus bus;
   PCA9555::PCA9555 dev;
@@ -3377,6 +3527,39 @@ void test_end_while_offline_does_not_touch_bus() {
   TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
                           static_cast<uint8_t>(dev.state()));
+}
+
+void test_end_while_offline_preserves_existing_dirty_state() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.offlineThreshold = 1;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.writeErrorRemaining = 1;
+  bus.writeError = Status::Error(Err::I2C_NACK_DATA, "forced dirty write", -19);
+  PortData outputs{0x00, 0x00};
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_NACK_DATA),
+                          static_cast<uint8_t>(dev.writeOutputs(outputs).code));
+  TEST_ASSERT_TRUE(dev.hardwareStateDirty());
+
+  bus.readErrorRemaining = 1;
+  bus.readError = Status::Error(Err::TIMEOUT, "forced timeout", -20);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                          static_cast<uint8_t>(dev.recover().code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+
+  const uint32_t writesBefore = bus.writeCalls;
+  dev.end();
+
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::UNINIT),
+                          static_cast<uint8_t>(dev.state()));
+  TEST_ASSERT_TRUE(dev.hardwareStateDirty());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_NACK_DATA),
+                          static_cast<uint8_t>(dev.hardwareStateDirtyError().code));
+  TEST_ASSERT_EQUAL_INT32(-19, dev.hardwareStateDirtyError().detail);
 }
 
 // ===========================================================================
@@ -3576,6 +3759,66 @@ void test_bit_manipulation_no_op_skips_i2c() {
   TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
 }
 
+void test_noop_mutators_block_offline_without_i2c() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.offlineThreshold = 1;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.readErrorRemaining = 1;
+  bus.readError = Status::Error(Err::TIMEOUT, "forced timeout", -17);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                          static_cast<uint8_t>(dev.recover().code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+
+  const uint32_t readsBefore = bus.readCalls;
+  const uint32_t writesBefore = bus.writeCalls;
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.writePin(0, true), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.preloadOutputs(0x0000, 0x0000), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.setOutputBits(0xFFFF), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.clearOutputBits(0x0000), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.toggleOutputBits(0x0000), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.configureInputBits(0xFFFF), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.configureOutputBits(0x0000), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.setInvertBits(0x0000), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.clearInvertBits(0xFFFF), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.setPinPolarity(0, false), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.setPinDirection(0, true), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.configureOutputs(0x0000, 0x0000), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.startWriteOutputsJob(0x0000, 0x0000), readsBefore, writesBefore);
+
+  resetFakeTransactionLog(bus);
+  assertBusyNoI2c(bus, dev.startConfigureOutputsJob(0x0000, 0x0000), readsBefore, writesBefore);
+}
+
 void test_bit_manipulation_rejects_before_begin() {
   PCA9555::PCA9555 dev;
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
@@ -3616,6 +3859,7 @@ int main() {
   RUN_TEST(test_begin_accepts_all_pca9555_address_pins_and_logs_callback_address);
   RUN_TEST(test_begin_rejects_address_matrix_without_touching_bus);
   RUN_TEST(test_begin_reports_device_absent_or_wrong_address_as_not_found);
+  RUN_TEST(test_begin_presence_read_preserves_non_address_transport_errors);
   RUN_TEST(test_begin_rejects_zero_timeout);
   RUN_TEST(test_begin_rejects_partial_lock_hooks);
   RUN_TEST(test_failed_begin_clears_stale_runtime_snapshot);
@@ -3634,13 +3878,16 @@ int main() {
 
   // probe / recover / health
   RUN_TEST(test_probe_failure_does_not_update_health);
-  RUN_TEST(test_probe_error_matrix_maps_to_device_not_found_preserving_detail);
+  RUN_TEST(test_probe_error_matrix_preserves_transport_error_kind);
   RUN_TEST(test_recover_failure_updates_health_once);
   RUN_TEST(test_recover_success_returns_ready);
   RUN_TEST(test_recover_preserves_transport_error_code);
   RUN_TEST(test_recover_reaches_offline_when_threshold_is_one);
   RUN_TEST(test_offline_latches_normal_read_without_i2c_until_recover);
+  RUN_TEST(test_probe_blocks_offline_without_i2c);
+  RUN_TEST(test_offline_input_read_checks_latch_before_lock);
   RUN_TEST(test_failed_recover_from_offline_preserves_latch_after_partial_success);
+  RUN_TEST(test_failed_recover_from_offline_preserves_latch_on_in_progress);
   RUN_TEST(test_failure_threshold_enters_offline_and_blocks_bus_until_recover);
 
   // Hardware dirty-state diagnostics
@@ -3758,6 +4005,7 @@ int main() {
   RUN_TEST(test_set_invert_bits);
   RUN_TEST(test_clear_invert_bits);
   RUN_TEST(test_bit_manipulation_no_op_skips_i2c);
+  RUN_TEST(test_noop_mutators_block_offline_without_i2c);
   RUN_TEST(test_bit_manipulation_rejects_before_begin);
 
   // PortData
@@ -3767,7 +4015,9 @@ int main() {
   // Not-initialized guards
   RUN_TEST(test_operations_reject_before_begin);
   RUN_TEST(test_end_sets_safe_input_state);
+  RUN_TEST(test_end_safe_state_write_failure_remains_observable);
   RUN_TEST(test_end_while_offline_does_not_touch_bus);
+  RUN_TEST(test_end_while_offline_preserves_existing_dirty_state);
 
   return UNITY_END();
 }

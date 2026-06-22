@@ -96,16 +96,16 @@ The default runner sequence is read-oriented and avoids output-driving commands.
 - `help`
 - `scan`
 - `probe`
-- `cfg`
+- `settings`
 - `read`
 - `outputs`
 - `config`
 - `polarity`
 - `dump`
 - `pins`
-- `drv`
+- `health`
 - `stress 10`
-- `drv`
+- `health`
 <!-- HIL_COMMAND_SEQUENCE_END -->
 
 Expected serial results:
@@ -116,14 +116,14 @@ Expected serial results:
 | `help` | CLI help text |
 | `scan` | `Scan complete` and the expected address, normally `0x20` |
 | `probe` | `Status: OK`; ACK only, not chip identity |
-| `cfg` | Settings snapshot |
+| `settings` | Settings snapshot |
 | `read` | Input port section and combined value |
 | `outputs` | Output latch section and combined value |
 | `config` | Configuration section |
 | `polarity` | Polarity inversion section |
 | `dump` | Register dump |
 | `pins` | Per-pin summary |
-| `drv` | Driver health, current state READY |
+| `health` | Driver health, current state READY |
 | `stress 10` | Stress results with `fail=0` |
 
 ## Opt-In Checks
@@ -168,7 +168,7 @@ and fault/recovery evidence is reviewed.
 
 | Test | Setup | Procedure | Expected result | Result | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| Address scan/probe | A0/A1/A2 strapped for each intended `0x20`-`0x27` address | Run `scan`, `probe`, and `drv` for each wired address | Only intended addresses respond; `probe` returns OK without updating health counters | NOT RUN | |
+| Address scan/probe | A0/A1/A2 strapped for each intended `0x20`-`0x27` address | Run `scan`, `probe`, and `health` for each wired address | Only intended addresses respond; `probe` returns OK without updating health counters | NOT RUN | |
 | POR defaults | Full PCA9555 power cycle; fixture input states documented | Run `dump`, `outputs`, `config`, `polarity`, and `inputs` before mutation | Config `0xFFFF`; output latch `0xFFFF`; polarity `0x0000`; input values match physical levels | NOT RUN | |
 | Input reads on all pins | All pins input; each pin can be pulled low safely | Run `dirin 0xFFFF`; read released/high and pulled-low state for each pin | Linear pins `0-15` map to `P00-P07` / `P10-P17`; high reads `1`, low reads `0` before polarity inversion | NOT RUN | |
 | Output writes on all pins | Safe current-limited loads; no external driver conflicts | Use safe-output APIs or CLI equivalents, then `alllow`, `allhigh`, `pattern`, `walk`, and `sweep` | Physical outputs match latches with no excessive current, resets, or I2C errors | NOT RUN | |
@@ -181,14 +181,14 @@ and fault/recovery evidence is reviewed.
 | Both-port INT clear | One input on each port switchable | Toggle both, call `readInputsAndClearInterrupt()` or `clearInterrupts()` | INT clears after both input ports are read | NOT RUN | |
 | INT service edge policy | INT pulled up; one switchable input; firmware can re-read/debounce | Toggle near service timing or simulate repeated changes while servicing INT | Application re-read/debounce policy prevents missed or ambiguous input state | NOT RUN | |
 | Errata pointer park | PCA9555 plus a second readable I2C slave; I2C analyzer | Run input reads, then other-slave reads through serialized bus manager | Pointer parks at command `0x02`; no unrelated transaction interleaves in synchronous path | NOT RUN | |
-| Wrong address/NACK | Unused address or safe disconnect | Run `probe`, `begin`, `drv`, and selected calls | Errors map to documented `Status`; health/offline behavior matches contract | NOT RUN | |
-| Unplug/replug recovery | PCA9555 can be safely disconnected/reconnected | Reach OFFLINE, reconnect, run `recover`, then `drv` and inputs | Normal I/O is blocked while offline; `recover()` returns READY after reconnect | NOT RUN | |
+| Wrong address/NACK | Unused address or safe disconnect | Run `probe`, `begin`, `health`, and selected calls | Errors map to documented `Status`; health/offline behavior matches contract | NOT RUN | |
+| Unplug/replug recovery | PCA9555 can be safely disconnected/reconnected | Reach OFFLINE, reconnect, run `recover`, then `health` and inputs | Normal I/O is blocked while offline; `recover()` returns READY after reconnect | NOT RUN | |
 | Brownout/power-cycle recovery | PCA9555 VCC independently switchable | Drive known state, power-cycle PCA9555 only, run `recover` | Hardware may show POR defaults before recovery; cached state reapplies after recovery | NOT RUN | |
 | 100 kHz operation | Firmware/app sets I2C to 100 kHz | Run scan/probe/selftest/stress and selected I/O checks | Operations complete without unexplained failures; final health READY | NOT RUN | |
 | 400 kHz operation | Repo default or equivalent 400 kHz setup | Run scan/probe/selftest/stress and selected I/O checks | Operations complete without unexplained failures; final health READY | NOT RUN | |
 | Shared-bus soak | PCA9555 plus another active I2C target | Run long read/write soak with other-target traffic through bus manager | No hangs, resets, unexpected INT loss, or unexplained I2C failures | NOT RUN | |
-| Arduino ESP32-S2 run | `env:esp32s2dev` and CLI example | Upload, monitor, run version/help, scan/probe, read inputs, safe output toggle, and `drv` | CLI runs and final health is READY | NOT RUN | |
-| Arduino ESP32-S3 run | `env:esp32s3dev` and CLI example | Upload, monitor, run version/help, scan/probe, read inputs, safe output toggle, and `drv` | CLI runs and final health is READY | NOT RUN | |
+| Arduino ESP32-S2 run | `env:esp32s2dev` and CLI example | Upload, monitor, run version/help, scan/probe, read inputs, safe output toggle, and `health` | CLI runs and final health is READY | NOT RUN | |
+| Arduino ESP32-S3 run | `env:esp32s3dev` and CLI example | Upload, monitor, run version/help, scan/probe, read inputs, safe output toggle, and `health` | CLI runs and final health is READY | NOT RUN | |
 | ESP-IDF hardware run | Native `examples/espidf_basic` or equivalent app | Build/flash native IDF app and run basic input/output/recovery checks | Native IDF path works without Arduino/Wire; final cleanup succeeds | NOT RUN | |
 
 ## Claim Summary

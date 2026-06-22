@@ -24,6 +24,8 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 PROMPT_TOKEN = "> "
 PYSERIAL_HINT = "python -m pip install pyserial"
 DEFAULT_ADDRESS = "0x20"
+DEFAULT_SAFE_STRESS_CYCLES = 10
+READ_STRESS_COMMAND_RE = re.compile(r"^\s*stress(?:\s+([0-9]+))?\s*$", re.IGNORECASE)
 UNSAFE_COMMAND_RE = re.compile(
     r"^\s*(?:"
     r"write\s+pin|wpin|toggle(?:\s|$)|dir(?:\s|$)|dir\s+pin|write\s+port|wport|"
@@ -106,7 +108,7 @@ DEFAULT_SAFE_COMMANDS: tuple[CommandSpec, ...] = (
         notes="Probe is ACK-only and does not prove chip identity.",
     ),
     CommandSpec(
-        command="cfg",
+        command="settings",
         purpose="Capture active driver settings.",
         expected=(r"=== Settings Snapshot ===", r"I2C address"),
         timeout_s=3.0,
@@ -156,11 +158,11 @@ DEFAULT_SAFE_COMMANDS: tuple[CommandSpec, ...] = (
         classifier="read",
     ),
     CommandSpec(
-        command="drv",
+        command="health",
         purpose="Capture driver health before stress.",
         expected=(r"=== Driver Health ===", r"State:\s+READY"),
         timeout_s=5.0,
-        classifier="drv",
+        classifier="health",
         notes="Historical last-error fields may be nonzero; current READY state is the key gate.",
     ),
     CommandSpec(
@@ -173,11 +175,11 @@ DEFAULT_SAFE_COMMANDS: tuple[CommandSpec, ...] = (
         notes="This repeatedly reads inputs and clears PCA9555 interrupt state.",
     ),
     CommandSpec(
-        command="drv",
+        command="health",
         purpose="Capture final driver health after stress.",
         expected=(r"=== Driver Health ===", r"State:\s+READY"),
         timeout_s=5.0,
-        classifier="drv",
+        classifier="health",
     ),
 )
 
@@ -358,6 +360,11 @@ def load_command_file(path: pathlib.Path, default_timeout: float) -> list[Comman
             raise ValueError("each --commands JSON item must be a string or object with command")
         command = str(entry["command"])
         unsafe = command_is_unsafe(command)
+        destructive = bool(entry.get("destructive", unsafe))
+        requires_opt_in = (
+            entry.get("requires_opt_in")
+            or default_required_opt_in(command, unsafe=unsafe, destructive=destructive)
+        )
         specs.append(
             CommandSpec(
                 command=command,
@@ -366,8 +373,8 @@ def load_command_file(path: pathlib.Path, default_timeout: float) -> list[Comman
                 timeout_s=float(entry.get("timeout_s", default_timeout)),
                 completion_tokens=tuple(str(item) for item in entry.get("completion_tokens", [])),
                 operator_check=bool(entry.get("operator_check", False)),
-                destructive=bool(entry.get("destructive", unsafe)),
-                requires_opt_in=entry.get("requires_opt_in") or ("--include-output-tests" if unsafe else None),
+                destructive=destructive,
+                requires_opt_in=requires_opt_in,
                 recovery_command=entry.get("recovery_command"),
                 notes=str(entry.get("notes", "")) or ("Custom command matched the unsafe CLI allowlist and requires opt-in." if unsafe else ""),
                 classifier=str(entry.get("classifier", "custom")),
@@ -398,16 +405,45 @@ def command_is_unsafe(command: str) -> bool:
     return UNSAFE_COMMAND_RE.search(command) is not None
 
 
+def read_stress_cycle_count(command: str) -> int | None:
+    match = READ_STRESS_COMMAND_RE.search(command)
+    if match is None:
+        return None
+    if match.group(1) is None:
+        return DEFAULT_SAFE_STRESS_CYCLES
+    return int(match.group(1), 10)
+
+
+def command_requires_soak_opt_in(command: str) -> bool:
+    count = read_stress_cycle_count(command)
+    return count is not None and count > DEFAULT_SAFE_STRESS_CYCLES
+
+
+def default_required_opt_in(command: str, *, unsafe: bool, destructive: bool) -> str | None:
+    if unsafe or destructive:
+        return "--include-output-tests"
+    if command_requires_soak_opt_in(command):
+        return "--include-soak"
+    return None
+
+
 def custom_command_spec(command: str, default_timeout: float) -> CommandSpec:
     unsafe = command_is_unsafe(command)
+    requires_opt_in = default_required_opt_in(command, unsafe=unsafe, destructive=unsafe)
     return CommandSpec(
         command=command,
         purpose="Custom operator-provided command.",
         timeout_s=default_timeout,
         classifier="custom",
         destructive=unsafe,
-        requires_opt_in="--include-output-tests" if unsafe else None,
-        notes="Custom command matched the unsafe CLI allowlist and requires opt-in." if unsafe else "Custom command classification is conservative.",
+        requires_opt_in=requires_opt_in,
+        notes=(
+            "Custom command matched the unsafe CLI allowlist and requires opt-in."
+            if unsafe
+            else "Custom read-only stress exceeds the default safe cycle count and requires soak opt-in."
+            if requires_opt_in == "--include-soak"
+            else "Custom command classification is conservative."
+        ),
     )
 
 
@@ -829,28 +865,37 @@ def run(argv: list[str]) -> int:
                         evidence=[],
                     )
                 )
-            command_index = 0
-            for spec in specs:
-                if spec.operator_check:
-                    results.append(skipped_result(spec, "OPERATOR_CHECK_REQUIRED", "manual"))
-                    continue
-                if (spec.destructive or spec.requires_opt_in) and not opt_in_enabled(spec, args):
-                    skipped.append(spec)
-                    results.append(skipped_result(spec, "SKIPPED_UNSAFE", spec.requires_opt_in or "manual"))
-                    continue
-                command_index += 1
-                if hasattr(ser, "reset_input_buffer"):
-                    ser.reset_input_buffer()
-                command_transcript = log_dir / "transcripts" / f"{command_index:02d}_{spec.command_id}.txt"
-                result, raw_segment = run_serial_command(
-                    ser,
-                    spec,
-                    prompt=args.prompt,
-                    idle_gap_s=args.idle_gap,
-                    transcript_path=command_transcript,
-                )
-                append_transcript(transcript_path, spec.command, raw_segment)
-                results.append(result)
+                for spec in specs:
+                    if spec.operator_check:
+                        results.append(skipped_result(spec, "OPERATOR_CHECK_REQUIRED", "manual"))
+                    elif (spec.destructive or spec.requires_opt_in) and not opt_in_enabled(spec, args):
+                        skipped.append(spec)
+                        results.append(skipped_result(spec, "SKIPPED_UNSAFE", spec.requires_opt_in or "manual"))
+                    else:
+                        results.append(skipped_result(spec, "SKIPPED_STARTUP_TIMEOUT", "startup_timeout"))
+            else:
+                command_index = 0
+                for spec in specs:
+                    if spec.operator_check:
+                        results.append(skipped_result(spec, "OPERATOR_CHECK_REQUIRED", "manual"))
+                        continue
+                    if (spec.destructive or spec.requires_opt_in) and not opt_in_enabled(spec, args):
+                        skipped.append(spec)
+                        results.append(skipped_result(spec, "SKIPPED_UNSAFE", spec.requires_opt_in or "manual"))
+                        continue
+                    command_index += 1
+                    if hasattr(ser, "reset_input_buffer"):
+                        ser.reset_input_buffer()
+                    command_transcript = log_dir / "transcripts" / f"{command_index:02d}_{spec.command_id}.txt"
+                    result, raw_segment = run_serial_command(
+                        ser,
+                        spec,
+                        prompt=args.prompt,
+                        idle_gap_s=args.idle_gap,
+                        transcript_path=command_transcript,
+                    )
+                    append_transcript(transcript_path, spec.command, raw_segment)
+                    results.append(result)
 
     write_operator_checklist(checklist_path, skipped)
     artifacts = {

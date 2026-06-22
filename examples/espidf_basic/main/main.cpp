@@ -392,7 +392,7 @@ void printHelp() {
   puts("  write reg <R> <V> / wreg <R> <V> [confirm]");
   puts("  write regs <R> <V0> [V1] / wregs <R> <V0> [V1] [confirm]");
   puts("  pattern <VALUE> / pat <VALUE> [confirm] | sweep [delay_ms] [confirm] | walk [delay_ms] [confirm]");
-  puts("  allhigh [confirm] | alllow [confirm] | drv | probe | recover [confirm] | verbose [0|1]");
+  puts("  allhigh [confirm] | alllow [confirm] | drv / health | probe | recover [confirm] | verbose [0|1]");
   puts("  selftest [confirm] | stress [N] [confirm] | stress_mix [N] [confirm]");
 }
 
@@ -1438,7 +1438,8 @@ void handleCommand(char* line) {
     printStatus("probe", gDev.probe());
   } else if (strcmp(full, "recover") == 0 || strncmp(full, "recover ", 8) == 0) {
     cmdRecover(full + 7);
-  } else if (strcmp(full, "drv") == 0 || strcmp(full, "cfg") == 0 ||
+  } else if (strcmp(full, "drv") == 0 || strcmp(full, "health") == 0 ||
+             strcmp(full, "cfg") == 0 ||
              strcmp(full, "settings") == 0) {
     printDrv();
   } else if (strcmp(full, "dump") == 0) {

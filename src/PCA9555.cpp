@@ -46,6 +46,13 @@ static uint8_t bitMaskForPin(Pin pin) {
   return static_cast<uint8_t>(1U << (pin % cmd::PINS_PER_PORT));
 }
 
+static Status presenceReadFailureStatus(const Status& st) {
+  if (st.code == Err::I2C_NACK_ADDR) {
+    return Status::Error(Err::DEVICE_NOT_FOUND, "Device not responding", st.detail);
+  }
+  return st;
+}
+
 class ScopedOfflineI2cAllowance {
 public:
   explicit ScopedOfflineI2cAllowance(bool& flag, bool allow) : _flag(flag), _old(flag) {
@@ -157,8 +164,7 @@ Status PCA9555::begin(const Config& config) {
   uint8_t startReg = cmd::REG_CONFIG_PORT_0;
   Status st = _i2cWriteReadRaw(&startReg, 1, configRegs, sizeof(configRegs));
   if (!st.ok()) {
-    return resetAfterFailedBegin(
-        Status::Error(Err::DEVICE_NOT_FOUND, "Device not responding", st.detail));
+    return resetAfterFailedBegin(presenceReadFailureStatus(st));
   }
   if (_config.requireConfigPortDefaults &&
       (configRegs[0] != cmd::DEFAULT_CONFIG || configRegs[1] != cmd::DEFAULT_CONFIG)) {
@@ -187,11 +193,17 @@ void PCA9555::tick(uint32_t nowMs) {
 }
 
 void PCA9555::end() {
+  const bool dirtyBeforeEnd = _hardwareStateDirty;
+  const Status dirtyErrorBeforeEnd = _hardwareStateDirtyError;
+  bool safeStateWriteAttempted = false;
+  Status safeStateWriteStatus = Status::Ok();
+
   if (_initialized && _driverState != DriverState::OFFLINE) {
     // Best-effort: set all pins to input (safe high-Z state).
     // Uses raw I2C to avoid health tracking during shutdown.
     const uint8_t payload[3] = {cmd::REG_CONFIG_PORT_0, 0xFF, 0xFF};
-    (void)_i2cWriteRaw(payload, sizeof(payload));
+    safeStateWriteAttempted = true;
+    safeStateWriteStatus = _i2cWriteRaw(payload, sizeof(payload));
   }
 
   _initialized = false;
@@ -216,7 +228,16 @@ void PCA9555::end() {
   _jobConfig1 = 0xFF;
   _pollNowMs = 0;
   _pollNowMsActive = false;
-  _clearHardwareStateDirty();
+  if (safeStateWriteAttempted && safeStateWriteStatus.ok()) {
+    _clearHardwareStateDirty();
+  } else if (safeStateWriteAttempted) {
+    _markHardwareStateDirty(safeStateWriteStatus);
+  } else if (dirtyBeforeEnd) {
+    _hardwareStateDirty = true;
+    _hardwareStateDirtyError = dirtyErrorBeforeEnd;
+  } else {
+    _clearHardwareStateDirty();
+  }
 }
 
 // ===========================================================================
@@ -227,8 +248,9 @@ Status PCA9555::startReadInputsJob() {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
-  if (_driverState == DriverState::OFFLINE) {
-    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
   }
   if (_jobType != JobType::NONE) {
     return Status::Error(Err::BUSY, "Chunked job already active");
@@ -244,8 +266,9 @@ Status PCA9555::startWriteOutputsJob(uint16_t mask, uint16_t value) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
-  if (_driverState == DriverState::OFFLINE) {
-    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
   }
   if (_jobType != JobType::NONE) {
     return Status::Error(Err::BUSY, "Chunked job already active");
@@ -273,8 +296,9 @@ Status PCA9555::startConfigureOutputsJob(uint16_t mask, uint16_t value) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
-  if (_driverState == DriverState::OFFLINE) {
-    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
   }
   if (_jobType != JobType::NONE) {
     return Status::Error(Err::BUSY, "Chunked job already active");
@@ -400,11 +424,15 @@ Status PCA9555::probe() {
   if (_jobType != JobType::NONE) {
     return Status::Error(Err::BUSY, "Chunked job already active");
   }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
+  }
 
   uint8_t configVal = 0;
   Status st = _readRegisterRaw(cmd::REG_CONFIG_PORT_0, configVal);
   if (!st.ok()) {
-    return Status::Error(Err::DEVICE_NOT_FOUND, "Device not responding", st.detail);
+    return presenceReadFailureStatus(st);
   }
 
   return Status::Ok();
@@ -437,7 +465,7 @@ Status PCA9555::recover() {
 
     return Status::Ok();
   }();
-  if (startedOffline && !result.ok() && !result.inProgress()) {
+  if (startedOffline && !result.ok()) {
     _reassertOfflineLatch();
   }
   if (result.ok()) {
@@ -648,6 +676,10 @@ Status PCA9555::writePin(Pin pin, bool high) {
   if (!isValidPin(pin)) {
     return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
   }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
+  }
 
   const uint8_t mask = bitMaskForPin(pin);
   const bool isPort0 = (pin < cmd::PINS_PER_PORT);
@@ -727,6 +759,10 @@ Status PCA9555::preloadOutputs(uint16_t mask, uint16_t values) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
+  }
   if (mask == 0) {
     return Status::Ok();
   }
@@ -759,6 +795,10 @@ Status PCA9555::setOutputBits(uint16_t mask) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
+  }
 
   PortData data;
   data.port0 = _cachedOutput0 | static_cast<uint8_t>(mask & 0xFF);
@@ -775,6 +815,10 @@ Status PCA9555::clearOutputBits(uint16_t mask) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
+  }
 
   PortData data;
   data.port0 = _cachedOutput0 & static_cast<uint8_t>(~mask & 0xFF);
@@ -790,6 +834,10 @@ Status PCA9555::clearOutputBits(uint16_t mask) {
 Status PCA9555::toggleOutputBits(uint16_t mask) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
   }
 
   if (mask == 0) {
@@ -810,6 +858,10 @@ Status PCA9555::togglePin(Pin pin) {
   if (!isValidPin(pin)) {
     return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
   }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
+  }
 
   const uint8_t mask = bitMaskForPin(pin);
   const bool isPort0 = (pin < cmd::PINS_PER_PORT);
@@ -823,6 +875,10 @@ Status PCA9555::togglePin(Pin pin) {
 Status PCA9555::configureInputBits(uint16_t mask) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
   }
 
   PortData data;
@@ -839,6 +895,10 @@ Status PCA9555::configureInputBits(uint16_t mask) {
 Status PCA9555::configureOutputBits(uint16_t mask) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
   }
 
   const uint16_t currentConfig = static_cast<uint16_t>(
@@ -857,6 +917,10 @@ Status PCA9555::setInvertBits(uint16_t mask) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
   }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
+  }
 
   PortData data;
   data.port0 = _config.polarityPort0 | static_cast<uint8_t>(mask & 0xFF);
@@ -873,6 +937,10 @@ Status PCA9555::setInvertBits(uint16_t mask) {
 Status PCA9555::clearInvertBits(uint16_t mask) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
   }
 
   PortData data;
@@ -1100,6 +1168,10 @@ Status PCA9555::setPinPolarity(Pin pin, bool inverted) {
   if (!isValidPin(pin)) {
     return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
   }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
+  }
 
   const uint8_t mask = bitMaskForPin(pin);
   const bool isPort0 = (pin < cmd::PINS_PER_PORT);
@@ -1146,6 +1218,10 @@ Status PCA9555::setPinDirection(Pin pin, bool input) {
   if (!isValidPin(pin)) {
     return Status::Error(Err::INVALID_PARAM, "Pin number out of range (0-15)");
   }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
+  }
 
   const uint8_t mask = bitMaskForPin(pin);
   const bool isPort0 = (pin < cmd::PINS_PER_PORT);
@@ -1183,6 +1259,10 @@ Status PCA9555::setDirection(Pin pin, Direction direction) {
 Status PCA9555::configureOutputs(uint16_t outputMask, uint16_t outputValues) {
   if (!_initialized) {
     return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
   }
   if (outputMask == 0) {
     return Status::Ok();
@@ -1319,8 +1399,9 @@ Status PCA9555::_i2cWriteRaw(const uint8_t* buf, size_t len) {
 
 Status PCA9555::_i2cWriteReadTracked(const uint8_t* txBuf, size_t txLen,
                                      uint8_t* rxBuf, size_t rxLen) {
-  if (_initialized && _driverState == DriverState::OFFLINE && !_allowOfflineI2c) {
-    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
   }
 
   if (txBuf == nullptr || txLen == 0 || rxBuf == nullptr || rxLen == 0) {
@@ -1335,8 +1416,9 @@ Status PCA9555::_i2cWriteReadTracked(const uint8_t* txBuf, size_t txLen,
 }
 
 Status PCA9555::_i2cWriteTracked(const uint8_t* buf, size_t len) {
-  if (_initialized && _driverState == DriverState::OFFLINE && !_allowOfflineI2c) {
-    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
   }
 
   if (buf == nullptr || len == 0) {
@@ -1421,6 +1503,10 @@ Status PCA9555::_readInputRegistersCompound(uint8_t startReg, uint8_t* buf, size
   if (_jobType != JobType::NONE && !_jobInstructionActive) {
     return Status::Error(Err::BUSY, "Chunked job already active");
   }
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
+  }
 
   bool locked = false;
   if (_config.applyInterruptErrata) {
@@ -1482,6 +1568,13 @@ Status PCA9555::_updateHealth(const Status& st) {
   }
 
   return st;
+}
+
+Status PCA9555::_normalOperationStatus() const {
+  if (_initialized && _driverState == DriverState::OFFLINE && !_allowOfflineI2c) {
+    return Status::Error(Err::BUSY, "Driver is offline; call recover()");
+  }
+  return Status::Ok();
 }
 
 void PCA9555::_reassertOfflineLatch() {

@@ -95,7 +95,8 @@ public:
   /// Startup order is output latch -> polarity -> direction -> input read ->
   /// optional interrupt errata workaround.
   /// @param config Configuration including transport callbacks
-  /// @return Status::Ok() on success, error otherwise
+  /// @return Status::Ok() on success. Address NACK maps to DEVICE_NOT_FOUND;
+  ///         timeout, data NACK, bus, and generic I2C errors are returned as-is.
   Status begin(const Config& config);
   
   /// Process pending operations from application context.
@@ -171,7 +172,9 @@ public:
   /// Reads a configuration register via the raw transport path without enforcing
   /// the POR-default contents. PCA9555 has no chip-ID register; this is address
   /// response only, not identity proof.
-  /// @return Status::Ok() if the address responds, error otherwise
+  /// @return Status::Ok() if the address responds. Address NACK maps to
+  ///         DEVICE_NOT_FOUND; timeout, data NACK, bus, and generic I2C errors
+  ///         are returned as-is. Health counters are not updated.
   Status probe();
   
   /// Attempt to recover from DEGRADED/OFFLINE state.
@@ -615,8 +618,9 @@ public:
   /// If startReg is the odd register in a pair, the second byte wraps to the
   /// even register in that same pair, matching PCA9555 auto-increment behavior.
   /// The cached runtime state is synchronized after a successful write.
-  /// A failed direct write marks hardwareStateDirty() because hardware may have
-  /// accepted one byte while the cache remained unchanged.
+  /// A failed or partial direct write marks hardwareStateDirty() and preserves
+  /// the original transport error because hardware may have accepted one byte
+  /// while the cache remained unchanged.
   /// @param startReg Starting register address (0x02-0x07)
   /// @param buf Source buffer
   /// @param len Number of bytes to write
@@ -694,6 +698,7 @@ private:
   /// Update health counters and state based on operation result.
   /// Called ONLY from tracked transport wrappers.
   Status _updateHealth(const Status& st);
+  Status _normalOperationStatus() const;
   void _reassertOfflineLatch();
 
   /// Mark hardware/cache state as possibly divergent after a failed write.

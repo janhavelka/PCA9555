@@ -205,7 +205,7 @@ context.
 
 ### Lifecycle
 
-- `Status begin(const Config& config)` - Initialize driver, verify device, apply configuration
+- `Status begin(const Config& config)` - Initialize driver, verify device, apply configuration; address NACK maps to `DEVICE_NOT_FOUND`, while timeout/data-NACK/bus errors remain distinct
 - `void tick(uint32_t nowMs)` - Advance one pending chunked job instruction, if a job is active
 - `void end()` - Shutdown driver and set pins to input when online; if already `OFFLINE`, it clears local state without extra I2C
 
@@ -228,7 +228,9 @@ remains.
 ### Diagnostics
 
 - `Status probe()` - Check device presence via raw I2C (no health tracking);
-  transport failures return `DEVICE_NOT_FOUND` with the original detail code preserved
+  address response is not identity proof because PCA9555 has no chip-ID register.
+  Address NACK maps to `DEVICE_NOT_FOUND`; timeout, data-NACK, bus, and generic
+  I2C errors are returned as-is.
 - `Status recover()` - Attempt recovery with health tracking + re-apply the current runtime config; clears dirty state only after full success
 
 ### Input API
@@ -519,7 +521,8 @@ Typical bring-up commands:
 
 ```text
 scan
-cfg
+settings
+health
 pattern 0x00FF confirm
 read input port 0
 read output port 1

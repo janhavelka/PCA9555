@@ -72,7 +72,7 @@ python -m platformio device monitor --port <PORT> --baud 115200
 Run the Python HIL runner:
 
 ```bash
-python tools/run_i2c_hil.py --port <PORT> --baud 115200 --address 0x20
+python tools/run_i2c_hil.py --port <PORT> --baud 115200 --address 0x20 --timeout-s 5 --idle-timeout-s 0.5 --boot-settle-s 2
 ```
 
 Dry-run planning command:
@@ -81,11 +81,33 @@ Dry-run planning command:
 python tools/run_i2c_hil.py --dry-run
 ```
 
+Parser/classifier self-test:
+
+```bash
+python tools/run_i2c_hil.py --parser-self-test
+```
+
+Short sample-rate benchmark:
+
+```bash
+python tools/run_i2c_hil.py --port <PORT> --baud 115200 --benchmark-command read --benchmark-count 50
+```
+
+Bounded 8-hour read-oriented soak, with a Markdown summary copied to the reports tree:
+
+```bash
+python tools/run_i2c_hil.py --port <PORT> --baud 115200 --address 0x20 --timeout-s 5 --idle-timeout-s 0.5 --soak-duration-s 28800 --soak-command-mix read,outputs,config,polarity,health,probe --report docs/reports/hil-validation-<PORT>-YYYYMMDD.md
+```
+
 The runner never flashes firmware automatically. Install serial support with:
 
 ```bash
 python -m pip install pyserial
 ```
+
+Command completion waits for the CLI prompt by default. Use
+`--allow-idle-completion` only when validating a command surface that does not
+print prompts; it can turn slow partial output into review-only evidence.
 
 ## Default HIL Command Sequence
 

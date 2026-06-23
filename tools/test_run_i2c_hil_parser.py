@@ -177,6 +177,62 @@ def test_read_only_custom_commands_remain_reviewable_not_destructive() -> None:
         assert_equal(spec.timeout_s, 5.0, f"{command} should keep requested timeout")
 
 
+def test_timeout_aliases_and_override() -> None:
+    args = runner.parse_args([
+        "--dry-run",
+        "--timeout-s",
+        "7",
+        "--idle-timeout-s",
+        "0.25",
+        "--boot-settle-s",
+        "1.5",
+        "--allow-idle-completion",
+    ])
+    assert_equal(args.timeout, 7.0, "--timeout-s alias should set timeout")
+    assert_equal(args.idle_gap, 0.25, "--idle-timeout-s alias should set idle gap")
+    assert_equal(args.boot_settle_s, 1.5, "--boot-settle-s should parse")
+    assert_true(args.allow_idle_completion, "--allow-idle-completion should parse")
+
+    specs = runner.build_command_sequence(args)
+    runnable = [spec for spec in specs if spec.command in ("version", "scan", "stress 10")]
+    assert_true(runnable, "default sequence should contain checked commands")
+    for spec in runnable:
+        assert_equal(spec.timeout_s, 7.0, f"{spec.command} timeout should be overridden")
+
+
+def test_parser_self_test_entrypoint() -> None:
+    assert_equal(runner.run_parser_self_test(), 0, "parser self-test should pass")
+
+
+def test_dry_run_artifacts_include_classifier_and_timing_options() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        rc = runner.run([
+            "--dry-run",
+            "--out",
+            tmp,
+            "--timeout-s",
+            "6",
+            "--idle-timeout-s",
+            "0.3",
+            "--boot-settle-s",
+            "0.1",
+        ])
+        assert_equal(rc, 0, "dry-run should exit successfully")
+        log_dirs = list(pathlib.Path(tmp).glob("i2c_*"))
+        assert_equal(len(log_dirs), 1, "dry-run should create one log directory")
+        summary = json.loads((log_dirs[0] / "summary.json").read_text(encoding="utf-8"))
+        assert_equal(summary["timeout_override_s"], 6.0, "summary should record timeout override")
+        assert_equal(summary["idle_timeout_s"], 0.3, "summary should record idle timeout")
+        assert_equal(summary["boot_settle_s"], 0.1, "summary should record boot settle")
+        assert_equal(summary["allow_idle_completion"], False, "idle completion should be off by default")
+        assert_true(
+            all("classifier" in command for command in summary["commands"]),
+            "summary command rows should include classifier",
+        )
+        summary_md = (log_dirs[0] / "summary.md").read_text(encoding="utf-8")
+        assert_true("| Command | Classifier |" in summary_md, "summary table should include classifier")
+
+
 def main() -> int:
     tests: tuple[Callable[[], None], ...] = (
         test_default_safe_command_sequence,
@@ -186,6 +242,9 @@ def main() -> int:
         test_json_destructive_command_requires_opt_in,
         test_custom_read_only_stress_soak_gating,
         test_read_only_custom_commands_remain_reviewable_not_destructive,
+        test_timeout_aliases_and_override,
+        test_parser_self_test_entrypoint,
+        test_dry_run_artifacts_include_classifier_and_timing_options,
     )
     for test in tests:
         test()

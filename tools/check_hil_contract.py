@@ -47,7 +47,22 @@ def main() -> int:
 
     if "hil_logs/" not in gitignore_text.splitlines():
         fail(".gitignore must contain hil_logs/")
-    for required in ("--dry-run", "--port", "--baud", "--out", "--timeout"):
+    for required in (
+        "--dry-run",
+        "--parser-self-test",
+        "--port",
+        "--baud",
+        "--out",
+        "--timeout",
+        "--timeout-s",
+        "--idle-timeout-s",
+        "--allow-idle-completion",
+        "--boot-settle-s",
+        "--reconnect-attempts",
+        "--benchmark-command",
+        "--soak-duration-s",
+        "--report",
+    ):
         if required not in runner_text:
             fail(f"runner is missing required CLI option {required}")
     if "python -m pip install pyserial" not in runner_text:
@@ -90,6 +105,7 @@ def main() -> int:
             module.CommandResult(
                 command="probe",
                 purpose="test",
+                classifier="probe",
                 serial_result="PASS",
                 operator_result="N/A",
                 completion_reason="prompt",

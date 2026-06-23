@@ -96,6 +96,7 @@ Status PCA9555::begin(const Config& config) {
   _hardwareStateDirtyError = dirtyBeforeBegin ? dirtyErrorBeforeBegin : Status::Ok();
   _finishJob(Status::Ok());
   _lastInputData = PortData{};
+  _lastInputDataValid = false;
   _jobOutput0 = Config{}.outputPort0;
   _jobOutput1 = Config{}.outputPort1;
   _jobConfig0 = Config{}.configPort0;
@@ -121,6 +122,7 @@ Status PCA9555::begin(const Config& config) {
     _totalSuccess = 0;
     _finishJob(Status::Ok());
     _lastInputData = PortData{};
+    _lastInputDataValid = false;
     _jobOutput0 = Config{}.outputPort0;
     _jobOutput1 = Config{}.outputPort1;
     _jobConfig0 = Config{}.configPort0;
@@ -222,6 +224,7 @@ void PCA9555::end() {
   _totalSuccess = 0;
   _finishJob(Status::Ok());
   _lastInputData = PortData{};
+  _lastInputDataValid = false;
   _jobOutput0 = 0xFF;
   _jobOutput1 = 0xFF;
   _jobConfig0 = 0xFF;
@@ -279,8 +282,8 @@ Status PCA9555::startWriteOutputsJob(uint16_t mask, uint16_t value) {
   const uint16_t next = static_cast<uint16_t>(
       (cached & static_cast<uint16_t>(~mask)) | (value & mask));
   if (next == cached) {
-    _lastJobStatus = Status::Ok();
-    return Status::Ok();
+    _lastJobStatus = _hardwareStateCleanStatus();
+    return _lastJobStatus;
   }
 
   _jobType = JobType::WRITE_OUTPUTS;
@@ -317,8 +320,8 @@ Status PCA9555::startConfigureOutputsJob(uint16_t mask, uint16_t value) {
   const bool needsOutputWrite = (nextOutput != cachedOutput) || (transitionMask != 0U);
   const bool needsConfigWrite = (nextConfig != cachedConfig);
   if (!needsOutputWrite && !needsConfigWrite) {
-    _lastJobStatus = Status::Ok();
-    return Status::Ok();
+    _lastJobStatus = _hardwareStateCleanStatus();
+    return _lastJobStatus;
   }
 
   _jobType = JobType::CONFIGURE_OUTPUTS;
@@ -388,6 +391,12 @@ Status PCA9555::lastJobStatus() const {
 }
 
 Status PCA9555::getLastReadInputs(PortData& data) const {
+  if (!_initialized) {
+    return Status::Error(Err::NOT_INITIALIZED, "begin() not called");
+  }
+  if (!_lastInputDataValid) {
+    return Status::Error(Err::BUSY, "No input snapshot available");
+  }
   data = _lastInputData;
   return Status::Ok();
 }
@@ -490,6 +499,7 @@ Status PCA9555::readInputs(PortData& data) {
     data.port0 = buf[0];
     data.port1 = buf[1];
     _lastInputData = data;
+    _lastInputDataValid = true;
   }
 
   return st;
@@ -507,6 +517,7 @@ Status PCA9555::readInputsAndClearInterrupt(uint16_t& value) {
     value = static_cast<uint16_t>((static_cast<uint16_t>(buf[1]) << 8) | buf[0]);
     _lastInputData.port0 = buf[0];
     _lastInputData.port1 = buf[1];
+    _lastInputDataValid = true;
   }
   return st;
 }
@@ -522,6 +533,7 @@ Status PCA9555::clearInterrupts() {
   if (readCompleted) {
     _lastInputData.port0 = buf[0];
     _lastInputData.port1 = buf[1];
+    _lastInputDataValid = true;
   }
   return st;
 }
@@ -532,6 +544,11 @@ Status PCA9555::applyInterruptErrataWorkaround() {
   }
   if (_jobType != JobType::NONE) {
     return Status::Error(Err::BUSY, "Chunked job already active");
+  }
+
+  Status availability = _normalOperationStatus();
+  if (!availability.ok()) {
+    return availability;
   }
 
   bool locked = false;
@@ -693,7 +710,7 @@ Status PCA9555::writePin(Pin pin, bool high) {
   }
 
   if (newVal == cached) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   const Port port = isPort0 ? Port::PORT_0 : Port::PORT_1;
@@ -805,7 +822,7 @@ Status PCA9555::setOutputBits(uint16_t mask) {
   data.port1 = _cachedOutput1 | static_cast<uint8_t>((mask >> 8) & 0xFF);
 
   if (data.port0 == _cachedOutput0 && data.port1 == _cachedOutput1) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   return writeOutputs(data);
@@ -825,7 +842,7 @@ Status PCA9555::clearOutputBits(uint16_t mask) {
   data.port1 = _cachedOutput1 & static_cast<uint8_t>(~(mask >> 8) & 0xFF);
 
   if (data.port0 == _cachedOutput0 && data.port1 == _cachedOutput1) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   return writeOutputs(data);
@@ -886,7 +903,7 @@ Status PCA9555::configureInputBits(uint16_t mask) {
   data.port1 = _cachedConfig1 | static_cast<uint8_t>((mask >> 8) & 0xFF);
 
   if (data.port0 == _cachedConfig0 && data.port1 == _cachedConfig1) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   return setConfiguration(data);
@@ -905,7 +922,7 @@ Status PCA9555::configureOutputBits(uint16_t mask) {
       (static_cast<uint16_t>(_cachedConfig1) << 8) | _cachedConfig0);
   const uint16_t transitionMask = static_cast<uint16_t>(currentConfig & mask);
   if (transitionMask == 0) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   const uint16_t cachedOutputs = static_cast<uint16_t>(
@@ -928,7 +945,7 @@ Status PCA9555::setInvertBits(uint16_t mask) {
 
   if (data.port0 == _config.polarityPort0 &&
       data.port1 == _config.polarityPort1) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   return setPolarity(data);
@@ -949,7 +966,7 @@ Status PCA9555::clearInvertBits(uint16_t mask) {
 
   if (data.port0 == _config.polarityPort0 &&
       data.port1 == _config.polarityPort1) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   return setPolarity(data);
@@ -1185,7 +1202,7 @@ Status PCA9555::setPinPolarity(Pin pin, bool inverted) {
   }
 
   if (newVal == current) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   const Port port = isPort0 ? Port::PORT_0 : Port::PORT_1;
@@ -1235,7 +1252,7 @@ Status PCA9555::setPinDirection(Pin pin, bool input) {
   }
 
   if (newVal == cached) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   const Port port = isPort0 ? Port::PORT_0 : Port::PORT_1;
@@ -1280,7 +1297,7 @@ Status PCA9555::configureOutputs(uint16_t outputMask, uint16_t outputValues) {
       ~static_cast<uint8_t>((outputMask >> 8) & 0xFFU));
 
   if (data.port0 == _cachedConfig0 && data.port1 == _cachedConfig1) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   return _writeConfigurationNoPreload(data);
@@ -1577,6 +1594,14 @@ Status PCA9555::_normalOperationStatus() const {
   return Status::Ok();
 }
 
+Status PCA9555::_hardwareStateCleanStatus() const {
+  if (_hardwareStateDirty) {
+    return Status::Error(
+        Err::BUSY, "Hardware state dirty; call recover()", _hardwareStateDirtyError.detail);
+  }
+  return Status::Ok();
+}
+
 void PCA9555::_reassertOfflineLatch() {
   _driverState = DriverState::OFFLINE;
   const uint8_t threshold = _config.offlineThreshold == 0 ? 1 : _config.offlineThreshold;
@@ -1672,6 +1697,7 @@ Status PCA9555::_executeJobInstruction() {
 
       _lastInputData.port0 = buf[0];
       _lastInputData.port1 = buf[1];
+      _lastInputDataValid = true;
       if (_config.applyInterruptErrata) {
         _jobStep = JobStep::POINTER_PARK;
       } else {

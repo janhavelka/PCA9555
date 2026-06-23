@@ -161,7 +161,8 @@ public:
   /// Copy the most recent completed full input-pair read result.
   /// @param[out] data Last input data read by readInputs(), clearInterrupts(),
   ///                  readInputsAndClearInterrupt(), or a chunked read job
-  /// @return Status::Ok()
+  /// @return Status::Ok(), Err::NOT_INITIALIZED before begin(), or Err::BUSY
+  ///         until an explicit input-pair read has completed
   Status getLastReadInputs(PortData& data) const;
   
   // =========================================================================
@@ -699,6 +700,7 @@ private:
   /// Called ONLY from tracked transport wrappers.
   Status _updateHealth(const Status& st);
   Status _normalOperationStatus() const;
+  Status _hardwareStateCleanStatus() const;
   void _reassertOfflineLatch();
 
   /// Mark hardware/cache state as possibly divergent after a failed write.
@@ -760,6 +762,7 @@ private:
   JobStep _jobStep = JobStep::NONE;
   Status _lastJobStatus = Status::Ok();
   PortData _lastInputData;
+  bool _lastInputDataValid = false;
   uint8_t _jobOutput0 = 0xFF;
   uint8_t _jobOutput1 = 0xFF;
   uint8_t _jobConfig0 = 0xFF;

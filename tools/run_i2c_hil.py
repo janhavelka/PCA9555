@@ -15,6 +15,7 @@ import json
 import pathlib
 import re
 import subprocess
+import shutil
 import sys
 import time
 from typing import Iterable
@@ -64,12 +65,33 @@ class CommandSpec:
 class CommandResult:
     command: str
     purpose: str
+    classifier: str
     serial_result: str
     operator_result: str
     completion_reason: str
     elapsed_s: float
     notes: str
     evidence: list[str]
+    transcript_path: str | None = None
+
+
+@dataclasses.dataclass
+class AggregateStats:
+    """Bounded repeated-command run statistics."""
+
+    label: str
+    command_counts: dict[str, int]
+    result_counts: dict[str, int]
+    started_at: str
+    ended_at: str
+    elapsed_s: float
+    completed: int
+    failures: int
+    min_latency_s: float | None
+    mean_latency_s: float | None
+    max_latency_s: float | None
+    effective_hz: float
+    stop_reason: str
     transcript_path: str | None = None
 
 
@@ -317,21 +339,132 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--port", help="Serial port for the flashed CLI firmware.")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate.")
     parser.add_argument("--out", default="hil_logs", help="Base output directory.")
-    parser.add_argument("--timeout", type=float, default=5.0, help="Default command timeout.")
+    parser.add_argument(
+        "--timeout",
+        "--timeout-s",
+        dest="timeout",
+        type=float,
+        default=None,
+        help="Override command timeout in seconds; custom command files use 5s when omitted.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Plan only; do not open serial.")
+    parser.add_argument("--parser-self-test", action="store_true", help="Run parser/classifier self-test and exit.")
     parser.add_argument("--commands", help="Optional text or JSON command file.")
     parser.add_argument("--address", default=DEFAULT_ADDRESS, help="Expected I2C address.")
     parser.add_argument("--startup-timeout", type=float, default=30.0)
-    parser.add_argument("--idle-gap", type=float, default=0.5)
+    parser.add_argument(
+        "--idle-gap",
+        "--idle-timeout-s",
+        dest="idle_gap",
+        type=float,
+        default=0.5,
+        help="Prompt-settle timeout after completion tokens, in seconds.",
+    )
+    parser.add_argument(
+        "--allow-idle-completion",
+        action="store_true",
+        help="Allow idle serial output to complete a command before the prompt appears.",
+    )
+    parser.add_argument(
+        "--boot-settle-s",
+        type=float,
+        default=0.0,
+        help="Optional bounded delay after opening serial before prompt detection.",
+    )
+    parser.add_argument(
+        "--reconnect-attempts",
+        type=int,
+        default=0,
+        help="Optional bounded serial open retry count after the first attempt.",
+    )
+    parser.add_argument(
+        "--reconnect-delay-s",
+        type=float,
+        default=1.0,
+        help="Delay between bounded serial reconnect attempts.",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Print command progress while still saving transcripts.")
     parser.add_argument("--include-output-tests", action="store_true")
     parser.add_argument("--include-soak", action="store_true")
     parser.add_argument("--include-fault-tests", action="store_true")
+    parser.add_argument("--benchmark-command", help="Optional command to repeat for sample-rate benchmarking.")
+    parser.add_argument("--benchmark-count", type=int, default=0, help="Bounded benchmark sample count.")
+    parser.add_argument("--benchmark-warmup", type=int, default=3, help="Bounded benchmark warmup count.")
+    parser.add_argument(
+        "--soak-duration-s",
+        type=float,
+        default=0.0,
+        help="Optional bounded soak duration in seconds. Use 28800 for 8 hours.",
+    )
+    parser.add_argument(
+        "--soak-max-commands",
+        type=int,
+        default=0,
+        help="Optional bounded soak command limit. Zero means duration-bound only.",
+    )
+    parser.add_argument(
+        "--soak-command-mix",
+        default="read,outputs,config,polarity,health,probe",
+        help="Comma-separated soak command mix. Unsafe commands remain opt-in gated.",
+    )
+    parser.add_argument("--soak-interval-s", type=float, default=0.5, help="Delay between soak commands.")
+    parser.add_argument(
+        "--soak-failure-limit",
+        type=int,
+        default=3,
+        help="Stop soak after this many consecutive FAIL/TIMEOUT classifications.",
+    )
+    parser.add_argument("--report", help="Optional Markdown summary copy path.")
     parser.add_argument(
         "--prompt",
         default=PROMPT_TOKEN,
         help="CLI prompt token. Default matches examples/common/CliStyle.h.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    validate_args(args, parser)
+    return args
+
+
+def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    for field in (
+        "baud",
+        "timeout",
+        "startup_timeout",
+        "idle_gap",
+        "boot_settle_s",
+        "reconnect_delay_s",
+        "soak_interval_s",
+    ):
+        value = getattr(args, field)
+        if value is not None and value < 0:
+            parser.error(f"--{field.replace('_', '-')} must be non-negative")
+    for field in (
+        "reconnect_attempts",
+        "benchmark_count",
+        "benchmark_warmup",
+        "soak_max_commands",
+        "soak_failure_limit",
+    ):
+        if getattr(args, field) < 0:
+            parser.error(f"--{field.replace('_', '-')} must be non-negative")
+    if args.baud <= 0:
+        parser.error("--baud must be positive")
+    if args.timeout == 0:
+        parser.error("--timeout-s must be positive")
+    if args.startup_timeout == 0:
+        parser.error("--startup-timeout must be positive")
+    if args.idle_gap == 0:
+        parser.error("--idle-timeout-s must be positive")
+    if args.benchmark_command and args.benchmark_count == 0:
+        parser.error("--benchmark-command requires --benchmark-count > 0")
+    if args.soak_duration_s == 0 and args.soak_max_commands > 0:
+        parser.error("--soak-max-commands requires --soak-duration-s > 0")
+    if args.soak_duration_s > 0 and args.soak_failure_limit == 0:
+        parser.error("--soak-failure-limit must be positive when soak is enabled")
+
+
+def default_command_timeout(args: argparse.Namespace) -> float:
+    return args.timeout if args.timeout is not None else 5.0
 
 
 def load_command_file(path: pathlib.Path, default_timeout: float) -> list[CommandSpec]:
@@ -473,33 +606,59 @@ def opt_in_enabled(spec: CommandSpec, args: argparse.Namespace) -> bool:
 
 
 def build_command_sequence(args: argparse.Namespace) -> list[CommandSpec]:
+    custom_timeout = default_command_timeout(args)
     if args.commands:
         custom_specs: list[CommandSpec] = []
-        for spec in load_command_file(pathlib.Path(args.commands), args.timeout):
+        for spec in load_command_file(pathlib.Path(args.commands), custom_timeout):
+            if args.timeout is not None:
+                spec = dataclasses.replace(spec, timeout_s=args.timeout)
             custom_specs.append(spec)
             recovery = recovery_spec_for(spec)
             if recovery is not None:
+                if args.timeout is not None:
+                    recovery = dataclasses.replace(recovery, timeout_s=args.timeout)
                 custom_specs.append(recovery)
         return custom_specs
     address_token = address_table_token(args.address)
     default_specs: list[CommandSpec] = []
     for spec in DEFAULT_SAFE_COMMANDS:
         if spec.command == "scan":
-            default_specs.append(
-                dataclasses.replace(
-                    spec,
-                    expected=(r"Scan complete", rf"(?m)^[0-7][0-9A-F]:\s+.*\b{re.escape(address_token)}\b"),
-                )
+            spec = dataclasses.replace(
+                spec,
+                expected=(r"Scan complete", rf"(?m)^[0-7][0-9A-F]:\s+.*\b{re.escape(address_token)}\b"),
             )
-        else:
-            default_specs.append(spec)
+        if args.timeout is not None:
+            spec = dataclasses.replace(spec, timeout_s=args.timeout)
+        default_specs.append(spec)
     all_specs: list[CommandSpec] = [*default_specs]
     for spec in OPTIONAL_COMMANDS:
+        if args.timeout is not None:
+            spec = dataclasses.replace(spec, timeout_s=args.timeout)
         all_specs.append(spec)
         recovery = recovery_spec_for(spec)
         if recovery is not None:
+            if args.timeout is not None:
+                recovery = dataclasses.replace(recovery, timeout_s=args.timeout)
             all_specs.append(recovery)
     return all_specs
+
+
+def spec_for_command(command: str, default_timeout: float) -> CommandSpec:
+    for spec in (*DEFAULT_SAFE_COMMANDS, *OPTIONAL_COMMANDS):
+        if spec.command == command:
+            return spec
+    return custom_command_spec(command, default_timeout)
+
+
+def parse_command_mix(text: str, default_timeout: float) -> list[CommandSpec]:
+    commands = [item.strip() for item in text.split(",") if item.strip()]
+    return [spec_for_command(command, default_timeout) for command in commands]
+
+
+def apply_timeout_override(spec: CommandSpec, args: argparse.Namespace) -> CommandSpec:
+    if args.timeout is None:
+        return spec
+    return dataclasses.replace(spec, timeout_s=args.timeout)
 
 
 def extract_evidence(text: str, patterns: Iterable[str]) -> list[str]:
@@ -550,12 +709,61 @@ def import_serial_module():
     return serial
 
 
+def run_parser_self_test() -> int:
+    args = parse_args(["--dry-run", "--address", "0x24"])
+    specs = build_command_sequence(args)
+    commands = [spec.command for spec in DEFAULT_SAFE_COMMANDS]
+    required = {"version", "scan", "probe", "settings", "health"}
+    missing = sorted(required.difference(commands))
+    if missing:
+        print(f"parser self-test missing default commands: {missing}", file=sys.stderr)
+        return 1
+    if any(spec.destructive or spec.requires_opt_in for spec in DEFAULT_SAFE_COMMANDS):
+        print("parser self-test found unsafe default command", file=sys.stderr)
+        return 1
+    scan = next(spec for spec in specs if spec.command == "scan")
+    if not any(re.search(pattern, "24: 20 24 27", flags=re.IGNORECASE) for pattern in scan.expected):
+        print("parser self-test scan regex does not honor configured address", file=sys.stderr)
+        return 1
+    probe = CommandSpec(command="probe", purpose="self-test", expected=(r"Status:\s+OK",))
+    ok_result, _ = classify(probe, "Status: OK\n", "prompt")
+    fail_result, _ = classify(probe, "Status: I2C_TIMEOUT\n", "prompt")
+    timeout_result, _ = classify(probe, "Status: OK\n", "timeout")
+    if (ok_result, fail_result, timeout_result) != ("PASS", "FAIL", "TIMEOUT"):
+        print("parser self-test classifier results are incorrect", file=sys.stderr)
+        return 1
+    if custom_command_spec("allhigh", 5.0).requires_opt_in != "--include-output-tests":
+        print("parser self-test unsafe command is not opt-in gated", file=sys.stderr)
+        return 1
+    print("run_i2c_hil parser self-test: PASS")
+    return 0
+
+
+def open_serial_with_retries(serial_mod, args: argparse.Namespace):
+    attempts = args.reconnect_attempts + 1
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            ser = serial_mod.Serial(args.port, args.baud, timeout=0.05)
+            ser.dtr = False
+            ser.rts = False
+            return ser
+        except Exception as exc:  # pragma: no cover - hardware path
+            last_exc = exc
+            if args.verbose:
+                print(f"serial open attempt {attempt}/{attempts} failed: {exc}", file=sys.stderr)
+            if attempt < attempts:
+                time.sleep(args.reconnect_delay_s)
+    raise RuntimeError(f"failed to open serial port {args.port}: {last_exc}")
+
+
 def read_until(
     ser,
     *,
     prompt: str,
     timeout_s: float,
     idle_gap_s: float,
+    allow_idle_completion: bool = False,
     completion_tokens: tuple[str, ...] = (),
 ) -> tuple[str, str]:
     deadline = time.monotonic() + timeout_s
@@ -587,7 +795,7 @@ def read_until(
                                 return decoded, "prompt"
                         time.sleep(0.02)
                     return decoded, "completion_token"
-        elif saw_output and (time.monotonic() - last_rx) >= idle_gap_s:
+        elif allow_idle_completion and saw_output and (time.monotonic() - last_rx) >= idle_gap_s:
             return b"".join(chunks).decode("utf-8", errors="replace"), "idle"
         else:
             time.sleep(0.02)
@@ -601,7 +809,8 @@ def run_serial_command(
     *,
     prompt: str,
     idle_gap_s: float,
-    transcript_path: pathlib.Path,
+    allow_idle_completion: bool,
+    transcript_path: pathlib.Path | None,
 ) -> tuple[CommandResult, str]:
     start = time.monotonic()
     ser.write((spec.command + "\n").encode("utf-8"))
@@ -611,10 +820,12 @@ def run_serial_command(
         prompt=prompt,
         timeout_s=spec.timeout_s,
         idle_gap_s=idle_gap_s,
+        allow_idle_completion=allow_idle_completion,
         completion_tokens=spec.completion_tokens,
     )
     elapsed = time.monotonic() - start
-    transcript_path.write_text(strip_ansi(raw), encoding="utf-8")
+    if transcript_path is not None:
+        transcript_path.write_text(strip_ansi(raw), encoding="utf-8")
     normalized = strip_ansi(raw)
     if normalized.endswith(prompt):
         normalized = normalized[: -len(prompt)]
@@ -623,15 +834,140 @@ def run_serial_command(
     command_result = CommandResult(
             command=spec.command,
             purpose=spec.purpose,
+            classifier=spec.classifier,
             serial_result=result,
             operator_result=operator_result,
             completion_reason=reason,
             elapsed_s=elapsed,
             notes=spec.notes,
             evidence=evidence,
-            transcript_path=str(transcript_path),
+            transcript_path=str(transcript_path) if transcript_path is not None else None,
         )
     return command_result, raw
+
+
+def command_result_is_failure(result: CommandResult) -> bool:
+    return result.serial_result in {"FAIL", "TIMEOUT"}
+
+
+def run_aggregate_commands(
+    ser,
+    specs: list[CommandSpec],
+    *,
+    label: str,
+    max_commands: int,
+    deadline_s: float | None,
+    prompt: str,
+    idle_gap_s: float,
+    allow_idle_completion: bool,
+    interval_s: float,
+    failure_limit: int,
+    transcript_path: pathlib.Path,
+    verbose: bool,
+) -> tuple[AggregateStats, list[CommandResult]]:
+    started_wall = _dt.datetime.now()
+    started_mono = time.monotonic()
+    deadline = started_mono + deadline_s if deadline_s is not None else None
+    results: list[CommandResult] = []
+    latencies: list[float] = []
+    command_counts: dict[str, int] = {}
+    result_counts: dict[str, int] = {}
+    consecutive_failures = 0
+    stop_reason = "limit_reached"
+
+    append_transcript(transcript_path, f"{label}:start", f"{started_wall.isoformat(timespec='seconds')}\n")
+    index = 0
+    while True:
+        if max_commands > 0 and len(results) >= max_commands:
+            stop_reason = "command_limit"
+            break
+        now = time.monotonic()
+        if deadline is not None and now >= deadline:
+            stop_reason = "duration_limit"
+            break
+        if not specs:
+            stop_reason = "empty_command_mix"
+            break
+
+        spec = specs[index % len(specs)]
+        index += 1
+        if hasattr(ser, "reset_input_buffer"):
+            ser.reset_input_buffer()
+        result, raw = run_serial_command(
+            ser,
+            spec,
+            prompt=prompt,
+            idle_gap_s=idle_gap_s,
+            allow_idle_completion=allow_idle_completion,
+            transcript_path=None,
+        )
+        append_transcript(transcript_path, f"{label}:{result.command}", raw)
+        results.append(result)
+        latencies.append(result.elapsed_s)
+        command_counts[result.command] = command_counts.get(result.command, 0) + 1
+        result_counts[result.serial_result] = result_counts.get(result.serial_result, 0) + 1
+        if verbose:
+            print(f"{label}: {result.command} -> {result.serial_result} ({result.elapsed_s:.3f}s)")
+
+        if command_result_is_failure(result):
+            consecutive_failures += 1
+            if consecutive_failures >= failure_limit:
+                stop_reason = "failure_limit"
+                break
+        else:
+            consecutive_failures = 0
+
+        if interval_s > 0:
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            sleep_s = interval_s if remaining is None else min(interval_s, remaining)
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+
+    ended_wall = _dt.datetime.now()
+    elapsed = time.monotonic() - started_mono
+    failures = sum(1 for result in results if command_result_is_failure(result))
+    stats = AggregateStats(
+        label=label,
+        command_counts=command_counts,
+        result_counts=result_counts,
+        started_at=started_wall.isoformat(timespec="seconds"),
+        ended_at=ended_wall.isoformat(timespec="seconds"),
+        elapsed_s=elapsed,
+        completed=len(results),
+        failures=failures,
+        min_latency_s=min(latencies) if latencies else None,
+        mean_latency_s=(sum(latencies) / len(latencies)) if latencies else None,
+        max_latency_s=max(latencies) if latencies else None,
+        effective_hz=(len(results) / elapsed) if elapsed > 0 else 0.0,
+        stop_reason=stop_reason,
+        transcript_path=str(transcript_path),
+    )
+    append_transcript(transcript_path, f"{label}:end", json.dumps(dataclasses.asdict(stats), indent=2) + "\n")
+    return stats, results
+
+
+def aggregate_result(stats: AggregateStats) -> CommandResult:
+    status = "FAIL" if stats.stop_reason == "failure_limit" or stats.failures > 0 else "PASS"
+    if stats.completed == 0:
+        status = "REVIEW_REQUIRED"
+    evidence = [
+        f"completed={stats.completed}",
+        f"failures={stats.failures}",
+        f"effective_hz={stats.effective_hz:.3f}",
+        f"stop_reason={stats.stop_reason}",
+    ]
+    return CommandResult(
+        command=f"{stats.label}:aggregate",
+        purpose=f"Aggregate statistics for {stats.label}.",
+        classifier=stats.label,
+        serial_result=status,
+        operator_result="N/A",
+        completion_reason=stats.stop_reason,
+        elapsed_s=stats.elapsed_s,
+        notes="Generated by bounded repeated-command runner.",
+        evidence=evidence,
+        transcript_path=stats.transcript_path,
+    )
 
 
 def skipped_result(spec: CommandSpec, result: str, reason: str) -> CommandResult:
@@ -639,6 +975,7 @@ def skipped_result(spec: CommandSpec, result: str, reason: str) -> CommandResult
     return CommandResult(
         command=spec.command,
         purpose=spec.purpose,
+        classifier=spec.classifier,
         serial_result=result,
         operator_result=operator_result,
         completion_reason=reason,
@@ -678,6 +1015,10 @@ def write_transcript_header(path: pathlib.Path, args: argparse.Namespace, comman
         f"port: {args.port or 'N/A'}\n"
         f"baud: {args.baud}\n"
         f"dry_run: {args.dry_run}\n"
+        f"boot_settle_s: {args.boot_settle_s}\n"
+        f"startup_timeout_s: {args.startup_timeout}\n"
+        f"idle_timeout_s: {args.idle_gap}\n"
+        f"allow_idle_completion: {args.allow_idle_completion}\n"
         f"commands: {command_count}\n\n"
     )
     path.write_text(header, encoding="utf-8")
@@ -720,6 +1061,7 @@ def write_summary_files(
     results: list[CommandResult],
     skipped: list[CommandSpec],
     artifact_paths: dict[str, str],
+    aggregate_stats: list[AggregateStats],
 ) -> None:
     branch = git_output(["branch", "--show-current"])
     commit = git_output(["rev-parse", "HEAD"])
@@ -735,11 +1077,18 @@ def write_summary_files(
         "serial_port": args.port,
         "baud": args.baud,
         "i2c_address": args.address,
+        "timeout_override_s": args.timeout,
+        "startup_timeout_s": args.startup_timeout,
+        "idle_timeout_s": args.idle_gap,
+        "allow_idle_completion": args.allow_idle_completion,
+        "boot_settle_s": args.boot_settle_s,
+        "reconnect_attempts": args.reconnect_attempts,
         "dry_run": args.dry_run,
         "final_verdict": verdict,
         "pyserial_install_hint": PYSERIAL_HINT,
         "artifacts": artifact_paths,
         "commands": [dataclasses.asdict(result) for result in results],
+        "aggregate_stats": [dataclasses.asdict(stats) for stats in aggregate_stats],
         "skipped_opt_in_commands": [dataclasses.asdict(spec) for spec in skipped],
         "manual_checks": [dataclasses.asdict(spec) for spec in MANUAL_CHECKS],
         "identity_note": (
@@ -759,21 +1108,42 @@ def write_summary_files(
         f"- Serial port: `{args.port or 'N/A'}`",
         f"- Baud: `{args.baud}`",
         f"- I2C address: `{args.address}`",
+        f"- Timeout override: `{args.timeout if args.timeout is not None else 'per-command defaults'}`",
+        f"- Startup timeout: `{args.startup_timeout}`",
+        f"- Idle timeout: `{args.idle_gap}`",
+        f"- Allow idle completion: `{args.allow_idle_completion}`",
+        f"- Boot settle: `{args.boot_settle_s}`",
         f"- Dry run: `{args.dry_run}`",
         f"- Final verdict: `{verdict}`",
         "",
         "## Command Sequence",
         "",
-        "| Command | Purpose | Serial Result | Operator Result | Completion | Elapsed | Notes |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| Command | Classifier | Purpose | Serial Result | Operator Result | Completion | Elapsed | Notes |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for result in results:
         notes = result.notes.replace("|", "/") if result.notes else ""
         lines.append(
-            f"| `{result.command}` | {result.purpose} | `{result.serial_result}` | "
+            f"| `{result.command}` | `{result.classifier}` | {result.purpose} | `{result.serial_result}` | "
             f"`{result.operator_result}` | `{result.completion_reason}` | "
             f"{result.elapsed_s:.2f}s | {notes} |"
         )
+    if aggregate_stats:
+        lines.extend(["", "## Aggregate Timing", ""])
+        lines.extend(
+            [
+                "| Label | Completed | Failures | Min | Mean | Max | Effective Hz | Stop Reason |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for stats in aggregate_stats:
+            min_s = "" if stats.min_latency_s is None else f"{stats.min_latency_s:.3f}s"
+            mean_s = "" if stats.mean_latency_s is None else f"{stats.mean_latency_s:.3f}s"
+            max_s = "" if stats.max_latency_s is None else f"{stats.max_latency_s:.3f}s"
+            lines.append(
+                f"| `{stats.label}` | {stats.completed} | {stats.failures} | {min_s} | "
+                f"{mean_s} | {max_s} | {stats.effective_hz:.3f} | `{stats.stop_reason}` |"
+            )
     lines.extend(["", "## Evidence Excerpts", ""])
     for result in results:
         if result.serial_result in {"FAIL", "TIMEOUT", "SERIAL_OK_OR_REVIEW", "REVIEW_REQUIRED"}:
@@ -797,11 +1167,19 @@ def write_summary_files(
             "No physical HIL validation is implied by a dry run. A scan or probe proves only I2C ACK at the address, not PCA9555 identity.",
         ]
     )
-    (log_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    summary_md = log_dir / "summary.md"
+    summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if args.report:
+        report_path = pathlib.Path(args.report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(summary_md, report_path)
 
 
 def run(argv: list[str]) -> int:
     args = parse_args(argv)
+    if args.parser_self_test:
+        return run_parser_self_test()
+
     log_dir = create_log_dir(pathlib.Path(args.out))
     transcript_path = log_dir / "serial_transcript.txt"
     checklist_path = log_dir / "operator_checklist.md"
@@ -811,6 +1189,7 @@ def run(argv: list[str]) -> int:
     specs = build_command_sequence(args)
     skipped: list[CommandSpec] = []
     results: list[CommandResult] = []
+    aggregate_stats: list[AggregateStats] = []
     command_count = sum(
         1
         for spec in specs
@@ -838,29 +1217,38 @@ def run(argv: list[str]) -> int:
         if serial_mod is None:
             return 2
         try:
-            ser = serial_mod.Serial(args.port, args.baud, timeout=0.05)
-            ser.dtr = False
-            ser.rts = False
-        except Exception as exc:  # pragma: no cover - hardware path
-            print(f"failed to open serial port {args.port}: {exc}", file=sys.stderr)
+            ser = open_serial_with_retries(serial_mod, args)
+        except RuntimeError as exc:  # pragma: no cover - hardware path
+            print(str(exc), file=sys.stderr)
             return 2
         with ser:  # pragma: no cover - hardware path
+            if args.boot_settle_s > 0:
+                append_transcript(
+                    transcript_path,
+                    "boot-settle",
+                    f"waiting {args.boot_settle_s:.3f}s before startup prompt detection\n",
+                )
+                time.sleep(args.boot_settle_s)
+            startup_start = time.monotonic()
             startup_raw, startup_reason = read_until(
                 ser,
                 prompt=args.prompt,
                 timeout_s=args.startup_timeout,
                 idle_gap_s=args.idle_gap,
+                allow_idle_completion=args.allow_idle_completion,
             )
+            startup_elapsed = time.monotonic() - startup_start
             append_transcript(transcript_path, "startup", startup_raw)
             if startup_reason == "timeout":
                 results.append(
                     CommandResult(
                         command="startup",
                         purpose="Wait for CLI startup prompt.",
+                        classifier="startup",
                         serial_result="TIMEOUT",
                         operator_result="N/A",
                         completion_reason="timeout",
-                        elapsed_s=args.startup_timeout,
+                        elapsed_s=startup_elapsed,
                         notes="No CLI prompt observed before startup timeout.",
                         evidence=[],
                     )
@@ -892,10 +1280,91 @@ def run(argv: list[str]) -> int:
                         spec,
                         prompt=args.prompt,
                         idle_gap_s=args.idle_gap,
+                        allow_idle_completion=args.allow_idle_completion,
                         transcript_path=command_transcript,
                     )
                     append_transcript(transcript_path, spec.command, raw_segment)
                     results.append(result)
+
+                if args.benchmark_command:
+                    bench_spec = apply_timeout_override(
+                        spec_for_command(args.benchmark_command, default_command_timeout(args)),
+                        args,
+                    )
+                    if (bench_spec.destructive or bench_spec.requires_opt_in) and not opt_in_enabled(bench_spec, args):
+                        skipped.append(bench_spec)
+                        results.append(skipped_result(bench_spec, "SKIPPED_UNSAFE", bench_spec.requires_opt_in or "manual"))
+                    else:
+                        for warmup_index in range(args.benchmark_warmup):
+                            if hasattr(ser, "reset_input_buffer"):
+                                ser.reset_input_buffer()
+                            warmup_result, warmup_raw = run_serial_command(
+                                ser,
+                                bench_spec,
+                                prompt=args.prompt,
+                                idle_gap_s=args.idle_gap,
+                                allow_idle_completion=args.allow_idle_completion,
+                                transcript_path=None,
+                            )
+                            append_transcript(
+                                transcript_path,
+                                f"benchmark-warmup-{warmup_index + 1}:{bench_spec.command}",
+                                warmup_raw,
+                            )
+                            if args.verbose:
+                                print(
+                                    f"benchmark warmup {warmup_index + 1}: "
+                                    f"{warmup_result.serial_result} ({warmup_result.elapsed_s:.3f}s)"
+                                )
+                            if command_result_is_failure(warmup_result):
+                                results.append(warmup_result)
+                                break
+                        else:
+                            stats, _ = run_aggregate_commands(
+                                ser,
+                                [bench_spec],
+                                label="benchmark",
+                                max_commands=args.benchmark_count,
+                                deadline_s=None,
+                                prompt=args.prompt,
+                                idle_gap_s=args.idle_gap,
+                                allow_idle_completion=args.allow_idle_completion,
+                                interval_s=0.0,
+                                failure_limit=1,
+                                transcript_path=log_dir / "benchmark_transcript.txt",
+                                verbose=args.verbose,
+                            )
+                            aggregate_stats.append(stats)
+                            results.append(aggregate_result(stats))
+
+                if args.soak_duration_s > 0:
+                    soak_specs = [
+                        apply_timeout_override(spec, args)
+                        for spec in parse_command_mix(args.soak_command_mix, default_command_timeout(args))
+                    ]
+                    runnable: list[CommandSpec] = []
+                    for spec in soak_specs:
+                        if (spec.destructive or spec.requires_opt_in) and not opt_in_enabled(spec, args):
+                            skipped.append(spec)
+                            results.append(skipped_result(spec, "SKIPPED_UNSAFE", spec.requires_opt_in or "manual"))
+                        else:
+                            runnable.append(spec)
+                    stats, _ = run_aggregate_commands(
+                        ser,
+                        runnable,
+                        label="soak",
+                        max_commands=args.soak_max_commands,
+                        deadline_s=args.soak_duration_s,
+                        prompt=args.prompt,
+                        idle_gap_s=args.idle_gap,
+                        allow_idle_completion=args.allow_idle_completion,
+                        interval_s=args.soak_interval_s,
+                        failure_limit=args.soak_failure_limit,
+                        transcript_path=log_dir / "soak_transcript.txt",
+                        verbose=args.verbose,
+                    )
+                    aggregate_stats.append(stats)
+                    results.append(aggregate_result(stats))
 
     write_operator_checklist(checklist_path, skipped)
     artifacts = {
@@ -905,7 +1374,9 @@ def run(argv: list[str]) -> int:
         "summary_json": str(summary_json_path),
         "summary_md": str(log_dir / "summary.md"),
     }
-    write_summary_files(log_dir, args, results, skipped, artifacts)
+    if args.report:
+        artifacts["report"] = str(pathlib.Path(args.report))
+    write_summary_files(log_dir, args, results, skipped, artifacts, aggregate_stats)
 
     checklist_text = checklist_path.read_text(encoding="utf-8")
     print(checklist_text)

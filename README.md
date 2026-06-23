@@ -607,6 +607,7 @@ python tools/check_idf_example_contract.py
 
 # Check host-side I2C HIL runner/docs contract
 python tools/check_hil_contract.py
+python tools/run_i2c_hil.py --parser-self-test
 
 # Plan a HIL run without opening serial or claiming hardware validation
 python tools/run_i2c_hil.py --dry-run

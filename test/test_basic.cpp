@@ -486,6 +486,12 @@ void enableFakeLock(Config& cfg, FakeBus& bus) {
   cfg.lockUser = &bus;
 }
 
+void assertHardwareDirtyNoopStatus(const Status& st, int32_t detail) {
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUSY), static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Hardware state dirty; call recover()", st.msg);
+  TEST_ASSERT_EQUAL_INT32(detail, st.detail);
+}
+
 void assertFakeEvent(const FakeBus& bus, size_t idx, uint8_t type, uint8_t reg,
                      size_t len) {
   TEST_ASSERT_TRUE(idx < bus.transactionCount);
@@ -1194,6 +1200,37 @@ void test_offline_input_read_checks_latch_before_lock() {
   TEST_ASSERT_EQUAL_UINT(0u, bus.transactionCount);
 }
 
+void test_offline_errata_workaround_checks_latch_before_lock() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.offlineThreshold = 1;
+  enableFakeLock(cfg, bus);
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  bus.readErrorRemaining = 1;
+  bus.readError = Status::Error(Err::TIMEOUT, "forced timeout", -17);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::TIMEOUT),
+                          static_cast<uint8_t>(dev.recover().code));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::OFFLINE),
+                          static_cast<uint8_t>(dev.state()));
+
+  const uint32_t readsBefore = bus.readCalls;
+  const uint32_t writesBefore = bus.writeCalls;
+  resetFakeLockStats(bus);
+  resetFakeTransactionLog(bus);
+  Status st = dev.applyInterruptErrataWorkaround();
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUSY),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("Driver is offline; call recover()", st.msg);
+  TEST_ASSERT_EQUAL_UINT32(0u, bus.lockCalls);
+  TEST_ASSERT_EQUAL_UINT32(0u, bus.unlockCalls);
+  TEST_ASSERT_FALSE(bus.lockHeld);
+  TEST_ASSERT_EQUAL_UINT32(readsBefore, bus.readCalls);
+  TEST_ASSERT_EQUAL_UINT32(writesBefore, bus.writeCalls);
+  TEST_ASSERT_EQUAL_UINT(0u, bus.transactionCount);
+}
+
 void test_failed_recover_from_offline_preserves_latch_after_partial_success() {
   FakeBus bus;
   PCA9555::PCA9555 dev;
@@ -1451,6 +1488,45 @@ void test_hardware_dirty_survives_unrelated_successful_reads() {
   TEST_ASSERT_TRUE(dev.hardwareStateDirty());
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_NACK_DATA),
                           static_cast<uint8_t>(dev.hardwareStateDirtyError().code));
+}
+
+void test_hardware_dirty_cache_noops_require_recover_without_i2c() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  bus.writeErrorRemaining = 1;
+  bus.writeError = Status::Error(Err::I2C_BUS, "forced dirty for no-op guard", -34);
+  Status st = dev.writeOutput(Port::PORT_0, 0x00);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_BUS), static_cast<uint8_t>(st.code));
+  TEST_ASSERT_TRUE(dev.hardwareStateDirty());
+
+  resetFakeTransactionLog(bus);
+  assertHardwareDirtyNoopStatus(dev.writePin(0, true), -34);
+  assertHardwareDirtyNoopStatus(dev.setOutputBits(0x0001), -34);
+  assertHardwareDirtyNoopStatus(dev.configureInputBits(0x0001), -34);
+  assertHardwareDirtyNoopStatus(dev.setPinDirection(0, true), -34);
+  assertHardwareDirtyNoopStatus(dev.setInvertBits(0x0000), -34);
+  assertHardwareDirtyNoopStatus(dev.setPinPolarity(0, false), -34);
+  assertHardwareDirtyNoopStatus(dev.startWriteOutputsJob(0x0001, 0x0001), -34);
+  TEST_ASSERT_FALSE(dev.jobActive());
+  TEST_ASSERT_EQUAL_UINT(0u, bus.transactionCount);
+
+  TEST_ASSERT_TRUE(dev.recover().ok());
+  TEST_ASSERT_TRUE(dev.setPinDirection(0, false).ok());
+
+  bus.writeErrorRemaining = 1;
+  bus.writeError = Status::Error(Err::I2C_TIMEOUT, "forced dirty for config no-op guard", -35);
+  st = dev.writeOutput(Port::PORT_0, 0x00);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_TIMEOUT),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_TRUE(dev.hardwareStateDirty());
+
+  resetFakeTransactionLog(bus);
+  assertHardwareDirtyNoopStatus(dev.configureOutputBits(0x0001), -35);
+  assertHardwareDirtyNoopStatus(dev.startConfigureOutputsJob(0x0001, 0x0001), -35);
+  TEST_ASSERT_FALSE(dev.jobActive());
+  TEST_ASSERT_EQUAL_UINT(0u, bus.transactionCount);
 }
 
 void test_hardware_dirty_clears_after_full_successful_recover() {
@@ -1852,6 +1928,37 @@ void test_read_inputs_returns_port_data() {
   TEST_ASSERT_EQUAL_HEX8(0xAB, data.port0);
   TEST_ASSERT_EQUAL_HEX8(0xCD, data.port1);
   TEST_ASSERT_EQUAL_HEX16(0xCDAB, data.combined());
+}
+
+void test_get_last_read_inputs_requires_completed_snapshot() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  PortData data;
+
+  Status st = dev.getLastReadInputs(data);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::NOT_INITIALIZED),
+                          static_cast<uint8_t>(st.code));
+
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+  st = dev.getLastReadInputs(data);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUSY), static_cast<uint8_t>(st.code));
+  TEST_ASSERT_EQUAL_STRING("No input snapshot available", st.msg);
+
+  bus.readErrorRemaining = 1;
+  bus.readError = Status::Error(Err::I2C_TIMEOUT, "forced snapshot read timeout", -36);
+  st = dev.readInputs(data);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_TIMEOUT),
+                          static_cast<uint8_t>(st.code));
+  st = dev.getLastReadInputs(data);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::BUSY), static_cast<uint8_t>(st.code));
+
+  bus.regs[cmd::REG_INPUT_PORT_0] = 0x44;
+  bus.regs[cmd::REG_INPUT_PORT_1] = 0x88;
+  TEST_ASSERT_TRUE(dev.readInputs(data).ok());
+  data = PortData{};
+  TEST_ASSERT_TRUE(dev.getLastReadInputs(data).ok());
+  TEST_ASSERT_EQUAL_HEX8(0x44, data.port0);
+  TEST_ASSERT_EQUAL_HEX8(0x88, data.port1);
 }
 
 void test_read_inputs_applies_errata_workaround_when_enabled() {
@@ -3886,6 +3993,7 @@ int main() {
   RUN_TEST(test_offline_latches_normal_read_without_i2c_until_recover);
   RUN_TEST(test_probe_blocks_offline_without_i2c);
   RUN_TEST(test_offline_input_read_checks_latch_before_lock);
+  RUN_TEST(test_offline_errata_workaround_checks_latch_before_lock);
   RUN_TEST(test_failed_recover_from_offline_preserves_latch_after_partial_success);
   RUN_TEST(test_failed_recover_from_offline_preserves_latch_on_in_progress);
   RUN_TEST(test_failure_threshold_enters_offline_and_blocks_bus_until_recover);
@@ -3901,6 +4009,7 @@ int main() {
   RUN_TEST(test_direct_odd_start_pair_write_failure_marks_dirty);
   RUN_TEST(test_hardware_dirty_status_appears_in_settings_snapshot);
   RUN_TEST(test_hardware_dirty_survives_unrelated_successful_reads);
+  RUN_TEST(test_hardware_dirty_cache_noops_require_recover_without_i2c);
   RUN_TEST(test_hardware_dirty_clears_after_full_successful_recover);
   RUN_TEST(test_hardware_dirty_does_not_clear_after_partial_recover);
   RUN_TEST(test_begin_validation_failure_preserves_existing_hardware_dirty);
@@ -3918,6 +4027,7 @@ int main() {
 
   // Input/Output/Config API
   RUN_TEST(test_read_inputs_returns_port_data);
+  RUN_TEST(test_get_last_read_inputs_requires_completed_snapshot);
   RUN_TEST(test_read_inputs_applies_errata_workaround_when_enabled);
   RUN_TEST(test_read_inputs_skips_errata_workaround_when_disabled);
   RUN_TEST(test_read_register_input_port_applies_errata_workaround);

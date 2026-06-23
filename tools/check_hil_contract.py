@@ -77,6 +77,11 @@ def main() -> int:
     ]
     if unsafe_default:
         fail(f"unsafe commands in DEFAULT_SAFE_COMMANDS: {unsafe_default}")
+    for spec in module.OPTIONAL_COMMANDS:
+        if spec.destructive and not spec.command.endswith(" confirm"):
+            fail(f"destructive optional command must include confirm: {spec.command}")
+        if spec.recovery_command is not None and not spec.recovery_command.endswith(" confirm"):
+            fail(f"destructive recovery command must include confirm: {spec.recovery_command}")
 
     documented = []
     in_block = False

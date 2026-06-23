@@ -73,38 +73,13 @@ inline void printHealthDiag(const PCA9555::SettingsSnapshot& snapshot, uint32_t 
                                 ? (100.0f * static_cast<float>(snapshot.totalSuccess) /
                                    static_cast<float>(total))
                                 : 0.0f;
-  const char* stateColor =
-      (snapshot.state == PCA9555::DriverState::UNINIT)
-          ? LOG_COLOR_RESET
-          : LOG_COLOR_STATE(online, snapshot.consecutiveFailures);
-
   Serial.println("=== Driver Health ===");
-  Serial.printf("  State: %s%s%s\n",
-                stateColor,
-                stateToStr(snapshot.state),
-                LOG_COLOR_RESET);
-  Serial.printf("  Online: %s%s%s\n",
-                online ? LOG_COLOR_GREEN : LOG_COLOR_RED,
-                log_bool_str(online),
-                LOG_COLOR_RESET);
-  Serial.printf("  Consecutive failures: %s%u%s\n",
-                (snapshot.consecutiveFailures == 0U) ? LOG_COLOR_GREEN : LOG_COLOR_RED,
-                snapshot.consecutiveFailures,
-                LOG_COLOR_RESET);
-  Serial.printf("  Total success: %s%lu%s\n",
-                (snapshot.totalSuccess > 0U) ? LOG_COLOR_GREEN : LOG_COLOR_YELLOW,
-                static_cast<unsigned long>(snapshot.totalSuccess),
-                LOG_COLOR_RESET);
-  Serial.printf("  Total failures: %s%lu%s\n",
-                (snapshot.totalFailures == 0U) ? LOG_COLOR_GREEN : LOG_COLOR_RED,
-                static_cast<unsigned long>(snapshot.totalFailures),
-                LOG_COLOR_RESET);
-  Serial.printf("  Success rate: %s%.1f%%%s\n",
-                (successRate >= 99.9f) ? LOG_COLOR_GREEN
-                                       : ((successRate >= 80.0f) ? LOG_COLOR_YELLOW
-                                                                 : LOG_COLOR_RED),
-                successRate,
-                LOG_COLOR_RESET);
+  Serial.printf("  State: %s\n", stateToStr(snapshot.state));
+  Serial.printf("  Online: %s\n", log_bool_str(online));
+  Serial.printf("  Consecutive failures: %u\n", snapshot.consecutiveFailures);
+  Serial.printf("  Total success: %lu\n", static_cast<unsigned long>(snapshot.totalSuccess));
+  Serial.printf("  Total failures: %lu\n", static_cast<unsigned long>(snapshot.totalFailures));
+  Serial.printf("  Success rate: %.1f%%\n", successRate);
 
   if (snapshot.lastOkMs > 0U) {
     Serial.printf("  Last OK: %lu ms ago (at %lu ms)\n",
@@ -123,15 +98,13 @@ inline void printHealthDiag(const PCA9555::SettingsSnapshot& snapshot, uint32_t 
   }
 
   if (!snapshot.lastError.ok()) {
-    Serial.printf("  Error code: %s%s%s\n",
-                  LOG_COLOR_RED,
-                  errToStr(snapshot.lastError.code),
-                  LOG_COLOR_RESET);
+    Serial.printf("  Error code: %s\n", errToStr(snapshot.lastError.code));
     Serial.printf("  Error detail: %ld\n", static_cast<long>(snapshot.lastError.detail));
     if (snapshot.lastError.msg && snapshot.lastError.msg[0] != '\0') {
       Serial.printf("  Error msg: %s\n", snapshot.lastError.msg);
     }
   }
+  Serial.flush();
 }
 
 }  // namespace health_diag

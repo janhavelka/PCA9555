@@ -191,7 +191,19 @@ def test_timeout_aliases_and_override() -> None:
     assert_equal(args.timeout, 7.0, "--timeout-s alias should set timeout")
     assert_equal(args.idle_gap, 0.25, "--idle-timeout-s alias should set idle gap")
     assert_equal(args.boot_settle_s, 1.5, "--boot-settle-s should parse")
+    assert_equal(args.serial_dtr, "0", "--serial-dtr should deassert by default")
+    assert_equal(args.serial_rts, "0", "--serial-rts should deassert by default")
     assert_true(args.allow_idle_completion, "--allow-idle-completion should parse")
+
+    line_args = runner.parse_args([
+        "--dry-run",
+        "--serial-dtr",
+        "keep",
+        "--serial-rts",
+        "0",
+    ])
+    assert_equal(line_args.serial_dtr, "keep", "--serial-dtr keep should parse")
+    assert_equal(line_args.serial_rts, "0", "--serial-rts 0 should parse")
 
     specs = runner.build_command_sequence(args)
     runnable = [spec for spec in specs if spec.command in ("version", "scan", "stress 10")]
@@ -202,6 +214,90 @@ def test_timeout_aliases_and_override() -> None:
 
 def test_parser_self_test_entrypoint() -> None:
     assert_equal(runner.run_parser_self_test(), 0, "parser self-test should pass")
+
+
+def make_aggregate_stats(result_counts: dict[str, int], failures: int = 0):
+    return runner.AggregateStats(
+        label="soak",
+        command_counts={"read": sum(result_counts.values())},
+        result_counts=result_counts,
+        started_at="2026-06-23T00:00:00",
+        ended_at="2026-06-23T00:00:01",
+        elapsed_s=1.0,
+        completed=sum(result_counts.values()),
+        failures=failures,
+        min_latency_s=0.1,
+        mean_latency_s=0.1,
+        max_latency_s=0.1,
+        effective_hz=1.0,
+        stop_reason="duration_limit",
+        transcript_path=None,
+    )
+
+
+def test_aggregate_result_flags_review_counts() -> None:
+    result = runner.aggregate_result(
+        make_aggregate_stats({"PASS": 1, "SERIAL_OK_OR_REVIEW": 1})
+    )
+    assert_equal(
+        result.serial_result,
+        "SERIAL_OK_OR_REVIEW",
+        "aggregate must not PASS review-classified serial captures",
+    )
+    assert_true(
+        any("SERIAL_OK_OR_REVIEW" in item for item in result.evidence),
+        "aggregate evidence should include result_counts",
+    )
+
+
+def test_aggregate_result_flags_fail_counts() -> None:
+    result = runner.aggregate_result(make_aggregate_stats({"PASS": 1, "TIMEOUT": 1}, failures=1))
+    assert_equal(result.serial_result, "FAIL", "aggregate must fail when command failures exist")
+
+
+def test_fail_verdict_maps_to_nonzero_exit() -> None:
+    assert_equal(runner.exit_code_for_verdict("FAIL"), 1, "FAIL verdict must fail the process")
+    assert_equal(runner.exit_code_for_verdict("OPERATOR_REVIEW_REQUIRED"), 0, "manual-review verdict remains usable")
+
+
+def make_result(serial_result: str):
+    return runner.CommandResult(
+        command=serial_result.lower(),
+        purpose="test",
+        classifier="test",
+        serial_result=serial_result,
+        operator_result="N/A",
+        completion_reason="prompt",
+        elapsed_s=0.0,
+        notes="",
+        evidence=[],
+    )
+
+
+def test_serial_anomaly_maps_to_nonzero_exit_without_failing_manual_rows() -> None:
+    assert_equal(
+        runner.exit_code_for_results([make_result("SERIAL_OK_OR_REVIEW")], False),
+        1,
+        "serial review captures must fail the process for unattended gates",
+    )
+    assert_equal(
+        runner.exit_code_for_results([make_result("OPERATOR_CHECK_REQUIRED")], False),
+        0,
+        "manual operator rows alone should not fail the runner process",
+    )
+    assert_equal(
+        runner.exit_code_for_results([make_result("SKIPPED_UNSAFE")], False),
+        0,
+        "skipped unsafe opt-in commands should not fail read-only HIL",
+    )
+    assert_true(
+        not runner.command_result_is_serial_anomaly(make_result("SKIPPED_UNSAFE")),
+        "skipped unsafe rows should not block aggregate phases",
+    )
+    assert_true(
+        runner.command_result_is_serial_anomaly(make_result("SERIAL_OK_OR_REVIEW")),
+        "review-classified serial rows should block aggregate phases",
+    )
 
 
 def test_dry_run_artifacts_include_classifier_and_timing_options() -> None:
@@ -224,6 +320,8 @@ def test_dry_run_artifacts_include_classifier_and_timing_options() -> None:
         assert_equal(summary["timeout_override_s"], 6.0, "summary should record timeout override")
         assert_equal(summary["idle_timeout_s"], 0.3, "summary should record idle timeout")
         assert_equal(summary["boot_settle_s"], 0.1, "summary should record boot settle")
+        assert_equal(summary["serial_dtr"], "0", "summary should record serial DTR setting")
+        assert_equal(summary["serial_rts"], "0", "summary should record serial RTS setting")
         assert_equal(summary["allow_idle_completion"], False, "idle completion should be off by default")
         assert_true(
             all("classifier" in command for command in summary["commands"]),
@@ -231,6 +329,31 @@ def test_dry_run_artifacts_include_classifier_and_timing_options() -> None:
         )
         summary_md = (log_dirs[0] / "summary.md").read_text(encoding="utf-8")
         assert_true("| Command | Classifier |" in summary_md, "summary table should include classifier")
+
+
+class ZeroWaitingSerial:
+    in_waiting = 0
+
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self._chunks = list(chunks)
+
+    def read(self, _size: int) -> bytes:
+        if not self._chunks:
+            return b""
+        return self._chunks.pop(0)
+
+
+def test_read_until_does_not_depend_on_in_waiting() -> None:
+    ser = ZeroWaitingSerial((b"help token <P> ", b"continued\n", b"Status: OK\n", b"> "))
+    text, reason = runner.read_until(
+        ser,
+        prompt="> ",
+        timeout_s=1.0,
+        idle_gap_s=0.1,
+    )
+    assert_equal(reason, "prompt", "prompt should be detected even when in_waiting stays zero")
+    assert_true("continued" in text, "inline command syntax must not be treated as a prompt")
+    assert_true("Status: OK" in text, "read_until should capture data returned by bounded reads")
 
 
 def main() -> int:
@@ -244,7 +367,12 @@ def main() -> int:
         test_read_only_custom_commands_remain_reviewable_not_destructive,
         test_timeout_aliases_and_override,
         test_parser_self_test_entrypoint,
+        test_aggregate_result_flags_review_counts,
+        test_aggregate_result_flags_fail_counts,
+        test_fail_verdict_maps_to_nonzero_exit,
+        test_serial_anomaly_maps_to_nonzero_exit_without_failing_manual_rows,
         test_dry_run_artifacts_include_classifier_and_timing_options,
+        test_read_until_does_not_depend_on_in_waiting,
     )
     for test in tests:
         test()

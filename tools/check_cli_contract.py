@@ -90,6 +90,33 @@ IDF_REQUIRED_COMPONENTS = [
     "vfs",
 ]
 
+CONFIRM_HELP_SNIPPETS = [
+    "wpin <N> <0|1> [confirm]",
+    "toggle <N> [confirm]",
+    "dir <N> <in|out> [confirm]",
+    "wport <P> <V> [confirm]",
+    "dport <P> <V> [confirm]",
+    "pol <N> <0|1> [confirm]",
+    "wpol <P> <V> [confirm]",
+    "setbits <M> / sb <M> [confirm]",
+    "clearbits <M> / cb <M> [confirm]",
+    "togglebits <M> / tb <M> [confirm]",
+    "dirin <M> [confirm]",
+    "dirout <M> [confirm]",
+    "invertset <M> [confirm]",
+    "invertclr <M> [confirm]",
+    "wreg <R> <V> [confirm]",
+    "wregs <R> <V0> [V1] [confirm]",
+    "pattern <VALUE> / pat <VALUE> [confirm]",
+    "sweep [delay_ms] [confirm]",
+    "walk [delay_ms] [confirm]",
+    "allhigh [confirm]",
+    "alllow [confirm]",
+    "recover [confirm]",
+    "selftest [confirm]",
+    "stress_mix [N] [confirm]",
+]
+
 
 def fail(msg: str) -> None:
     print(f"CLI contract FAILED: {msg}")
@@ -134,6 +161,23 @@ def require_help(text: str, token: str) -> None:
         fail(f"mandatory command '{token}' missing from help text")
 
 
+def require_confirmation_contract(text: str) -> None:
+    for token in (
+        "Confirmation required.",
+        "Confirmed command:",
+        "stripConfirmSuffix",
+        "requireConfirmation",
+        "requireExactConfirmation",
+    ):
+        if token not in text:
+            fail(f"Arduino CLI confirmation contract token missing: {token}")
+    for snippet in CONFIRM_HELP_SNIPPETS:
+        if snippet not in text:
+            fail(f"Arduino CLI mutating help is missing confirm suffix: {snippet}")
+    if text.count("requireConfirmation(") < 20:
+        fail("Arduino CLI mutating dispatch must route through requireConfirmation()")
+
+
 def main() -> int:
     common_dir = ROOT / "examples" / "common"
     bringup_main = ROOT / "examples" / "01_basic_bringup_cli" / "main.cpp"
@@ -160,6 +204,7 @@ def main() -> int:
         require_token(text, cmd, "mandatory command")
         require_dispatch(text, cmd)
         require_help(text, cmd)
+    require_confirmation_contract(text)
 
     idf_text = idf_main.read_text(encoding="utf-8", errors="replace")
     if 'extern "C" void app_main(void)' not in idf_text:

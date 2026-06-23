@@ -208,14 +208,14 @@ DEFAULT_SAFE_COMMANDS: tuple[CommandSpec, ...] = (
 
 OPTIONAL_COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(
-        command="selftest",
+        command="selftest confirm",
         purpose="Run CLI API self-test that mutates output, direction, and polarity state.",
         expected=(r"Selftest result:", r"fail=0"),
         timeout_s=25.0,
         completion_tokens=("Selftest result:",),
         destructive=True,
         requires_opt_in="--include-output-tests",
-        recovery_command="dirin 0xFFFF",
+        recovery_command="dirin 0xFFFF confirm",
         classifier="selftest",
         notes=(
             "The CLI labels this safe, but it changes PCA9555 latches, direction, "
@@ -233,14 +233,14 @@ OPTIONAL_COMMANDS: tuple[CommandSpec, ...] = (
         notes="Longer soak is optional and still clears input interrupt state.",
     ),
     CommandSpec(
-        command="stress_mix 100",
+        command="stress_mix 100 confirm",
         purpose="Mixed read/write/config/polarity/mask stress test.",
         expected=(r"=== stress_mix summary ===", r"fail=0"),
         timeout_s=180.0,
         completion_tokens=("=== stress_mix summary ===",),
         destructive=True,
         requires_opt_in="--include-output-tests",
-        recovery_command="dirin 0xFFFF",
+        recovery_command="dirin 0xFFFF confirm",
         classifier="stress_mix",
         notes="Mixed stress drives outputs and changes configuration; opt-in only.",
     ),
@@ -339,6 +339,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--port", help="Serial port for the flashed CLI firmware.")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate.")
     parser.add_argument("--out", default="hil_logs", help="Base output directory.")
+    parser.add_argument(
+        "--serial-dtr",
+        choices=("0", "1", "keep"),
+        default="0",
+        help="DTR line state after opening serial: 1=assert, 0=deassert, keep=leave pyserial default.",
+    )
+    parser.add_argument(
+        "--serial-rts",
+        choices=("0", "1", "keep"),
+        default="0",
+        help="RTS line state after opening serial: 1=assert, 0=deassert, keep=leave pyserial default.",
+    )
     parser.add_argument(
         "--timeout",
         "--timeout-s",
@@ -739,14 +751,35 @@ def run_parser_self_test() -> int:
     return 0
 
 
+def serial_line_state(value: str) -> bool | None:
+    if value == "keep":
+        return None
+    return value == "1"
+
+
+def apply_serial_line_state(ser, args: argparse.Namespace) -> None:
+    dtr = serial_line_state(args.serial_dtr)
+    rts = serial_line_state(args.serial_rts)
+    if dtr is not None:
+        ser.dtr = dtr
+    if rts is not None:
+        ser.rts = rts
+
+
+def decoded_ends_with_prompt(decoded: str, prompt: str) -> bool:
+    if not decoded.endswith(prompt):
+        return False
+    prompt_start = len(decoded) - len(prompt)
+    return prompt_start == 0 or decoded[prompt_start - 1] in "\r\n"
+
+
 def open_serial_with_retries(serial_mod, args: argparse.Namespace):
     attempts = args.reconnect_attempts + 1
     last_exc: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
             ser = serial_mod.Serial(args.port, args.baud, timeout=0.05)
-            ser.dtr = False
-            ser.rts = False
+            apply_serial_line_state(ser, args)
             return ser
         except Exception as exc:  # pragma: no cover - hardware path
             last_exc = exc
@@ -773,13 +806,14 @@ def read_until(
 
     while time.monotonic() < deadline:
         waiting = getattr(ser, "in_waiting", 0)
-        if waiting:
-            data = ser.read(waiting)
+        read_size = waiting if waiting and waiting > 0 else 1
+        data = ser.read(read_size)
+        if data:
             chunks.append(data)
             last_rx = time.monotonic()
             saw_output = True
             decoded = b"".join(chunks).decode("utf-8", errors="replace")
-            if decoded.endswith(prompt):
+            if decoded_ends_with_prompt(decoded, prompt):
                 return decoded, "prompt"
             for token in completion_tokens:
                 if token and token in decoded:
@@ -787,11 +821,12 @@ def read_until(
                     prompt_deadline = min(deadline, time.monotonic() + idle_gap_s)
                     while time.monotonic() < prompt_deadline:
                         waiting_after = getattr(ser, "in_waiting", 0)
-                        if waiting_after:
-                            more = ser.read(waiting_after)
+                        read_after = waiting_after if waiting_after and waiting_after > 0 else 1
+                        more = ser.read(read_after)
+                        if more:
                             chunks.append(more)
                             decoded = b"".join(chunks).decode("utf-8", errors="replace")
-                            if decoded.endswith(prompt):
+                            if decoded_ends_with_prompt(decoded, prompt):
                                 return decoded, "prompt"
                         time.sleep(0.02)
                     return decoded, "completion_token"
@@ -827,7 +862,7 @@ def run_serial_command(
     if transcript_path is not None:
         transcript_path.write_text(strip_ansi(raw), encoding="utf-8")
     normalized = strip_ansi(raw)
-    if normalized.endswith(prompt):
+    if decoded_ends_with_prompt(normalized, prompt):
         normalized = normalized[: -len(prompt)]
     result, evidence = classify(spec, normalized, reason)
     operator_result = "OPERATOR_CHECK_REQUIRED" if spec.operator_check else "N/A"
@@ -848,6 +883,16 @@ def run_serial_command(
 
 def command_result_is_failure(result: CommandResult) -> bool:
     return result.serial_result in {"FAIL", "TIMEOUT"}
+
+
+def command_result_is_serial_anomaly(result: CommandResult) -> bool:
+    return result.serial_result in {
+        "FAIL",
+        "TIMEOUT",
+        "SERIAL_OK_OR_REVIEW",
+        "REVIEW_REQUIRED",
+        "SKIPPED_STARTUP_TIMEOUT",
+    }
 
 
 def run_aggregate_commands(
@@ -909,7 +954,7 @@ def run_aggregate_commands(
         if verbose:
             print(f"{label}: {result.command} -> {result.serial_result} ({result.elapsed_s:.3f}s)")
 
-        if command_result_is_failure(result):
+        if command_result_is_serial_anomaly(result):
             consecutive_failures += 1
             if consecutive_failures >= failure_limit:
                 stop_reason = "failure_limit"
@@ -947,12 +992,25 @@ def run_aggregate_commands(
 
 
 def aggregate_result(stats: AggregateStats) -> CommandResult:
-    status = "FAIL" if stats.stop_reason == "failure_limit" or stats.failures > 0 else "PASS"
+    nonpass_counts = {
+        key: value
+        for key, value in stats.result_counts.items()
+        if key != "PASS" and value > 0
+    }
+    status = "FAIL" if stats.failures > 0 else "PASS"
+    if status == "PASS" and nonpass_counts:
+        if nonpass_counts.get("TIMEOUT", 0) > 0 or nonpass_counts.get("FAIL", 0) > 0:
+            status = "FAIL"
+        elif nonpass_counts.get("SERIAL_OK_OR_REVIEW", 0) > 0:
+            status = "SERIAL_OK_OR_REVIEW"
+        else:
+            status = "REVIEW_REQUIRED"
     if stats.completed == 0:
         status = "REVIEW_REQUIRED"
     evidence = [
         f"completed={stats.completed}",
         f"failures={stats.failures}",
+        f"result_counts={json.dumps(stats.result_counts, sort_keys=True)}",
         f"effective_hz={stats.effective_hz:.3f}",
         f"stop_reason={stats.stop_reason}",
     ]
@@ -1006,6 +1064,21 @@ def final_verdict(results: list[CommandResult], dry_run: bool) -> str:
     if MANUAL_CHECKS:
         return "OPERATOR_REVIEW_REQUIRED"
     return "PASS"
+
+
+def exit_code_for_verdict(verdict: str) -> int:
+    return 1 if verdict == "FAIL" else 0
+
+
+def exit_code_for_results(results: list[CommandResult], dry_run: bool) -> int:
+    if dry_run:
+        return 0
+    if any(
+        result.serial_result in {"FAIL", "TIMEOUT", "SERIAL_OK_OR_REVIEW", "REVIEW_REQUIRED"}
+        for result in results
+    ):
+        return 1
+    return 0
 
 
 def write_transcript_header(path: pathlib.Path, args: argparse.Namespace, command_count: int) -> None:
@@ -1076,6 +1149,8 @@ def write_summary_files(
         "worktree_status": status_short if status_short else "clean",
         "serial_port": args.port,
         "baud": args.baud,
+        "serial_dtr": args.serial_dtr,
+        "serial_rts": args.serial_rts,
         "i2c_address": args.address,
         "timeout_override_s": args.timeout,
         "startup_timeout_s": args.startup_timeout,
@@ -1107,6 +1182,8 @@ def write_summary_files(
         f"- Worktree: `{status_short if status_short else 'clean'}`",
         f"- Serial port: `{args.port or 'N/A'}`",
         f"- Baud: `{args.baud}`",
+        f"- Serial DTR: `{args.serial_dtr}`",
+        f"- Serial RTS: `{args.serial_rts}`",
         f"- I2C address: `{args.address}`",
         f"- Timeout override: `{args.timeout if args.timeout is not None else 'per-command defaults'}`",
         f"- Startup timeout: `{args.startup_timeout}`",
@@ -1286,7 +1363,9 @@ def run(argv: list[str]) -> int:
                     append_transcript(transcript_path, spec.command, raw_segment)
                     results.append(result)
 
-                if args.benchmark_command:
+                serial_setup_clean = not any(command_result_is_serial_anomaly(result) for result in results)
+
+                if serial_setup_clean and args.benchmark_command:
                     bench_spec = apply_timeout_override(
                         spec_for_command(args.benchmark_command, default_command_timeout(args)),
                         args,
@@ -1337,7 +1416,7 @@ def run(argv: list[str]) -> int:
                             aggregate_stats.append(stats)
                             results.append(aggregate_result(stats))
 
-                if args.soak_duration_s > 0:
+                if serial_setup_clean and args.soak_duration_s > 0:
                     soak_specs = [
                         apply_timeout_override(spec, args)
                         for spec in parse_command_mix(args.soak_command_mix, default_command_timeout(args))
@@ -1381,8 +1460,9 @@ def run(argv: list[str]) -> int:
     checklist_text = checklist_path.read_text(encoding="utf-8")
     print(checklist_text)
     print(f"HIL artifacts: {log_dir}")
-    print(f"Final verdict: {final_verdict(results, args.dry_run)}")
-    return 0
+    verdict = final_verdict(results, args.dry_run)
+    print(f"Final verdict: {verdict}")
+    return exit_code_for_results(results, args.dry_run)
 
 
 if __name__ == "__main__":

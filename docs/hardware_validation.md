@@ -163,7 +163,7 @@ These checks must not be treated as serial-only PASS results:
 
 For opt-in mutating commands that declare a recovery action, the runner inserts
 the recovery command into the execution plan. The current restore-safe-state
-command is `dirin 0xFFFF`.
+command is `dirin 0xFFFF confirm`.
 
 Even if all serial commands classify as PASS, the runner's final verdict remains
 `OPERATOR_REVIEW_REQUIRED` until manual wiring, physical output, INT, errata,

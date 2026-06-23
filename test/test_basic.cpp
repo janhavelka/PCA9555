@@ -1490,6 +1490,137 @@ void test_hardware_dirty_survives_unrelated_successful_reads() {
                           static_cast<uint8_t>(dev.hardwareStateDirtyError().code));
 }
 
+void test_hardware_dirty_output_readback_does_not_change_recovery_target() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  injectPartialWriteFailure(
+      bus, Status::Error(Err::I2C_NACK_DATA, "forced dirty before output readback", -70), 1);
+  Status st = dev.writeOutputs(PortData{0x12, 0x34});
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_NACK_DATA),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_TRUE(dev.hardwareStateDirty());
+  TEST_ASSERT_EQUAL_HEX8(0x12, bus.regs[cmd::REG_OUTPUT_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, bus.regs[cmd::REG_OUTPUT_PORT_1]);
+
+  uint8_t output0 = 0;
+  st = dev.readOutput(Port::PORT_0, output0);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x12, output0);
+
+  PortData outputs;
+  st = dev.readOutputs(outputs);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x12, outputs.port0);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, outputs.port1);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, dev.getSettings().config.outputPort0);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, dev.getSettings().config.outputPort1);
+
+  st = dev.recover();
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, bus.regs[cmd::REG_OUTPUT_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, bus.regs[cmd::REG_OUTPUT_PORT_1]);
+}
+
+void test_hardware_dirty_config_readback_does_not_change_recovery_target() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.configPort0 = 0xF0;
+  cfg.configPort1 = 0x0F;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  const uint8_t nextConfig[2] = {0xAA, 0x55};
+  injectPartialWriteFailure(
+      bus, Status::Error(Err::I2C_BUS, "forced dirty before config readback", -71), 1);
+  Status st = dev.writeRegisters(cmd::REG_CONFIG_PORT_0, nextConfig, 2);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_BUS), static_cast<uint8_t>(st.code));
+  TEST_ASSERT_TRUE(dev.hardwareStateDirty());
+  TEST_ASSERT_EQUAL_HEX8(0xAA, bus.regs[cmd::REG_CONFIG_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(0x0F, bus.regs[cmd::REG_CONFIG_PORT_1]);
+
+  uint8_t config0 = 0;
+  st = dev.getPortConfiguration(Port::PORT_0, config0);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0xAA, config0);
+
+  PortData configReadback;
+  st = dev.getConfiguration(configReadback);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0xAA, configReadback.port0);
+  TEST_ASSERT_EQUAL_HEX8(0x0F, configReadback.port1);
+  TEST_ASSERT_EQUAL_HEX8(0xF0, dev.getSettings().config.configPort0);
+  TEST_ASSERT_EQUAL_HEX8(0x0F, dev.getSettings().config.configPort1);
+
+  st = dev.recover();
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0xF0, bus.regs[cmd::REG_CONFIG_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(0x0F, bus.regs[cmd::REG_CONFIG_PORT_1]);
+}
+
+void test_hardware_dirty_polarity_readback_does_not_change_recovery_target() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  Config cfg = makeConfig(bus);
+  cfg.polarityPort0 = 0x0C;
+  cfg.polarityPort1 = 0x30;
+  TEST_ASSERT_TRUE(dev.begin(cfg).ok());
+
+  injectPartialWriteFailure(
+      bus, Status::Error(Err::I2C_TIMEOUT, "forced dirty before polarity readback", -72), 1);
+  Status st = dev.setPolarity(PortData{0xAA, 0x55});
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_TIMEOUT),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_TRUE(dev.hardwareStateDirty());
+  TEST_ASSERT_EQUAL_HEX8(0xAA, bus.regs[cmd::REG_POLARITY_INV_0]);
+  TEST_ASSERT_EQUAL_HEX8(0x30, bus.regs[cmd::REG_POLARITY_INV_1]);
+
+  uint8_t polarity0 = 0;
+  st = dev.getPortPolarity(Port::PORT_0, polarity0);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0xAA, polarity0);
+
+  PortData polarityReadback;
+  st = dev.getPolarity(polarityReadback);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0xAA, polarityReadback.port0);
+  TEST_ASSERT_EQUAL_HEX8(0x30, polarityReadback.port1);
+  TEST_ASSERT_EQUAL_HEX8(0x0C, dev.getSettings().config.polarityPort0);
+  TEST_ASSERT_EQUAL_HEX8(0x30, dev.getSettings().config.polarityPort1);
+
+  st = dev.recover();
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x0C, bus.regs[cmd::REG_POLARITY_INV_0]);
+  TEST_ASSERT_EQUAL_HEX8(0x30, bus.regs[cmd::REG_POLARITY_INV_1]);
+}
+
+void test_hardware_dirty_direct_read_registers_does_not_change_recovery_target() {
+  FakeBus bus;
+  PCA9555::PCA9555 dev;
+  TEST_ASSERT_TRUE(dev.begin(makeConfig(bus)).ok());
+
+  injectPartialWriteFailure(
+      bus, Status::Error(Err::I2C_NACK_DATA, "forced dirty before direct readback", -73), 1);
+  Status st = dev.writeOutputs(PortData{0x56, 0x78});
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(Err::I2C_NACK_DATA),
+                          static_cast<uint8_t>(st.code));
+  TEST_ASSERT_TRUE(dev.hardwareStateDirty());
+
+  uint8_t readback[2] = {};
+  st = dev.readRegisters(cmd::REG_OUTPUT_PORT_0, readback, 2);
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(0x56, readback[0]);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, readback[1]);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, dev.getSettings().config.outputPort0);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, dev.getSettings().config.outputPort1);
+
+  st = dev.recover();
+  TEST_ASSERT_TRUE(st.ok());
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, bus.regs[cmd::REG_OUTPUT_PORT_0]);
+  TEST_ASSERT_EQUAL_HEX8(cmd::DEFAULT_OUTPUT, bus.regs[cmd::REG_OUTPUT_PORT_1]);
+}
+
 void test_hardware_dirty_cache_noops_require_recover_without_i2c() {
   FakeBus bus;
   PCA9555::PCA9555 dev;
@@ -1502,6 +1633,9 @@ void test_hardware_dirty_cache_noops_require_recover_without_i2c() {
   TEST_ASSERT_TRUE(dev.hardwareStateDirty());
 
   resetFakeTransactionLog(bus);
+  assertHardwareDirtyNoopStatus(dev.preloadOutputs(0x0000, 0x0000), -34);
+  assertHardwareDirtyNoopStatus(dev.toggleOutputBits(0x0000), -34);
+  assertHardwareDirtyNoopStatus(dev.configureOutputs(0x0000, 0x0000), -34);
   assertHardwareDirtyNoopStatus(dev.writePin(0, true), -34);
   assertHardwareDirtyNoopStatus(dev.setOutputBits(0x0001), -34);
   assertHardwareDirtyNoopStatus(dev.configureInputBits(0x0001), -34);
@@ -4009,6 +4143,10 @@ int main() {
   RUN_TEST(test_direct_odd_start_pair_write_failure_marks_dirty);
   RUN_TEST(test_hardware_dirty_status_appears_in_settings_snapshot);
   RUN_TEST(test_hardware_dirty_survives_unrelated_successful_reads);
+  RUN_TEST(test_hardware_dirty_output_readback_does_not_change_recovery_target);
+  RUN_TEST(test_hardware_dirty_config_readback_does_not_change_recovery_target);
+  RUN_TEST(test_hardware_dirty_polarity_readback_does_not_change_recovery_target);
+  RUN_TEST(test_hardware_dirty_direct_read_registers_does_not_change_recovery_target);
   RUN_TEST(test_hardware_dirty_cache_noops_require_recover_without_i2c);
   RUN_TEST(test_hardware_dirty_clears_after_full_successful_recover);
   RUN_TEST(test_hardware_dirty_does_not_clear_after_partial_recover);

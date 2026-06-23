@@ -18,6 +18,55 @@
 
 namespace transport {
 
+static constexpr uint32_t WIRE_TIMEOUT_MAX_MS = 65535U;
+
+inline uint16_t clampWireTimeoutMs(uint32_t timeoutMs) {
+  if (timeoutMs == 0U) {
+    return 1U;
+  }
+  if (timeoutMs > WIRE_TIMEOUT_MAX_MS) {
+    return static_cast<uint16_t>(WIRE_TIMEOUT_MAX_MS);
+  }
+  return static_cast<uint16_t>(timeoutMs);
+}
+
+class ScopedWireTimeout {
+ public:
+  ScopedWireTimeout(TwoWire& wire, uint32_t timeoutMs)
+      : _wire(wire)
+#if defined(ARDUINO_ARCH_ESP32)
+      , _previous(wire.getTimeOut())
+      , _changed(_previous != clampWireTimeoutMs(timeoutMs))
+#endif
+  {
+#if defined(ARDUINO_ARCH_ESP32)
+    if (_changed) {
+      _wire.setTimeOut(clampWireTimeoutMs(timeoutMs));
+    }
+#else
+    (void)timeoutMs;
+#endif
+  }
+
+  ~ScopedWireTimeout() {
+#if defined(ARDUINO_ARCH_ESP32)
+    if (_changed) {
+      _wire.setTimeOut(_previous);
+    }
+#endif
+  }
+
+  ScopedWireTimeout(const ScopedWireTimeout&) = delete;
+  ScopedWireTimeout& operator=(const ScopedWireTimeout&) = delete;
+
+ private:
+  TwoWire& _wire;
+#if defined(ARDUINO_ARCH_ESP32)
+  uint16_t _previous;
+  bool _changed;
+#endif
+};
+
 inline PCA9555::Status mapWireResult(uint8_t result, const char* context) {
   switch (result) {
     case 0:
@@ -41,7 +90,8 @@ inline PCA9555::Status mapWireResult(uint8_t result, const char* context) {
  * @brief Wire-based I2C write implementation.
  *
  * Pass to Config::i2cWrite, and pass &Wire (or a custom TwoWire*) to i2cUser.
- * The timeout parameter is advisory; bus timeout ownership stays with initWire().
+ * Applies the requested timeout for the transaction and restores the previous
+ * Wire timeout afterwards.
  *
  * @param addr I2C 7-bit address
  * @param data Data buffer to send
@@ -56,7 +106,6 @@ inline PCA9555::Status wireWrite(uint8_t addr, const uint8_t* data, size_t len,
   if (wire == nullptr) {
     return PCA9555::Status::Error(PCA9555::Err::INVALID_CONFIG, "Wire instance is null");
   }
-  (void)timeoutMs;
   if (!data || len == 0) {
     return PCA9555::Status::Error(PCA9555::Err::INVALID_PARAM, "Invalid I2C write params");
   }
@@ -67,6 +116,7 @@ inline PCA9555::Status wireWrite(uint8_t addr, const uint8_t* data, size_t len,
                                   static_cast<int32_t>(len));
   }
 
+  ScopedWireTimeout scopedTimeout(*wire, timeoutMs);
   wire->beginTransmission(addr);
   size_t written = wire->write(data, len);
   if (written != len) {
@@ -82,7 +132,8 @@ inline PCA9555::Status wireWrite(uint8_t addr, const uint8_t* data, size_t len,
  * @brief Wire-based I2C write-read implementation.
  *
  * Pass to Config::i2cWriteRead, and pass &Wire (or a custom TwoWire*) to i2cUser.
- * The timeout parameter is advisory; bus timeout ownership stays with initWire().
+ * Applies the requested timeout for the transaction and restores the previous
+ * Wire timeout afterwards.
  *
  * @param addr I2C 7-bit address
  * @param tx TX buffer to send
@@ -100,7 +151,6 @@ inline PCA9555::Status wireWriteRead(uint8_t addr, const uint8_t* tx, size_t txL
   if (wire == nullptr) {
     return PCA9555::Status::Error(PCA9555::Err::INVALID_CONFIG, "Wire instance is null");
   }
-  (void)timeoutMs;
   if ((txLen > 0 && tx == nullptr) || (rxLen > 0 && rx == nullptr)) {
     return PCA9555::Status::Error(PCA9555::Err::INVALID_PARAM, "Invalid I2C read params");
   }
@@ -111,6 +161,7 @@ inline PCA9555::Status wireWriteRead(uint8_t addr, const uint8_t* tx, size_t txL
     return PCA9555::Status::Error(PCA9555::Err::INVALID_PARAM, "I2C read exceeds buffer");
   }
 
+  ScopedWireTimeout scopedTimeout(*wire, timeoutMs);
   wire->beginTransmission(addr);
   size_t written = wire->write(tx, txLen);
   if (written != txLen) {

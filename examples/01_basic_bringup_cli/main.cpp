@@ -44,6 +44,7 @@ struct StressStats {
 StressStats stressStats;
 int stressRemaining = 0;
 static constexpr uint32_t STRESS_PROGRESS_UPDATES = 10U;
+static constexpr uint32_t SERIAL_TX_TIMEOUT_MS = 20U;
 
 // ============================================================================
 // Helper Functions
@@ -167,6 +168,72 @@ bool hasTrailingArgs(const char* text) {
   return *skipWhitespace(text) != '\0';
 }
 
+bool stripConfirmSuffix(String& text) {
+  text.trim();
+  if (text == "confirm") {
+    text = "";
+    return true;
+  }
+  if (text.endsWith(" confirm")) {
+    text.remove(text.length() - 8);
+    text.trim();
+    return true;
+  }
+  return false;
+}
+
+void printConfirmationRequired(const String& confirmedCommand,
+                               const char* wouldChange,
+                               const char* reason) {
+  LOGW("Confirmation required.");
+  Serial.printf("  Would change: %s\n", wouldChange);
+  Serial.printf("  Why confirmation is required: %s.\n", reason);
+  Serial.printf("  Confirmed command: %s\n", confirmedCommand.c_str());
+}
+
+bool requireConfirmation(String& command, const char* wouldChange, const char* reason) {
+  String confirmed = command;
+  if (stripConfirmSuffix(confirmed)) {
+    command = confirmed;
+    return true;
+  }
+
+  String confirmedCommand = command;
+  confirmedCommand += " confirm";
+  printConfirmationRequired(confirmedCommand, wouldChange, reason);
+  return false;
+}
+
+bool requireExactConfirmation(String& command,
+                              const char* exactCommand,
+                              const char* usage,
+                              const char* wouldChange,
+                              const char* reason) {
+  if (!requireConfirmation(command, wouldChange, reason)) {
+    return false;
+  }
+  if (command != exactCommand) {
+    LOGE("Usage: %s", usage);
+    return false;
+  }
+  return true;
+}
+
+static constexpr const char* CONFIRM_REASON_OUTPUT =
+    "output latches or driven pin directions can affect attached hardware";
+static constexpr const char* CONFIRM_REASON_DIRECTION =
+    "changing direction can drive pins or release them to external circuitry";
+static constexpr const char* CONFIRM_REASON_POLARITY =
+    "polarity changes alter input interpretation and interrupt behavior";
+static constexpr const char* CONFIRM_REASON_RAW =
+    "raw register writes bypass the safer named command intent";
+static constexpr const char* CONFIRM_REASON_PATTERN =
+    "this can force multiple pins to output mode and drive attached loads";
+static constexpr const char* CONFIRM_REASON_RECOVER =
+    "recover can reapply cached output latches, polarity, and direction after a fault";
+static constexpr const char* CONFIRM_REASON_STRESS =
+    "mixed stress drives outputs and changes configuration during the run";
+
 bool tokenEqualsIgnoreCase(const char* token, size_t len, const char* expected) {
   if (std::strlen(expected) != len) {
     return false;
@@ -285,6 +352,7 @@ void printStatus(const PCA9555::Status& st) {
   if (st.msg && st.msg[0]) {
     Serial.printf("  Message: %s%s%s\n", LOG_COLOR_YELLOW, st.msg, LOG_COLOR_RESET);
   }
+  Serial.flush();
 }
 
 void printVerboseState() {
@@ -1895,6 +1963,7 @@ void printHelp() {
   helpNote("polarity affects input sense only: NORMAL reads raw level, INVERTED flips 0/1");
   helpNote("<M> = 16-bit mask: bit 0=P00 ... bit 7=P07, bit 8=P10 ... bit 15=P17");
   helpNote("mask examples: 0x0003 -> P00+P01, 0x0100 -> P10, 0x8001 -> P00+P17");
+  helpNote("Mutating commands require a final confirm token; run without it to preview.");
 
   cli::printHelpSection("Common");
   cli::printHelpItem("help / ?", "Show this help");
@@ -1920,45 +1989,45 @@ void printHelp() {
   cli::printHelpItem("dump", "Dump all 8 registers");
 
   cli::printHelpSection("Write");
-  cli::printHelpItem("write pin <N> <0|1> / wpin <N> <0|1>", "Set output latch bit for pin N to 0 or 1");
-  cli::printHelpItem("toggle <N>", "Toggle output latch bit for pin N");
-  cli::printHelpItem("dir pin <N> <in|out> / dir <N> <in|out>", "Set pin N direction (in=input, out=output)");
-  cli::printHelpItem("write port <P> <V> / wport <P> <V>", "Write output latch for port P (8 bits)");
-  cli::printHelpItem("dir port <P> <V> / dport <P> <V>", "Set port direction bits (1=input, 0=output)");
-  cli::printHelpItem("polarity pin <N> <0|1> / pol <N> <0|1>", "Set input polarity for one pin (1=inverted)");
-  cli::printHelpItem("polarity port <P> <V> / wpol <P> <V>", "Set input polarity bits for one port");
+  cli::printHelpItem("write pin <N> <0|1> / wpin <N> <0|1> [confirm]", "Set output latch bit for pin N to 0 or 1");
+  cli::printHelpItem("toggle <N> [confirm]", "Toggle output latch bit for pin N");
+  cli::printHelpItem("dir pin <N> <in|out> / dir <N> <in|out> [confirm]", "Set pin N direction (in=input, out=output)");
+  cli::printHelpItem("write port <P> <V> / wport <P> <V> [confirm]", "Write output latch for port P (8 bits)");
+  cli::printHelpItem("dir port <P> <V> / dport <P> <V> [confirm]", "Set port direction bits (1=input, 0=output)");
+  cli::printHelpItem("polarity pin <N> <0|1> / pol <N> <0|1> [confirm]", "Set input polarity for one pin (1=inverted)");
+  cli::printHelpItem("polarity port <P> <V> / wpol <P> <V> [confirm]", "Set input polarity bits for one port");
 
   cli::printHelpSection("Bit Manipulation (M=16-bit mask, one 2-byte I2C burst)");
-  cli::printHelpItem("setbits <M> / sb <M>", "Set masked output bits HIGH, leave all other bits unchanged");
-  cli::printHelpItem("clearbits <M> / cb <M>", "Clear masked output bits LOW, leave all other bits unchanged");
-  cli::printHelpItem("togglebits <M> / tb <M>", "Toggle only the masked output bits");
-  cli::printHelpItem("dirin <M>", "Set masked pins to INPUT, leave other direction bits unchanged");
-  cli::printHelpItem("dirout <M>", "Set masked pins to OUTPUT, leave other direction bits unchanged");
-  cli::printHelpItem("invertset <M>", "Enable input polarity inversion for masked pins");
-  cli::printHelpItem("invertclr <M>", "Disable input polarity inversion for masked pins");
+  cli::printHelpItem("setbits <M> / sb <M> [confirm]", "Set masked output bits HIGH, leave all other bits unchanged");
+  cli::printHelpItem("clearbits <M> / cb <M> [confirm]", "Clear masked output bits LOW, leave all other bits unchanged");
+  cli::printHelpItem("togglebits <M> / tb <M> [confirm]", "Toggle only the masked output bits");
+  cli::printHelpItem("dirin <M> [confirm]", "Set masked pins to INPUT, leave other direction bits unchanged");
+  cli::printHelpItem("dirout <M> [confirm]", "Set masked pins to OUTPUT, leave other direction bits unchanged");
+  cli::printHelpItem("invertset <M> [confirm]", "Enable input polarity inversion for masked pins");
+  cli::printHelpItem("invertclr <M> [confirm]", "Disable input polarity inversion for masked pins");
 
   cli::printHelpSection("Raw Register");
   cli::printHelpItem("read reg <R> / rreg <R>", "Read register R (0-7)");
   cli::printHelpItem("read regs <R> <N> / rregs <R> <N>", "Read 1-2 regs in one pair; odd starts wrap to pair mate");
-  cli::printHelpItem("write reg <R> <V> / wreg <R> <V>", "Write register R (2-7) to V");
-  cli::printHelpItem("write regs <R> <V0> [V1] / wregs <R> <V0> [V1]",
+  cli::printHelpItem("write reg <R> <V> / wreg <R> <V> [confirm]", "Write register R (2-7) to V");
+  cli::printHelpItem("write regs <R> <V0> [V1] / wregs <R> <V0> [V1] [confirm]",
            "Write 1-2 regs in one pair; odd starts wrap to pair mate");
 
   cli::printHelpSection("Testing");
-  cli::printHelpItem("pattern <VALUE> / pat <VALUE>", "Drive exact 16-bit output pattern and force all pins OUTPUT");
-  cli::printHelpItem("sweep [delay_ms]", "Fill ON then drain OFF, pin by pin (accumulating)");
-  cli::printHelpItem("walk [delay_ms]", "Walking-1: single pin HIGH moves across all 16");
-  cli::printHelpItem("allhigh", "Set all 16 pins to output HIGH");
-  cli::printHelpItem("alllow", "Set all 16 pins to output LOW");
+  cli::printHelpItem("pattern <VALUE> / pat <VALUE> [confirm]", "Drive exact 16-bit output pattern and force all pins OUTPUT");
+  cli::printHelpItem("sweep [delay_ms] [confirm]", "Fill ON then drain OFF, pin by pin (accumulating)");
+  cli::printHelpItem("walk [delay_ms] [confirm]", "Walking-1: single pin HIGH moves across all 16");
+  cli::printHelpItem("allhigh [confirm]", "Set all 16 pins to output HIGH");
+  cli::printHelpItem("alllow [confirm]", "Set all 16 pins to output LOW");
 
   cli::printHelpSection("Diagnostics");
   cli::printHelpItem("drv / health", "Show driver state and health");
   cli::printHelpItem("probe", "Probe device (no health tracking)");
-  cli::printHelpItem("recover", "Manual recovery attempt");
+  cli::printHelpItem("recover [confirm]", "Manual recovery attempt");
   cli::printHelpItem("verbose [0|1]", "Enable/disable verbose output");
-  cli::printHelpItem("selftest", "Run safe API self-test incl. readback, masks, direction, and polarity");
+  cli::printHelpItem("selftest [confirm]", "Run safe API self-test incl. readback, masks, direction, and polarity");
   cli::printHelpItem("stress [N]", "Run N readInputs cycles (default 10)");
-  cli::printHelpItem("stress_mix [N]", "Run N mixed read/write/config/polarity/mask cycles (default 50)");
+  cli::printHelpItem("stress_mix [N] [confirm]", "Run N mixed read/write/config/polarity/mask cycles (default 50)");
 }
 
 // ============================================================================
@@ -2109,134 +2178,186 @@ void processCommand(const String& cmdLine) {
 
   // ---- Write ----
   if (cmd.startsWith("write pin ")) {
-    cmdWritePin(cmd.substring(10));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "set one output latch bit", CONFIRM_REASON_OUTPUT)) return;
+    cmdWritePin(confirmed.substring(10));
     return;
   }
 
   if (cmd.startsWith("wpin ")) {
-    cmdWritePin(cmd.substring(5));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "set one output latch bit", CONFIRM_REASON_OUTPUT)) return;
+    cmdWritePin(confirmed.substring(5));
     return;
   }
 
   if (cmd.startsWith("toggle ")) {
-    cmdTogglePin(cmd.substring(7));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "toggle one output latch bit", CONFIRM_REASON_OUTPUT)) return;
+    cmdTogglePin(confirmed.substring(7));
     return;
   }
 
   if (cmd.startsWith("dir pin ")) {
-    cmdSetDirection(cmd.substring(8));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "change one pin direction", CONFIRM_REASON_DIRECTION)) return;
+    cmdSetDirection(confirmed.substring(8));
     return;
   }
 
   if (cmd.startsWith("dir ")) {
-    cmdSetDirection(cmd.substring(4));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "change one pin direction", CONFIRM_REASON_DIRECTION)) return;
+    cmdSetDirection(confirmed.substring(4));
     return;
   }
 
   if (cmd.startsWith("write port ")) {
-    cmdWritePort(cmd.substring(11));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "write an 8-bit output latch port", CONFIRM_REASON_OUTPUT)) return;
+    cmdWritePort(confirmed.substring(11));
     return;
   }
 
   if (cmd.startsWith("wport ")) {
-    cmdWritePort(cmd.substring(6));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "write an 8-bit output latch port", CONFIRM_REASON_OUTPUT)) return;
+    cmdWritePort(confirmed.substring(6));
     return;
   }
 
   if (cmd.startsWith("dir port ")) {
-    cmdSetPortDirection(cmd.substring(9));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "change an 8-bit direction port", CONFIRM_REASON_DIRECTION)) return;
+    cmdSetPortDirection(confirmed.substring(9));
     return;
   }
 
   if (cmd.startsWith("dport ")) {
-    cmdSetPortDirection(cmd.substring(6));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "change an 8-bit direction port", CONFIRM_REASON_DIRECTION)) return;
+    cmdSetPortDirection(confirmed.substring(6));
     return;
   }
 
   if (cmd.startsWith("polarity pin ")) {
-    cmdSetPinPolarity(cmd.substring(13));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "change one pin polarity", CONFIRM_REASON_POLARITY)) return;
+    cmdSetPinPolarity(confirmed.substring(13));
     return;
   }
 
   if (cmd.startsWith("pol ")) {
-    cmdSetPinPolarity(cmd.substring(4));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "change one pin polarity", CONFIRM_REASON_POLARITY)) return;
+    cmdSetPinPolarity(confirmed.substring(4));
     return;
   }
 
   if (cmd.startsWith("polarity port ")) {
-    cmdSetPortPolarity(cmd.substring(14));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "change an 8-bit polarity port", CONFIRM_REASON_POLARITY)) return;
+    cmdSetPortPolarity(confirmed.substring(14));
     return;
   }
 
   if (cmd.startsWith("wpol ")) {
-    cmdSetPortPolarity(cmd.substring(5));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "change an 8-bit polarity port", CONFIRM_REASON_POLARITY)) return;
+    cmdSetPortPolarity(confirmed.substring(5));
     return;
   }
 
   // ---- Bit Manipulation ----
   if (cmd.startsWith("setbits ")) {
-    cmdSetBits(cmd.substring(8));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "set masked output latch bits high", CONFIRM_REASON_OUTPUT)) return;
+    cmdSetBits(confirmed.substring(8));
     return;
   }
 
   if (cmd.startsWith("sb ")) {
-    cmdSetBits(cmd.substring(3));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "set masked output latch bits high", CONFIRM_REASON_OUTPUT)) return;
+    cmdSetBits(confirmed.substring(3));
     return;
   }
 
   if (cmd.startsWith("clearbits ")) {
-    cmdClearBits(cmd.substring(10));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "clear masked output latch bits low", CONFIRM_REASON_OUTPUT)) return;
+    cmdClearBits(confirmed.substring(10));
     return;
   }
 
   if (cmd.startsWith("cb ")) {
-    cmdClearBits(cmd.substring(3));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "clear masked output latch bits low", CONFIRM_REASON_OUTPUT)) return;
+    cmdClearBits(confirmed.substring(3));
     return;
   }
 
   if (cmd.startsWith("togglebits ")) {
-    cmdToggleBits(cmd.substring(11));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "toggle masked output latch bits", CONFIRM_REASON_OUTPUT)) return;
+    cmdToggleBits(confirmed.substring(11));
     return;
   }
 
   if (cmd.startsWith("tb ")) {
-    cmdToggleBits(cmd.substring(3));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "toggle masked output latch bits", CONFIRM_REASON_OUTPUT)) return;
+    cmdToggleBits(confirmed.substring(3));
     return;
   }
 
   if (cmd.startsWith("dirin ")) {
-    cmdDirIn(cmd.substring(6));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "configure masked pins as inputs", CONFIRM_REASON_DIRECTION)) return;
+    cmdDirIn(confirmed.substring(6));
     return;
   }
 
   if (cmd.startsWith("dirout ")) {
-    cmdDirOut(cmd.substring(7));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "configure masked pins as outputs", CONFIRM_REASON_DIRECTION)) return;
+    cmdDirOut(confirmed.substring(7));
     return;
   }
 
   if (cmd.startsWith("invertset ")) {
-    cmdInvertSet(cmd.substring(10));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "enable masked polarity inversion", CONFIRM_REASON_POLARITY)) return;
+    cmdInvertSet(confirmed.substring(10));
     return;
   }
 
   if (cmd.startsWith("invertclr ")) {
-    cmdInvertClr(cmd.substring(10));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "disable masked polarity inversion", CONFIRM_REASON_POLARITY)) return;
+    cmdInvertClr(confirmed.substring(10));
     return;
   }
 
   // ---- Raw Register ----
   if (cmd.startsWith("write regs ")) {
-    cmdRegsWrite(cmd.substring(11));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "write one or two raw writable registers", CONFIRM_REASON_RAW)) return;
+    cmdRegsWrite(confirmed.substring(11));
     return;
   }
 
   if (cmd.startsWith("wregs ")) {
-    cmdRegsWrite(cmd.substring(6));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "write one or two raw writable registers", CONFIRM_REASON_RAW)) return;
+    cmdRegsWrite(confirmed.substring(6));
     return;
   }
 
   if (cmd.startsWith("write reg ")) {
-    cmdRegWrite(cmd.substring(10));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "write one raw writable register", CONFIRM_REASON_RAW)) return;
+    cmdRegWrite(confirmed.substring(10));
     return;
   }
 
@@ -2246,7 +2367,9 @@ void processCommand(const String& cmdLine) {
   }
 
   if (cmd.startsWith("wreg ")) {
-    cmdRegWrite(cmd.substring(5));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "write one raw writable register", CONFIRM_REASON_RAW)) return;
+    cmdRegWrite(confirmed.substring(5));
     return;
   }
 
@@ -2262,7 +2385,15 @@ void processCommand(const String& cmdLine) {
     return;
   }
 
-  if (cmd == "recover") {
+  if (cmd == "recover" || cmd.startsWith("recover ")) {
+    String confirmed = cmd;
+    if (!requireExactConfirmation(confirmed,
+                                  "recover",
+                                  "recover [confirm]",
+                                  "attempt manual recovery and reapply cached state",
+                                  CONFIRM_REASON_RECOVER)) {
+      return;
+    }
     LOGI("Attempting recovery...");
     PCA9555::Status st = device.recover();
     printStatus(st);
@@ -2290,14 +2421,24 @@ void processCommand(const String& cmdLine) {
     return;
   }
 
-  if (cmd == "selftest") {
+  if (cmd == "selftest" || cmd.startsWith("selftest ")) {
+    String confirmed = cmd;
+    if (!requireExactConfirmation(confirmed,
+                                  "selftest",
+                                  "selftest [confirm]",
+                                  "run selftest that mutates output, direction, and polarity state",
+                                  CONFIRM_REASON_PATTERN)) {
+      return;
+    }
     runSelfTest();
     return;
   }
 
   if (cmd.startsWith("sweep")) {
-    if (cmd.length() > 5) {
-      cmdSweep(cmd.substring(5));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "run output sweep across all pins", CONFIRM_REASON_PATTERN)) return;
+    if (confirmed.length() > 5) {
+      cmdSweep(confirmed.substring(5));
     } else {
       cmdSweep("");
     }
@@ -2305,41 +2446,64 @@ void processCommand(const String& cmdLine) {
   }
 
   if (cmd.startsWith("walk")) {
-    if (cmd.length() > 4) {
-      cmdWalk(cmd.substring(4));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "run walking output pattern across all pins", CONFIRM_REASON_PATTERN)) return;
+    if (confirmed.length() > 4) {
+      cmdWalk(confirmed.substring(4));
     } else {
       cmdWalk("");
     }
     return;
   }
 
-  if (cmd == "allhigh") {
+  if (cmd == "allhigh" || cmd.startsWith("allhigh ")) {
+    String confirmed = cmd;
+    if (!requireExactConfirmation(confirmed,
+                                  "allhigh",
+                                  "allhigh [confirm]",
+                                  "drive all 16 pins high and configure them as outputs",
+                                  CONFIRM_REASON_PATTERN)) {
+      return;
+    }
     cmdAllHigh();
     return;
   }
 
-  if (cmd == "alllow") {
+  if (cmd == "alllow" || cmd.startsWith("alllow ")) {
+    String confirmed = cmd;
+    if (!requireExactConfirmation(confirmed,
+                                  "alllow",
+                                  "alllow [confirm]",
+                                  "drive all 16 pins low and configure them as outputs",
+                                  CONFIRM_REASON_PATTERN)) {
+      return;
+    }
     cmdAllLow();
     return;
   }
 
   if (cmd.startsWith("pattern ")) {
-    cmdPattern(cmd.substring(8));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "drive a full 16-bit output pattern", CONFIRM_REASON_PATTERN)) return;
+    cmdPattern(confirmed.substring(8));
     return;
   }
 
   if (cmd.startsWith("pat ")) {
-    cmdPattern(cmd.substring(4));
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "drive a full 16-bit output pattern", CONFIRM_REASON_PATTERN)) return;
+    cmdPattern(confirmed.substring(4));
     return;
   }
 
-  if (cmd == "stress_mix") {
-    runStressMix(50);
-    return;
-  }
-
-  if (cmd.startsWith("stress_mix ")) {
-    const char* cursor = cmd.c_str() + 11;
+  if (cmd == "stress_mix" || cmd.startsWith("stress_mix ")) {
+    String confirmed = cmd;
+    if (!requireConfirmation(confirmed, "run mixed read/write/config/polarity stress", CONFIRM_REASON_STRESS)) return;
+    if (confirmed == "stress_mix") {
+      runStressMix(50);
+      return;
+    }
+    const char* cursor = confirmed.c_str() + 11;
     long parsedCount = 0;
     if (!parseLongToken(cursor, parsedCount) ||
         hasTrailingArgs(cursor) ||
@@ -2386,6 +2550,9 @@ void processCommand(const String& cmdLine) {
 
 void setup() {
   log_begin(115200);
+#if defined(ARDUINO_ARCH_ESP32) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+  Serial.setTxTimeoutMs(SERIAL_TX_TIMEOUT_MS);
+#endif
   LOGI("=== PCA9555 Bringup Example ===");
 
   if (!board::initI2c()) {

@@ -682,7 +682,9 @@ Status PCA9555::readOutput(Port port, uint8_t& value) {
     return st;
   }
 
-  _syncShadowRegister(reg, value);
+  if (!_hardwareStateDirty) {
+    _syncShadowRegister(reg, value);
+  }
   return Status::Ok();
 }
 
@@ -750,11 +752,12 @@ Status PCA9555::readOutputs(PortData& data) {
   data.port0 = buf[0];
   data.port1 = buf[1];
 
-  // Update cache from actual device state
-  _cachedOutput0 = buf[0];
-  _cachedOutput1 = buf[1];
-  _config.outputPort0 = buf[0];
-  _config.outputPort1 = buf[1];
+  if (!_hardwareStateDirty) {
+    _cachedOutput0 = buf[0];
+    _cachedOutput1 = buf[1];
+    _config.outputPort0 = buf[0];
+    _config.outputPort1 = buf[1];
+  }
 
   return Status::Ok();
 }
@@ -781,7 +784,7 @@ Status PCA9555::preloadOutputs(uint16_t mask, uint16_t values) {
     return availability;
   }
   if (mask == 0) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   PortData data;
@@ -858,7 +861,7 @@ Status PCA9555::toggleOutputBits(uint16_t mask) {
   }
 
   if (mask == 0) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   PortData data;
@@ -1072,7 +1075,9 @@ Status PCA9555::getPortConfiguration(Port port, uint8_t& value) {
     return st;
   }
 
-  _syncShadowRegister(reg, value);
+  if (!_hardwareStateDirty) {
+    _syncShadowRegister(reg, value);
+  }
   return Status::Ok();
 }
 
@@ -1090,10 +1095,12 @@ Status PCA9555::getConfiguration(PortData& data) {
   data.port0 = buf[0];
   data.port1 = buf[1];
 
-  _cachedConfig0 = buf[0];
-  _cachedConfig1 = buf[1];
-  _config.configPort0 = buf[0];
-  _config.configPort1 = buf[1];
+  if (!_hardwareStateDirty) {
+    _cachedConfig0 = buf[0];
+    _cachedConfig1 = buf[1];
+    _config.configPort0 = buf[0];
+    _config.configPort1 = buf[1];
+  }
 
   return Status::Ok();
 }
@@ -1156,7 +1163,9 @@ Status PCA9555::getPortPolarity(Port port, uint8_t& value) {
     return st;
   }
 
-  _syncShadowRegister(reg, value);
+  if (!_hardwareStateDirty) {
+    _syncShadowRegister(reg, value);
+  }
   return Status::Ok();
 }
 
@@ -1173,8 +1182,10 @@ Status PCA9555::getPolarity(PortData& data) {
 
   data.port0 = buf[0];
   data.port1 = buf[1];
-  _config.polarityPort0 = buf[0];
-  _config.polarityPort1 = buf[1];
+  if (!_hardwareStateDirty) {
+    _config.polarityPort0 = buf[0];
+    _config.polarityPort1 = buf[1];
+  }
   return Status::Ok();
 }
 
@@ -1282,7 +1293,7 @@ Status PCA9555::configureOutputs(uint16_t outputMask, uint16_t outputValues) {
     return availability;
   }
   if (outputMask == 0) {
-    return Status::Ok();
+    return _hardwareStateCleanStatus();
   }
 
   Status st = preloadOutputs(outputMask, outputValues);
@@ -1355,8 +1366,10 @@ Status PCA9555::readRegisters(uint8_t startReg, uint8_t* buf, size_t len) {
     return st;
   }
 
-  for (size_t i = 0; i < len; ++i) {
-    _syncShadowRegister(pairedRegisterAt(startReg, i), buf[i]);
+  if (!_hardwareStateDirty) {
+    for (size_t i = 0; i < len; ++i) {
+      _syncShadowRegister(pairedRegisterAt(startReg, i), buf[i]);
+    }
   }
 
   return Status::Ok();

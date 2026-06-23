@@ -31,11 +31,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tools/check_idf_example_contract.py` now validates the native ESP-IDF boundary, command surface, and required CMake dependencies.
 - ESP-IDF CLI parity is checked through repo-local command contracts; hardware validation remains pending until target hardware is available.
 - Native ESP-IDF mutating CLI commands now require explicit `confirm` suffixes and print a concrete preview plus confirmed command form when omitted.
+- Arduino CLI mutating commands now require the same explicit `confirm` suffixes as the native ESP-IDF CLI.
+- Arduino example Wire transport now applies the requested driver I2C timeout for each transaction and restores the previous Wire timeout afterwards.
+- Arduino CLI firmware now bounds USB CDC transmit waits and flushes HIL status/prompt boundaries.
+- Arduino CLI health output is now plain text to avoid ANSI escape fragments in long HIL captures.
+- HIL runner serial DTR/RTS line states are now explicit and recorded in summaries.
+- HIL runner prompt capture now uses bounded reads instead of depending only on `in_waiting`, and recognizes prompts only at line starts.
+- HIL runner aggregate phases are skipped when setup commands already have serial anomalies.
 - Core library is framework-neutral and uses injected timing/I2C ownership only.
 - `PCA9555::PCA9555` instances are now explicitly non-copyable and non-movable;
   keep driver instances in stable storage and pass them by reference or pointer.
 - Public documentation now distinguishes output latch state, input-register sense, configuration direction, and physical pin behavior.
 - Release wording is scoped to production-oriented hardening until the hardware validation matrix is executed.
+
+### Fixed
+
+- Dirty-state readback APIs no longer overwrite the cached desired output, configuration, or polarity state that `recover()` must reapply.
+- Dirty-state zero-mask no-op paths now report `BUSY` with `"Hardware state dirty; call recover()"` instead of false success.
+- HIL aggregate summaries no longer classify review-captured partial serial output as `PASS`, and a final `FAIL` verdict now returns a nonzero process exit code.
 
 ### Release Status
 

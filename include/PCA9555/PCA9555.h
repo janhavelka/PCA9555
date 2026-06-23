@@ -598,7 +598,8 @@ public:
   /// Read one or two registers within the selected register pair.
   /// If startReg is the odd register in a pair, the second byte wraps to the
   /// even register in that same pair, matching PCA9555 auto-increment behavior.
-  /// The cached runtime state is synchronized for any writable registers read.
+  /// The cached runtime state is synchronized for any writable registers read
+  /// only when hardwareStateDirty() is false.
   /// Reading Input Port registers clears the corresponding port interrupt
   /// source and applies the errata workaround when configured. If an input read
   /// succeeds but the errata write fails, buf contains valid input data and the

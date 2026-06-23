@@ -91,11 +91,11 @@ The ESP-IDF example uses `app_main`, `driver/i2c_master.h`, `esp_timer`,
 `vTaskDelay`, and fixed C command buffers. It does not include Arduino CLI
 sources or compatibility facades.
 
-Mutating ESP-IDF CLI commands require a final `confirm` token. Without it, the
-example prints what would change, why confirmation is required, and the exact
-confirmed command form. Validation status: command parity is checked by
-repo-local contract scripts. ESP-IDF hardware smoke tests and output-driving
-validation remain pending until target devices are available.
+Mutating ESP-IDF CLI commands require the same final `confirm` token as the
+Arduino CLI. Without it, the example prints what would change, why confirmation
+is required, and the exact confirmed command form. Validation status: command
+parity is checked by repo-local contract scripts. ESP-IDF hardware smoke tests
+and output-driving validation remain pending until target devices are available.
 
 ## Quick Start
 
@@ -513,8 +513,8 @@ Run `help` on the serial console for the complete command list. Diagnostic
 output uses physical PCA9555 labels (`P00-P07`, `P10-P17`) while command
 arguments keep the driver API's linear pin numbering (`0-15`). Stress progress
 lines are intentionally plain except for the `ok=` and `fail=` result counts.
-In the native ESP-IDF CLI, output-driving, direction, polarity, raw write,
-pattern, recovery, self-test, sweep/walk, and stress commands require a final
+In both serial CLIs, output-driving, direction, polarity, raw write, pattern,
+recovery, self-test, sweep/walk, and mixed-stress commands require a final
 `confirm` token.
 
 Typical bring-up commands:

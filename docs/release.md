@@ -6,15 +6,15 @@ not imply hardware validation.
 
 ## Current Status
 
-- Version source of truth: `library.json`
-- Generated version header: `include/PCA9555/Version.h`
-- Hardware validation: not recorded
+- Version source of truth: `library.json` (`2.0.0`)
+- Generated version header: `include/PCA9555/Version.h` synchronized
+- Hardware validation: continuous COM5 HIL blocked by the ESP32-S3 native USB
+  CDC serial path; see
+  [HIL validation summary](reports/hil-validation-summary-20260625.md)
 - Pure ESP-IDF local build: pending unless `idf.py` or CI evidence is available
-- Version bump decision: decide before tagging
-
-Copy/move deletion is source-compatibility significant. If the deleted
-copy/move operations remain, make an explicit compatibility/version decision
-before release.
+- Version decision: `2.0.0`; deleted copy/move operations are
+  source-compatibility significant, so this release is tagged as a major
+  version
 
 ## Merge Readiness
 

@@ -13,6 +13,9 @@ live in Doxygen comments under `include/`.
   and layout facts extracted from the source chip documentation.
 - [Hardware validation](hardware_validation.md): HIL runner usage, target run
   template, evidence checklist, and hardware validation matrix.
+- [HIL validation summary](reports/hil-validation-summary-20260625.md):
+  compact result of the June 2026 COM5 hardware attempts and the remaining
+  serial-channel blocker.
 - [ESP-IDF notes](espidf.md): native ESP-IDF component/example boundary,
   transport ownership, and static contract checks.
 - [Release checklist](release.md): merge, release-candidate, and

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-25
+
 ### Added
 
 - ESP-IDF component metadata and a native ESP-IDF `examples/espidf_basic` CLI example.
@@ -44,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep driver instances in stable storage and pass them by reference or pointer.
 - Public documentation now distinguishes output latch state, input-register sense, configuration direction, and physical pin behavior.
 - Release wording is scoped to production-oriented hardening until the hardware validation matrix is executed.
+- Transient prompt files and detailed one-off HIL runner reports were removed;
+  the durable COM5 finding is preserved in `docs/reports/hil-validation-summary-20260625.md`.
 
 ### Fixed
 
@@ -53,10 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Release Status
 
-- Versioning is deferred for this merge branch. `library.json` and `idf_component.yml` still declare `1.1.0`.
-- Copy/move deletion is source-compatibility significant and must be considered before tagging a release.
+- Version finalized as `2.0.0`; `library.json`, `idf_component.yml`, and generated `Version.h` are synchronized.
+- Copy/move deletion is source-compatibility significant and is treated as a major release.
 - Pure ESP-IDF local builds still require `idf.py` evidence.
-- Real hardware validation has not been run in this branch.
+- Continuous COM5 HIL remains blocked by the ESP32-S3 native USB CDC serial path; do not claim production-grade or field-validated status from this release.
 
 ## [1.1.0] - 2026-05-17
 
@@ -128,6 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Overlong CLI input lines are discarded instead of executing truncated commands.
 - Example helper parsers reject malformed numeric input and zero-length destination buffers instead of coercing invalid values.
 
-[Unreleased]: https://github.com/janhavelka/PCA9555/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/janhavelka/PCA9555/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/janhavelka/PCA9555/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/janhavelka/PCA9555/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/janhavelka/PCA9555/releases/tag/v1.0.0

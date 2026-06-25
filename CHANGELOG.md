@@ -34,10 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Arduino CLI mutating commands now require the same explicit `confirm` suffixes as the native ESP-IDF CLI.
 - Arduino example Wire transport now applies the requested driver I2C timeout for each transaction and restores the previous Wire timeout afterwards.
 - Arduino CLI firmware now bounds USB CDC transmit waits and flushes HIL status/prompt boundaries.
-- Arduino CLI health output is now plain text to avoid ANSI escape fragments in long HIL captures.
+- Arduino CLI health output is now compact plain text to avoid ANSI escape fragments and reduce long-HIL serial traffic.
 - HIL runner serial DTR/RTS line states are now explicit and recorded in summaries.
 - HIL runner prompt capture now uses bounded reads instead of depending only on `in_waiting`, and recognizes prompts only at line starts.
 - HIL runner aggregate phases are skipped when setup commands already have serial anomalies.
+- HIL runner can now close and reopen the serial port at prompt-safe aggregate command boundaries with `--serial-reopen-interval-s`.
 - Core library is framework-neutral and uses injected timing/I2C ownership only.
 - `PCA9555::PCA9555` instances are now explicitly non-copyable and non-movable;
   keep driver instances in stable storage and pass them by reference or pointer.

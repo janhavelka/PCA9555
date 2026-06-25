@@ -9,6 +9,8 @@
 
 #include <Arduino.h>
 
+#include <cstdio>
+
 #include "examples/common/Log.h"
 #include "PCA9555/PCA9555.h"
 
@@ -67,35 +69,21 @@ inline const char* errToStr(PCA9555::Err err) {
 inline void printHealthDiag(const PCA9555::SettingsSnapshot& snapshot, uint32_t nowMs) {
   const bool online = snapshot.state == PCA9555::DriverState::READY ||
                       snapshot.state == PCA9555::DriverState::DEGRADED;
-  const uint64_t total = static_cast<uint64_t>(snapshot.totalSuccess) +
-                         static_cast<uint64_t>(snapshot.totalFailures);
-  const float successRate = (total > 0U)
-                                ? (100.0f * static_cast<float>(snapshot.totalSuccess) /
-                                   static_cast<float>(total))
-                                : 0.0f;
+  (void)nowMs;
+  const char* lastErrorText = (snapshot.lastErrorMs == 0U) ? "never"
+                                                           : errToStr(snapshot.lastError.code);
   Serial.println("=== Driver Health ===");
-  Serial.printf("  State: %s\n", stateToStr(snapshot.state));
-  Serial.printf("  Online: %s\n", log_bool_str(online));
-  Serial.printf("  Consecutive failures: %u\n", snapshot.consecutiveFailures);
-  Serial.printf("  Total success: %lu\n", static_cast<unsigned long>(snapshot.totalSuccess));
-  Serial.printf("  Total failures: %lu\n", static_cast<unsigned long>(snapshot.totalFailures));
-  Serial.printf("  Success rate: %.1f%%\n", successRate);
-
-  if (snapshot.lastOkMs > 0U) {
-    Serial.printf("  Last OK: %lu ms ago (at %lu ms)\n",
-                  static_cast<unsigned long>(nowMs - snapshot.lastOkMs),
-                  static_cast<unsigned long>(snapshot.lastOkMs));
-  } else {
-    Serial.println("  Last OK: never");
-  }
-
-  if (snapshot.lastErrorMs > 0U) {
-    Serial.printf("  Last error: %lu ms ago (at %lu ms)\n",
-                  static_cast<unsigned long>(nowMs - snapshot.lastErrorMs),
-                  static_cast<unsigned long>(snapshot.lastErrorMs));
-  } else {
-    Serial.println("  Last error: never");
-  }
+  char line[192];
+  std::snprintf(line, sizeof(line),
+                "  State: %s Online: %s Consecutive failures: %u Total success: %lu "
+                "Total failures: %lu Last error: %s",
+                stateToStr(snapshot.state),
+                log_bool_str(online),
+                snapshot.consecutiveFailures,
+                static_cast<unsigned long>(snapshot.totalSuccess),
+                static_cast<unsigned long>(snapshot.totalFailures),
+                lastErrorText);
+  Serial.println(line);
 
   if (!snapshot.lastError.ok()) {
     Serial.printf("  Error code: %s\n", errToStr(snapshot.lastError.code));

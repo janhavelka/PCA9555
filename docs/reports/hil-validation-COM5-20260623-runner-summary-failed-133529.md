@@ -1,16 +1,9 @@
 # PCA9555 I2C HIL Summary
 
-- Date/time: 2026-06-23T21:21:58
+- Date/time: 2026-06-23T14:32:31
 - Branch: `main`
 - Commit: `dcffeba87e30d9a7d7f3f3ceeb54766032af3a96`
-- Worktree: `M CHANGELOG.md
- M docs/reports/hil-validation-COM5-20260623-runner-summary.md
- M examples/common/HealthDiag.h
- M tools/run_i2c_hil.py
- M tools/test_run_i2c_hil_parser.py
-?? docs/reports/hil-validation-COM5-20260623-runner-summary-failed-133529.md
-?? docs/reports/hil-validation-COM5-20260623-runner-summary-failed-161401.md
-?? docs/reports/hil-validation-COM5-20260623-runner-summary-failed-181735.md`
+- Worktree: `clean`
 - Serial port: `COM5`
 - Baud: `115200`
 - Serial DTR: `0`
@@ -21,8 +14,6 @@
 - Idle timeout: `1.0`
 - Allow idle completion: `False`
 - Boot settle: `2.0`
-- Serial reopen interval: `600.0`
-- Serial reopen note: host serial is closed and reopened only between aggregate commands; USB CDC targets may reset, so this is not proof of uninterrupted firmware uptime.
 - Dry run: `False`
 - Final verdict: `FAIL`
 
@@ -33,46 +24,46 @@
 | `version` | `section` | Print firmware and library version information. | `PASS` | `N/A` | `prompt` | 0.00s |  |
 | `help` | `section` | Capture CLI command surface in the transcript. | `PASS` | `N/A` | `prompt` | 0.02s |  |
 | `scan` | `scan` | Scan I2C addresses; ACK proves address response only. | `PASS` | `N/A` | `prompt` | 0.12s | A scan proves only that an address acknowledged. PCA9555 has no documented chip ID register. |
-| `probe` | `probe` | Run the driver raw address probe without health tracking. | `PASS` | `N/A` | `prompt` | 0.02s | Probe is ACK-only and does not prove chip identity. |
+| `probe` | `probe` | Run the driver raw address probe without health tracking. | `PASS` | `N/A` | `prompt` | 0.00s | Probe is ACK-only and does not prove chip identity. |
 | `settings` | `section` | Capture active driver settings. | `PASS` | `N/A` | `prompt` | 0.00s |  |
 | `read` | `read` | Read both input ports; clears PCA9555 input interrupt state. | `PASS` | `N/A` | `prompt` | 0.00s | Input reads clear interrupt sources and apply the errata pointer-park write. |
 | `outputs` | `read` | Read output latch registers. | `PASS` | `N/A` | `prompt` | 0.00s |  |
 | `config` | `read` | Read configuration registers. | `PASS` | `N/A` | `prompt` | 0.00s |  |
 | `polarity` | `read` | Read polarity inversion registers. | `PASS` | `N/A` | `prompt` | 0.00s |  |
 | `dump` | `read` | Capture all PCA9555 register pairs exposed by the CLI. | `PASS` | `N/A` | `prompt` | 0.00s |  |
-| `pins` | `read` | Capture per-pin input, output latch, direction, and polarity summary. | `PASS` | `N/A` | `prompt` | 0.02s |  |
+| `pins` | `read` | Capture per-pin input, output latch, direction, and polarity summary. | `PASS` | `N/A` | `prompt` | 0.00s |  |
 | `health` | `health` | Capture driver health before stress. | `PASS` | `N/A` | `prompt` | 0.00s | Historical last-error fields may be nonzero; current READY state is the key gate. |
-| `stress 10` | `stress` | Run bounded read-only input stress using the CLI async stress command. | `PASS` | `N/A` | `prompt` | 0.03s | This repeatedly reads inputs and clears PCA9555 interrupt state. |
-| `health` | `health` | Capture final driver health after stress. | `PASS` | `N/A` | `prompt` | 0.00s |  |
+| `stress 10` | `stress` | Run bounded read-only input stress using the CLI async stress command. | `PASS` | `N/A` | `prompt` | 0.02s | This repeatedly reads inputs and clears PCA9555 interrupt state. |
+| `health` | `health` | Capture final driver health after stress. | `PASS` | `N/A` | `prompt` | 0.01s |  |
 | `selftest confirm` | `selftest` | Run CLI API self-test that mutates output, direction, and polarity state. | `SKIPPED_UNSAFE` | `N/A` | `--include-output-tests` | 0.00s | The CLI labels this safe, but it changes PCA9555 latches, direction, and polarity before restoring. Use only on a known-safe fixture. |
 | `dirin 0xFFFF confirm` | `write` | Restore-safe-state command after `selftest confirm`. | `SKIPPED_UNSAFE` | `N/A` | `--include-output-tests` | 0.00s | Automatic recovery command from HIL metadata. Restores all pins to input; output-to-input changes can trigger PCA9555 INT behavior. |
 | `stress 1000` | `stress` | Longer read-only stress soak. | `SKIPPED_UNSAFE` | `N/A` | `--include-soak` | 0.00s | Longer soak is optional and still clears input interrupt state. |
 | `stress_mix 100 confirm` | `stress_mix` | Mixed read/write/config/polarity/mask stress test. | `SKIPPED_UNSAFE` | `N/A` | `--include-output-tests` | 0.00s | Mixed stress drives outputs and changes configuration; opt-in only. |
 | `dirin 0xFFFF confirm` | `write` | Restore-safe-state command after `stress_mix 100 confirm`. | `SKIPPED_UNSAFE` | `N/A` | `--include-output-tests` | 0.00s | Automatic recovery command from HIL metadata. Restores all pins to input; output-to-input changes can trigger PCA9555 INT behavior. |
 | `benchmark:aggregate` | `benchmark` | Aggregate statistics for benchmark. | `PASS` | `N/A` | `command_limit` | 0.09s | Generated by bounded repeated-command runner. |
-| `soak:aggregate` | `soak` | Aggregate statistics for soak. | `FAIL` | `N/A` | `failure_limit` | 3354.89s | Generated by bounded repeated-command runner. |
+| `soak:aggregate` | `soak` | Aggregate statistics for soak. | `FAIL` | `N/A` | `failure_limit` | 3389.45s | Generated by bounded repeated-command runner. |
 
 ## Aggregate Timing
 
-| Label | Completed | Failures | Serial Reopens | Min | Mean | Max | Effective Hz | Stop Reason |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| `benchmark` | 50 | 0 | 0 | 0.000s | 0.001s | 0.016s | 531.915 | `command_limit` |
-| `soak` | 16522 | 1 | 5 | 0.000s | 0.001s | 8.031s | 4.925 | `failure_limit` |
+| Label | Completed | Failures | Min | Mean | Max | Effective Hz | Stop Reason |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `benchmark` | 50 | 0 | 0.000s | 0.002s | 0.016s | 531.915 | `command_limit` |
+| `soak` | 16739 | 1 | 0.000s | 0.001s | 8.047s | 4.939 | `failure_limit` |
 
 ## Evidence Excerpts
 
 ### `soak:aggregate`
-- `completed=16522`
+- `completed=16739`
 - `failures=1`
-- `result_counts={"PASS": 16521, "TIMEOUT": 1}`
-- `effective_hz=4.925`
+- `result_counts={"PASS": 16738, "TIMEOUT": 1}`
+- `effective_hz=4.939`
 - `stop_reason=failure_limit`
 
 ## Artifacts
 
-- Serial transcript: `hil_logs\production_candidate_20260623\i2c_20260623_202601\serial_transcript.txt`
-- Operator checklist: `hil_logs\production_candidate_20260623\i2c_20260623_202601\operator_checklist.md`
-- Machine summary: `hil_logs\production_candidate_20260623\i2c_20260623_202601\summary.json`
+- Serial transcript: `hil_logs\production_candidate_20260623\i2c_20260623_133529\serial_transcript.txt`
+- Operator checklist: `hil_logs\production_candidate_20260623\i2c_20260623_133529\operator_checklist.md`
+- Machine summary: `hil_logs\production_candidate_20260623\i2c_20260623_133529\summary.json`
 
 ## Identity And Hardware Claim Guard
 

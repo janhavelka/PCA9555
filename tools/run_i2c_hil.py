@@ -93,6 +93,7 @@ class AggregateStats:
     effective_hz: float
     stop_reason: str
     transcript_path: str | None = None
+    serial_reopens: int = 0
 
 
 DEFAULT_SAFE_COMMANDS: tuple[CommandSpec, ...] = (
@@ -192,7 +193,6 @@ DEFAULT_SAFE_COMMANDS: tuple[CommandSpec, ...] = (
         purpose="Run bounded read-only input stress using the CLI async stress command.",
         expected=(r"=== Stress Results ===", r"fail=0"),
         timeout_s=20.0,
-        completion_tokens=("=== Stress Results ===",),
         classifier="stress",
         notes="This repeatedly reads inputs and clears PCA9555 interrupt state.",
     ),
@@ -212,7 +212,6 @@ OPTIONAL_COMMANDS: tuple[CommandSpec, ...] = (
         purpose="Run CLI API self-test that mutates output, direction, and polarity state.",
         expected=(r"Selftest result:", r"fail=0"),
         timeout_s=25.0,
-        completion_tokens=("Selftest result:",),
         destructive=True,
         requires_opt_in="--include-output-tests",
         recovery_command="dirin 0xFFFF confirm",
@@ -227,7 +226,6 @@ OPTIONAL_COMMANDS: tuple[CommandSpec, ...] = (
         purpose="Longer read-only stress soak.",
         expected=(r"=== Stress Results ===", r"fail=0"),
         timeout_s=240.0,
-        completion_tokens=("=== Stress Results ===",),
         requires_opt_in="--include-soak",
         classifier="stress",
         notes="Longer soak is optional and still clears input interrupt state.",
@@ -237,7 +235,6 @@ OPTIONAL_COMMANDS: tuple[CommandSpec, ...] = (
         purpose="Mixed read/write/config/polarity/mask stress test.",
         expected=(r"=== stress_mix summary ===", r"fail=0"),
         timeout_s=180.0,
-        completion_tokens=("=== stress_mix summary ===",),
         destructive=True,
         requires_opt_in="--include-output-tests",
         recovery_command="dirin 0xFFFF confirm",
@@ -290,7 +287,7 @@ MANUAL_CHECKS: tuple[CommandSpec, ...] = (
 FAIL_CONTEXT_PATTERNS: tuple[str, ...] = (
     r"Status:\s+(?!OK\b)[A-Z_]+",
     r"\[FAIL\]",
-    r"\bFAILED\b",
+    r"(?<!0\s)\bFAILED\b",
     r"\bfail=(?!0\b)\d+",
     r"\bfailed=(?!0\b)\d+",
     r"\[W\]\s+Unknown command",
@@ -395,6 +392,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=1.0,
         help="Delay between bounded serial reconnect attempts.",
     )
+    parser.add_argument(
+        "--serial-reopen-interval-s",
+        type=float,
+        default=0.0,
+        help=(
+            "Close and reopen serial between aggregate commands after this interval. "
+            "Zero disables. USB CDC boards may reset when the port is reopened."
+        ),
+    )
     parser.add_argument("--verbose", action="store_true", help="Print command progress while still saving transcripts.")
     parser.add_argument("--include-output-tests", action="store_true")
     parser.add_argument("--include-soak", action="store_true")
@@ -445,6 +451,7 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         "idle_gap",
         "boot_settle_s",
         "reconnect_delay_s",
+        "serial_reopen_interval_s",
         "soak_interval_s",
     ):
         value = getattr(args, field)
@@ -490,7 +497,7 @@ def load_command_file(path: pathlib.Path, default_timeout: float) -> list[Comman
             if line.strip() and not line.lstrip().startswith("#")
         ]
         return [
-            custom_command_spec(command, default_timeout)
+            spec_for_command(command, default_timeout)
             for command in commands
         ]
 
@@ -499,7 +506,7 @@ def load_command_file(path: pathlib.Path, default_timeout: float) -> list[Comman
         raise ValueError("--commands JSON must contain a list")
     for entry in loaded:
         if isinstance(entry, str):
-            specs.append(custom_command_spec(entry, default_timeout))
+            specs.append(spec_for_command(entry, default_timeout))
             continue
         if not isinstance(entry, dict) or "command" not in entry:
             raise ValueError("each --commands JSON item must be a string or object with command")
@@ -531,6 +538,17 @@ def load_command_file(path: pathlib.Path, default_timeout: float) -> list[Comman
 def recovery_spec_for(spec: CommandSpec) -> CommandSpec | None:
     if not spec.recovery_command:
         return None
+    dynamic = dynamic_cli_command_spec(spec.recovery_command, 5.0)
+    if dynamic is not None:
+        return dataclasses.replace(
+            dynamic,
+            purpose=f"Restore-safe-state command after `{spec.command}`.",
+            requires_opt_in=spec.requires_opt_in,
+            notes=(
+                "Automatic recovery command from HIL metadata. Restores all pins to "
+                "input; output-to-input changes can trigger PCA9555 INT behavior."
+            ),
+        )
     return CommandSpec(
         command=spec.recovery_command,
         purpose=f"Restore-safe-state command after `{spec.command}`.",
@@ -590,6 +608,186 @@ def custom_command_spec(command: str, default_timeout: float) -> CommandSpec:
             else "Custom command classification is conservative."
         ),
     )
+
+
+def dynamic_cli_command_spec(command: str, default_timeout: float) -> CommandSpec | None:
+    text = command.strip()
+    lowered = text.lower()
+    destructive = command_is_unsafe(text)
+    requires_opt_in = default_required_opt_in(text, unsafe=destructive, destructive=destructive)
+
+    def make(
+        *,
+        purpose: str,
+        expected: tuple[str, ...],
+        classifier: str,
+        timeout_s: float | None = None,
+        completion_tokens: tuple[str, ...] = (),
+    ) -> CommandSpec:
+        return CommandSpec(
+            command=text,
+            purpose=purpose,
+            expected=expected,
+            timeout_s=timeout_s if timeout_s is not None else default_timeout,
+            completion_tokens=completion_tokens,
+            destructive=destructive,
+            requires_opt_in=requires_opt_in,
+            classifier=classifier,
+            notes=(
+                "Dynamic CLI command matched the unsafe output-control allowlist and requires opt-in."
+                if requires_opt_in == "--include-output-tests"
+                else "Dynamic CLI command."
+            ),
+        )
+
+    if re.fullmatch(r"allhigh(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Drive all PCA9555 pins high as outputs.",
+            expected=(r"All 16 pins set to OUTPUT HIGH",),
+            classifier="output_pattern",
+        )
+    if re.fullmatch(r"alllow(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Drive all PCA9555 pins low as outputs.",
+            expected=(r"All 16 pins set to OUTPUT LOW",),
+            classifier="output_pattern",
+        )
+    if re.fullmatch(r"(?:pattern|pat)\s+0x[0-9a-f]{1,4}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Drive an exact 16-bit PCA9555 output pattern.",
+            expected=(r"Pattern applied:\s+value=0x[0-9A-F]{4}",),
+            classifier="output_pattern",
+        )
+    if re.fullmatch(r"sweep(?:\s+\d+)?(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Run accumulating output ON/OFF sweep across all 16 pins.",
+            expected=(r"=== Sweep Test", r"32 passed", r"0 failed"),
+            timeout_s=max(default_timeout, 60.0),
+            classifier="output_pattern",
+        )
+    if re.fullmatch(r"walk(?:\s+\d+)?(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Run walking-1 output pattern across all 16 pins.",
+            expected=(r"=== Walking-1 Test", r"16 passed", r"0 failed"),
+            timeout_s=max(default_timeout, 60.0),
+            classifier="output_pattern",
+        )
+    if re.fullmatch(r"(?:setbits|sb)\s+0x[0-9a-f]{1,4}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Set masked output latch bits high.",
+            expected=(r"Output latch bits set HIGH:\s+mask=0x[0-9A-F]{4}",),
+            classifier="mask_write",
+        )
+    if re.fullmatch(r"(?:clearbits|cb)\s+0x[0-9a-f]{1,4}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Clear masked output latch bits low.",
+            expected=(r"Output latch bits cleared LOW:\s+mask=0x[0-9A-F]{4}",),
+            classifier="mask_write",
+        )
+    if re.fullmatch(r"(?:togglebits|tb)\s+0x[0-9a-f]{1,4}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Toggle masked output latch bits.",
+            expected=(r"Output latch bits toggled:\s+mask=0x[0-9A-F]{4}",),
+            classifier="mask_write",
+        )
+    if re.fullmatch(r"dirin\s+0x[0-9a-f]{1,4}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Configure masked pins as inputs.",
+            expected=(r"Pins configured as INPUT:\s+mask=0x[0-9A-F]{4}",),
+            classifier="direction",
+        )
+    if re.fullmatch(r"dirout\s+0x[0-9a-f]{1,4}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Configure masked pins as outputs.",
+            expected=(r"Pins configured as OUTPUT:\s+mask=0x[0-9A-F]{4}",),
+            classifier="direction",
+        )
+    if re.fullmatch(r"invertset\s+0x[0-9a-f]{1,4}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Enable masked input polarity inversion.",
+            expected=(r"Polarity inversion enabled:\s+mask=0x[0-9A-F]{4}",),
+            classifier="polarity",
+        )
+    if re.fullmatch(r"invertclr\s+0x[0-9a-f]{1,4}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Disable masked input polarity inversion.",
+            expected=(r"Polarity inversion disabled:\s+mask=0x[0-9A-F]{4}",),
+            classifier="polarity",
+        )
+    if re.fullmatch(r"(?:write\s+pin|wpin)\s+\d{1,2}\s+[01](?:\s+confirm)?", lowered):
+        return make(
+            purpose="Write one output latch bit.",
+            expected=(r"Output latch pin\s+\d+.*=\s+[01]",),
+            classifier="pin_write",
+        )
+    if re.fullmatch(r"toggle\s+\d{1,2}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Toggle one output latch bit.",
+            expected=(r"Output latch pin\s+\d+.*toggled",),
+            classifier="pin_write",
+        )
+    if re.fullmatch(r"(?:dir\s+pin|dir)\s+\d{1,2}\s+(?:in|out)(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Set one pin direction.",
+            expected=(r"Pin\s+\d+.*set to\s+(?:INPUT|OUTPUT)",),
+            classifier="direction",
+        )
+    if re.fullmatch(r"(?:write\s+port|wport)\s+[01]\s+0x[0-9a-f]{1,2}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Write one output port latch register.",
+            expected=(r"Port\s+[01]\s+output latch set to 0x[0-9A-F]{2}",),
+            classifier="port_write",
+        )
+    if re.fullmatch(r"(?:dir\s+port|dport)\s+[01]\s+0x[0-9a-f]{1,2}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Set one port direction register.",
+            expected=(r"Port\s+[01]\s+config set to 0x[0-9A-F]{2}",),
+            classifier="direction",
+        )
+    if re.fullmatch(r"(?:polarity\s+pin|pol)\s+\d{1,2}\s+[01](?:\s+confirm)?", lowered):
+        return make(
+            purpose="Set one pin input polarity inversion bit.",
+            expected=(r"Pin\s+\d+.*polarity set to\s+(?:INVERTED|NORMAL)",),
+            classifier="polarity",
+        )
+    if re.fullmatch(r"(?:polarity\s+port|wpol)\s+[01]\s+0x[0-9a-f]{1,2}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Set one port polarity inversion register.",
+            expected=(r"Port\s+[01]\s+polarity set to 0x[0-9A-F]{2}",),
+            classifier="polarity",
+        )
+    if re.fullmatch(r"(?:read\s+reg|rreg)\s+[0-7]", lowered):
+        return make(
+            purpose="Read one PCA9555 register.",
+            expected=(r"Reg\s+0x0?[0-7]\s+=\s+0x[0-9A-F]{2}",),
+            classifier="register_read",
+        )
+    if re.fullmatch(r"(?:read\s+regs|rregs)\s+[0-7]\s+[12]", lowered):
+        return make(
+            purpose="Read one or two PCA9555 registers with pair wrapping.",
+            expected=(r"Regs\s+0x0?[0-7]=0x[0-9A-F]{2}",),
+            classifier="register_read",
+        )
+    if re.fullmatch(r"(?:write\s+reg|wreg)\s+[2-7]\s+0x[0-9a-f]{1,2}(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Write one writable PCA9555 register.",
+            expected=(r"Reg\s+0x0?[2-7]\s+set to 0x[0-9A-F]{2}",),
+            classifier="register_write",
+        )
+    if re.fullmatch(r"(?:write\s+regs|wregs)\s+[2-7]\s+0x[0-9a-f]{1,2}(?:\s+0x[0-9a-f]{1,2})?(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Write one or two writable PCA9555 registers with pair wrapping.",
+            expected=(r"Regs?\s+0x0?[2-7].*0x[0-9A-F]{2}",),
+            classifier="register_write",
+        )
+    if re.fullmatch(r"recover(?:\s+confirm)?", lowered):
+        return make(
+            purpose="Run manual driver recovery and reapply cached state.",
+            expected=(r"Attempting recovery", r"Status:\s+OK"),
+            timeout_s=max(default_timeout, 15.0),
+            classifier="recovery",
+        )
+    return None
 
 
 def address_table_token(address: str) -> str:
@@ -659,6 +857,9 @@ def spec_for_command(command: str, default_timeout: float) -> CommandSpec:
     for spec in (*DEFAULT_SAFE_COMMANDS, *OPTIONAL_COMMANDS):
         if spec.command == command:
             return spec
+    dynamic = dynamic_cli_command_spec(command, default_timeout)
+    if dynamic is not None:
+        return dynamic
     return custom_command_spec(command, default_timeout)
 
 
@@ -909,7 +1110,9 @@ def run_aggregate_commands(
     failure_limit: int,
     transcript_path: pathlib.Path,
     verbose: bool,
-) -> tuple[AggregateStats, list[CommandResult]]:
+    serial_mod=None,
+    args: argparse.Namespace | None = None,
+) -> tuple[AggregateStats, list[CommandResult], object]:
     started_wall = _dt.datetime.now()
     started_mono = time.monotonic()
     deadline = started_mono + deadline_s if deadline_s is not None else None
@@ -919,6 +1122,9 @@ def run_aggregate_commands(
     result_counts: dict[str, int] = {}
     consecutive_failures = 0
     stop_reason = "limit_reached"
+    serial_reopens = 0
+    last_reopen_mono = started_mono
+    reopen_interval_s = args.serial_reopen_interval_s if args is not None else 0.0
 
     append_transcript(transcript_path, f"{label}:start", f"{started_wall.isoformat(timespec='seconds')}\n")
     index = 0
@@ -933,6 +1139,44 @@ def run_aggregate_commands(
         if not specs:
             stop_reason = "empty_command_mix"
             break
+
+        if (
+            reopen_interval_s > 0
+            and serial_mod is not None
+            and args is not None
+            and (now - last_reopen_mono) >= reopen_interval_s
+        ):
+            append_transcript(
+                transcript_path,
+                f"{label}:serial-reopen",
+                f"reopening serial after {now - last_reopen_mono:.3f}s\n",
+            )
+            try:
+                ser.close()
+            except Exception:
+                pass
+            try:
+                ser = open_serial_with_retries(serial_mod, args)
+            except RuntimeError as exc:  # pragma: no cover - hardware path
+                result = CommandResult(
+                    command=f"{label}:serial-reopen",
+                    purpose="Reopen serial session between aggregate commands.",
+                    classifier="serial",
+                    serial_result="TIMEOUT",
+                    operator_result="N/A",
+                    completion_reason="serial_reopen",
+                    elapsed_s=0.0,
+                    notes=str(exc),
+                    evidence=[str(exc)],
+                )
+                results.append(result)
+                result_counts[result.serial_result] = result_counts.get(result.serial_result, 0) + 1
+                stop_reason = "serial_reopen_failed"
+                break
+            serial_reopens += 1
+            last_reopen_mono = time.monotonic()
+            if args.boot_settle_s > 0:
+                time.sleep(args.boot_settle_s)
 
         spec = specs[index % len(specs)]
         index += 1
@@ -986,9 +1230,10 @@ def run_aggregate_commands(
         effective_hz=(len(results) / elapsed) if elapsed > 0 else 0.0,
         stop_reason=stop_reason,
         transcript_path=str(transcript_path),
+        serial_reopens=serial_reopens,
     )
     append_transcript(transcript_path, f"{label}:end", json.dumps(dataclasses.asdict(stats), indent=2) + "\n")
-    return stats, results
+    return stats, results, ser
 
 
 def aggregate_result(stats: AggregateStats) -> CommandResult:
@@ -1091,6 +1336,7 @@ def write_transcript_header(path: pathlib.Path, args: argparse.Namespace, comman
         f"boot_settle_s: {args.boot_settle_s}\n"
         f"startup_timeout_s: {args.startup_timeout}\n"
         f"idle_timeout_s: {args.idle_gap}\n"
+        f"serial_reopen_interval_s: {args.serial_reopen_interval_s}\n"
         f"allow_idle_completion: {args.allow_idle_completion}\n"
         f"commands: {command_count}\n\n"
     )
@@ -1158,6 +1404,7 @@ def write_summary_files(
         "allow_idle_completion": args.allow_idle_completion,
         "boot_settle_s": args.boot_settle_s,
         "reconnect_attempts": args.reconnect_attempts,
+        "serial_reopen_interval_s": args.serial_reopen_interval_s,
         "dry_run": args.dry_run,
         "final_verdict": verdict,
         "pyserial_install_hint": PYSERIAL_HINT,
@@ -1190,6 +1437,12 @@ def write_summary_files(
         f"- Idle timeout: `{args.idle_gap}`",
         f"- Allow idle completion: `{args.allow_idle_completion}`",
         f"- Boot settle: `{args.boot_settle_s}`",
+        f"- Serial reopen interval: `{args.serial_reopen_interval_s}`",
+        (
+            "- Serial reopen note: host serial is closed and reopened only between "
+            "aggregate commands; USB CDC targets may reset, so this is not proof of "
+            "uninterrupted firmware uptime."
+        ),
         f"- Dry run: `{args.dry_run}`",
         f"- Final verdict: `{verdict}`",
         "",
@@ -1209,8 +1462,8 @@ def write_summary_files(
         lines.extend(["", "## Aggregate Timing", ""])
         lines.extend(
             [
-                "| Label | Completed | Failures | Min | Mean | Max | Effective Hz | Stop Reason |",
-                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+                "| Label | Completed | Failures | Serial Reopens | Min | Mean | Max | Effective Hz | Stop Reason |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
             ]
         )
         for stats in aggregate_stats:
@@ -1218,8 +1471,8 @@ def write_summary_files(
             mean_s = "" if stats.mean_latency_s is None else f"{stats.mean_latency_s:.3f}s"
             max_s = "" if stats.max_latency_s is None else f"{stats.max_latency_s:.3f}s"
             lines.append(
-                f"| `{stats.label}` | {stats.completed} | {stats.failures} | {min_s} | "
-                f"{mean_s} | {max_s} | {stats.effective_hz:.3f} | `{stats.stop_reason}` |"
+                f"| `{stats.label}` | {stats.completed} | {stats.failures} | {stats.serial_reopens} | "
+                f"{min_s} | {mean_s} | {max_s} | {stats.effective_hz:.3f} | `{stats.stop_reason}` |"
             )
     lines.extend(["", "## Evidence Excerpts", ""])
     for result in results:
@@ -1298,7 +1551,7 @@ def run(argv: list[str]) -> int:
         except RuntimeError as exc:  # pragma: no cover - hardware path
             print(str(exc), file=sys.stderr)
             return 2
-        with ser:  # pragma: no cover - hardware path
+        try:  # pragma: no cover - hardware path
             if args.boot_settle_s > 0:
                 append_transcript(
                     transcript_path,
@@ -1399,7 +1652,7 @@ def run(argv: list[str]) -> int:
                                 results.append(warmup_result)
                                 break
                         else:
-                            stats, _ = run_aggregate_commands(
+                            stats, _, ser = run_aggregate_commands(
                                 ser,
                                 [bench_spec],
                                 label="benchmark",
@@ -1412,6 +1665,8 @@ def run(argv: list[str]) -> int:
                                 failure_limit=1,
                                 transcript_path=log_dir / "benchmark_transcript.txt",
                                 verbose=args.verbose,
+                                serial_mod=serial_mod,
+                                args=args,
                             )
                             aggregate_stats.append(stats)
                             results.append(aggregate_result(stats))
@@ -1428,7 +1683,7 @@ def run(argv: list[str]) -> int:
                             results.append(skipped_result(spec, "SKIPPED_UNSAFE", spec.requires_opt_in or "manual"))
                         else:
                             runnable.append(spec)
-                    stats, _ = run_aggregate_commands(
+                    stats, _, ser = run_aggregate_commands(
                         ser,
                         runnable,
                         label="soak",
@@ -1441,9 +1696,16 @@ def run(argv: list[str]) -> int:
                         failure_limit=args.soak_failure_limit,
                         transcript_path=log_dir / "soak_transcript.txt",
                         verbose=args.verbose,
+                        serial_mod=serial_mod,
+                        args=args,
                     )
                     aggregate_stats.append(stats)
                     results.append(aggregate_result(stats))
+        finally:
+            try:
+                ser.close()
+            except Exception:
+                pass
 
     write_operator_checklist(checklist_path, skipped)
     artifacts = {

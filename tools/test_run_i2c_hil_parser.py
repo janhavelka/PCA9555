@@ -57,6 +57,25 @@ def test_default_safe_command_sequence() -> None:
         assert_true(spec.timeout_s > 0.0, f"{spec.command} timeout must be positive")
 
 
+def test_prompt_gated_long_commands_do_not_use_early_completion_tokens() -> None:
+    specs = {
+        spec.command: spec
+        for spec in (*runner.DEFAULT_SAFE_COMMANDS, *runner.OPTIONAL_COMMANDS)
+    }
+
+    for command in (
+        "stress 10",
+        "stress 1000",
+        "stress_mix 100 confirm",
+        "selftest confirm",
+    ):
+        assert_equal(
+            specs[command].completion_tokens,
+            (),
+            f"{command} must wait for the CLI prompt before the next command",
+        )
+
+
 def test_address_scan_is_not_identity_proof() -> None:
     args = runner.parse_args(["--dry-run", "--address", "0x24"])
     specs = runner.build_command_sequence(args)
@@ -120,6 +139,74 @@ def test_destructive_command_gating() -> None:
         )
         assert_true(not runner.opt_in_enabled(spec, safe_args), f"{command} must be gated by default")
         assert_true(runner.opt_in_enabled(spec, opt_in_args), f"{command} must run after explicit opt-in")
+
+
+def test_dynamic_full_function_commands_have_expected_pass_patterns() -> None:
+    cases = (
+        ("allhigh confirm", "All 16 pins set to OUTPUT HIGH", "output_pattern"),
+        ("alllow confirm", "All 16 pins set to OUTPUT LOW", "output_pattern"),
+        ("pattern 0xAAAA confirm", "Pattern applied: value=0xAAAA", "output_pattern"),
+        ("walk 0 confirm", "=== Walking-1 Test\n16 passed\n0 failed", "output_pattern"),
+        ("sweep 0 confirm", "=== Sweep Test\n32 passed\n0 failed", "output_pattern"),
+        ("setbits 0x0003 confirm", "Output latch bits set HIGH: mask=0x0003", "mask_write"),
+        ("clearbits 0x0003 confirm", "Output latch bits cleared LOW: mask=0x0003", "mask_write"),
+        ("togglebits 0x0101 confirm", "Output latch bits toggled: mask=0x0101", "mask_write"),
+        ("dirout 0x000F confirm", "Pins configured as OUTPUT: mask=0x000F", "direction"),
+        ("dirin 0x000F confirm", "Pins configured as INPUT: mask=0x000F", "direction"),
+        ("invertset 0x000F confirm", "Polarity inversion enabled: mask=0x000F", "polarity"),
+        ("invertclr 0x000F confirm", "Polarity inversion disabled: mask=0x000F", "polarity"),
+        ("wpin 0 1 confirm", "Output latch pin 0 (P00) = 1", "pin_write"),
+        ("toggle 0 confirm", "Output latch pin 0 (P00) toggled", "pin_write"),
+        ("dir 0 out confirm", "Pin 0 (P00) set to OUTPUT", "direction"),
+        ("wport 0 0xAA confirm", "Port 0 output latch set to 0xAA", "port_write"),
+        ("dport 0 0x00 confirm", "Port 0 config set to 0x00", "direction"),
+        ("pol 0 1 confirm", "Pin 0 (P00) polarity set to INVERTED", "polarity"),
+        ("wpol 0 0x00 confirm", "Port 0 polarity set to 0x00", "polarity"),
+        ("rreg 2", "Reg 0x02 = 0xAA", "register_read"),
+        ("rregs 2 2", "Regs 0x02=0xAA 0x03=0x55", "register_read"),
+        ("wreg 2 0xAA confirm", "Reg 0x02 set to 0xAA", "register_write"),
+        ("wregs 2 0xAA 0x55 confirm", "Regs 0x02=0xAA 0x03=0x55", "register_write"),
+        ("recover confirm", "Attempting recovery...\nStatus: OK", "recovery"),
+    )
+    opt_in_args = runner.parse_args(["--dry-run", "--include-output-tests"])
+
+    for command, transcript, classifier in cases:
+        spec = runner.spec_for_command(command, 5.0)
+        assert_equal(spec.classifier, classifier, f"{command} classifier should be specific")
+        if spec.destructive:
+            assert_equal(spec.requires_opt_in, "--include-output-tests", f"{command} should be opt-in gated")
+            assert_true(runner.opt_in_enabled(spec, opt_in_args), f"{command} should run after opt-in")
+        result, evidence = runner.classify(spec, transcript, "prompt")
+        assert_equal(result, "PASS", f"{command} expected transcript should pass")
+        assert_true(evidence, f"{command} PASS should include evidence")
+
+
+def test_text_command_file_uses_dynamic_specs() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = pathlib.Path(tmp) / "commands.txt"
+        path.write_text("allhigh confirm\nrreg 2\n", encoding="utf-8")
+        specs = runner.load_command_file(path, 5.0)
+
+    assert_equal(specs[0].classifier, "output_pattern", "text allhigh should use dynamic spec")
+    assert_equal(specs[0].expected, (r"All 16 pins set to OUTPUT HIGH",), "text allhigh expected pattern")
+    assert_equal(specs[1].classifier, "register_read", "text rreg should use dynamic spec")
+    assert_true(specs[0].destructive, "text allhigh should remain destructive")
+
+
+def test_recovery_spec_uses_dynamic_expected_patterns() -> None:
+    selftest = next(spec for spec in runner.OPTIONAL_COMMANDS if spec.command == "selftest confirm")
+    recovery = runner.recovery_spec_for(selftest)
+
+    assert_true(recovery is not None, "selftest should have recovery spec")
+    assert_equal(recovery.command, "dirin 0xFFFF confirm", "selftest recovery command")
+    assert_equal(recovery.classifier, "direction", "recovery should use dynamic direction classifier")
+    result, evidence = runner.classify(
+        recovery,
+        "[I] Pins configured as INPUT: mask=0xFFFF\n",
+        "prompt",
+    )
+    assert_equal(result, "PASS", "dirin recovery transcript should pass")
+    assert_true(evidence, "recovery PASS should include evidence")
 
 
 def test_json_destructive_command_requires_opt_in() -> None:
@@ -186,11 +273,14 @@ def test_timeout_aliases_and_override() -> None:
         "0.25",
         "--boot-settle-s",
         "1.5",
+        "--serial-reopen-interval-s",
+        "1800",
         "--allow-idle-completion",
     ])
     assert_equal(args.timeout, 7.0, "--timeout-s alias should set timeout")
     assert_equal(args.idle_gap, 0.25, "--idle-timeout-s alias should set idle gap")
     assert_equal(args.boot_settle_s, 1.5, "--boot-settle-s should parse")
+    assert_equal(args.serial_reopen_interval_s, 1800.0, "--serial-reopen-interval-s should parse")
     assert_equal(args.serial_dtr, "0", "--serial-dtr should deassert by default")
     assert_equal(args.serial_rts, "0", "--serial-rts should deassert by default")
     assert_true(args.allow_idle_completion, "--allow-idle-completion should parse")
@@ -320,6 +410,7 @@ def test_dry_run_artifacts_include_classifier_and_timing_options() -> None:
         assert_equal(summary["timeout_override_s"], 6.0, "summary should record timeout override")
         assert_equal(summary["idle_timeout_s"], 0.3, "summary should record idle timeout")
         assert_equal(summary["boot_settle_s"], 0.1, "summary should record boot settle")
+        assert_equal(summary["serial_reopen_interval_s"], 0.0, "summary should record serial reopen interval")
         assert_equal(summary["serial_dtr"], "0", "summary should record serial DTR setting")
         assert_equal(summary["serial_rts"], "0", "summary should record serial RTS setting")
         assert_equal(summary["allow_idle_completion"], False, "idle completion should be off by default")
@@ -359,9 +450,13 @@ def test_read_until_does_not_depend_on_in_waiting() -> None:
 def main() -> int:
     tests: tuple[Callable[[], None], ...] = (
         test_default_safe_command_sequence,
+        test_prompt_gated_long_commands_do_not_use_early_completion_tokens,
         test_address_scan_is_not_identity_proof,
         test_failure_token_classification,
         test_destructive_command_gating,
+        test_dynamic_full_function_commands_have_expected_pass_patterns,
+        test_text_command_file_uses_dynamic_specs,
+        test_recovery_spec_uses_dynamic_expected_patterns,
         test_json_destructive_command_requires_opt_in,
         test_custom_read_only_stress_soak_gating,
         test_read_only_custom_commands_remain_reviewable_not_destructive,

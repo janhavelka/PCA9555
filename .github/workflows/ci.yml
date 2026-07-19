@@ -115,8 +115,14 @@ jobs:
       - name: Enforce example CLI contract
         run: python tools/check_cli_contract.py
 
-      - name: Validate library package
-        run: pio pkg pack
+      - name: Validate packaged consumer
+        run: python tools/check_package.py
+
+      - name: Install Doxygen
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends doxygen
+
+      - name: Validate API documentation
+        run: doxygen Doxyfile
 
   idf-example-build:
     runs-on: ubuntu-24.04

@@ -31,9 +31,10 @@ REFERENCED_BY_RELATION = YES
 REFERENCES_RELATION    = YES
 STRIP_CODE_COMMENTS    = NO
 
-INPUT                  = README.md CHANGELOG.md AGENTS.md CONTRIBUTING.md include docs PCA9555_io_expander_implementation_manual.md examples/common examples/01_basic_bringup_cli examples/espidf_basic
+INPUT                  = README.md CHANGELOG.md CONTRIBUTING.md include docs/README.md docs/chip_notes.md docs/espidf.md docs/hardware_validation.md docs/register_reference.md docs/release.md docs/reports/hil-validation-summary-20260625.md PCA9555_io_expander_implementation_manual.md examples/common examples/01_basic_bringup_cli examples/espidf_basic
 FILE_PATTERNS          = *.h *.cpp *.md
 RECURSIVE              = YES
+EXCLUDE                = docs/tunnelmonitor-node-suitability-audit.md
 EXCLUDE_PATTERNS       = */.pio/* */.git/* */test/* */docs/doxygen/*
 EXAMPLE_PATH           = examples/01_basic_bringup_cli examples/espidf_basic examples/common
 

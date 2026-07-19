@@ -42,6 +42,27 @@
   "headers": [
     "PCA9555/PCA9555.h"
   ],
+  "export": {
+    "include": [
+      "include/**",
+      "src/**",
+      "examples/**",
+      "docs/README.md",
+      "docs/chip_notes.md",
+      "docs/espidf.md",
+      "docs/hardware_validation.md",
+      "docs/register_reference.md",
+      "docs/release.md",
+      "docs/reports/hil-validation-summary-20260625.md",
+      "CHANGELOG.md",
+      "CMakeLists.txt",
+      "CONTRIBUTING.md",
+      "Doxyfile",
+      "idf_component.yml",
+      "PCA9555_io_expander_implementation_manual.md",
+      "SECURITY.md"
+    ]
+  },
   "build": {
     "includeDir": "include",
     "srcDir": "src"

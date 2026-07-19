@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-07-19
+
+### Added
+
+- Typed `Pin`, `Port`, `Level`, `Direction`, and `PinMask` public contracts and
+  data-sheet pin names from `P00` through `P17`.
+- `errorName()` for stable static diagnostic text without core logging.
+- Caller-owned `RegisterImage` plus explicit `ObservedState` validity,
+  mismatch, and uncertainty evidence.
+- A single fixed-capacity cooperative operation slot for complete register
+  image apply, image verification, and owner-exclusive input read/pointer-park
+  service.
+- Nonzero request IDs, whole-operation wrap-safe deadlines, per-poll transaction
+  budgets, cooperative cancellation/timeout, and exactly-once terminal
+  `OperationResult` delivery.
+- `TransportResult`, `TransportCode`, and `WriteEffect` so an adapter reports
+  byte completion and conservative write-effect evidence for one terminal
+  physical attempt.
+- Explicit `probe()` and `checkPorDefaults()` diagnostics. POR-default checking
+  remains plausibility evidence, not chip identity proof.
+- Package-consumer compile validation and a public-source export allowlist.
+- A TunnelMonitor-node suitability audit disposition matrix that traces the v2
+  findings to v3 library changes and keeps product/hardware findings external.
+
+### Changed
+
+- `bind()` and the compatibility `begin()` alias now validate/store callbacks
+  with zero I2C. A failed replacement preserves the existing valid binding.
+- `detach()` and `end()` now return `Status` and perform zero I2C.
+- Transport callbacks now return one terminal `TransportResult`; callback-level
+  retry, bus recovery, and operation-level in-progress results are forbidden.
+- Driver state is limited to `UNINIT`, `READY`, and `DEGRADED`. Health counters
+  are observational and never gate a requested transfer.
+- Apply-image work preloads output latches, writes polarity and direction,
+  verifies all writable pairs, reads inputs, and performs the mandatory
+  pointer-park workaround in at most eight transport callbacks.
+- Successful input-read cleanup remains bounded and observable after a caller
+  cancellation or whole-operation timeout request.
+- Cached intent, observed hardware state, shadow validity, and uncertain write
+  effects are separate. Cached read-modify-write helpers fail when the required
+  shadow is invalid or uncertain.
+- Raw Configuration-register writes are rejected because they bypass safe
+  output-latch preload. Other raw writes invalidate their affected whole-pair
+  shadow until a complete pair write re-establishes it.
+- The Arduino and native ESP-IDF examples use terminal transport adapters,
+  passive binding plus explicit probing, typed pins, and explicit application-
+  owned recovery images.
+- `library.json` is the version source of truth for generated `Version.h`,
+  `idf_component.yml`, and Doxygen `PROJECT_NUMBER`.
+
+### Removed
+
+- Config-owned I2C locks, presence/default checks, offline thresholds, and
+  desired-state fields.
+- Library-owned retry, bus recovery, and latched offline admission policy.
+- Implicit lifecycle I2C and implicit recovery-state selection.
+- The v2 chunk-job scheduler, `tick()`, `recover()`, last-job/input accessors,
+  and duplicate unlocked errata alias. Use the exact-ID cooperative operation
+  API, direct synchronous primitives, returned input data, and caller-owned
+  recovery policy. These removals avoid cross-model result consumption.
+- `isOnline()`, whose old name could no longer distinguish a passive binding
+  from proven device presence. Use `isBound()` and explicit `probe()`/health
+  policy.
+- The broad v2 `hardwareStateDirty()` and `hardwareStateDirtyError` spellings.
+  Use `uncertainPairs()` for ambiguous write effects and `shadowValidPairs()`
+  for the separate read-modify-write validity fence.
+
+### Release status
+
+- This is a breaking API release and therefore a major version bump.
+- Release metadata is prepared for `3.0.0`; this source change does not create
+  or publish the `v3.0.0` tag.
+- Native, package, documentation, Arduino, and static contract gates are part
+  of the release checklist. Hardware validation remains a separate requirement.
+- Continuous target HIL evidence remains incomplete; do not infer field
+  validation from host tests or compile results.
+
 ## [2.0.0] - 2026-06-25
 
 ### Added
@@ -132,7 +209,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Overlong CLI input lines are discarded instead of executing truncated commands.
 - Example helper parsers reject malformed numeric input and zero-length destination buffers instead of coercing invalid values.
 
-[Unreleased]: https://github.com/janhavelka/PCA9555/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/janhavelka/PCA9555/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/janhavelka/PCA9555/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/janhavelka/PCA9555/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/janhavelka/PCA9555/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/janhavelka/PCA9555/releases/tag/v1.0.0

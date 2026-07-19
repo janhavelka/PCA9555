@@ -24,61 +24,26 @@ inline const char* stateToStr(PCA9555::DriverState state) {
       return "READY";
     case PCA9555::DriverState::DEGRADED:
       return "DEGRADED";
-    case PCA9555::DriverState::OFFLINE:
-      return "OFFLINE";
     default:
       return "UNKNOWN";
   }
 }
 
 inline const char* errToStr(PCA9555::Err err) {
-  switch (err) {
-    case PCA9555::Err::OK:
-      return "OK";
-    case PCA9555::Err::NOT_INITIALIZED:
-      return "NOT_INITIALIZED";
-    case PCA9555::Err::INVALID_CONFIG:
-      return "INVALID_CONFIG";
-    case PCA9555::Err::I2C_ERROR:
-      return "I2C_ERROR";
-    case PCA9555::Err::TIMEOUT:
-      return "TIMEOUT";
-    case PCA9555::Err::INVALID_PARAM:
-      return "INVALID_PARAM";
-    case PCA9555::Err::DEVICE_NOT_FOUND:
-      return "DEVICE_NOT_FOUND";
-    case PCA9555::Err::CONFIG_REG_MISMATCH:
-      return "CONFIG_REG_MISMATCH";
-    case PCA9555::Err::BUSY:
-      return "BUSY";
-    case PCA9555::Err::IN_PROGRESS:
-      return "IN_PROGRESS";
-    case PCA9555::Err::I2C_NACK_ADDR:
-      return "I2C_NACK_ADDR";
-    case PCA9555::Err::I2C_NACK_DATA:
-      return "I2C_NACK_DATA";
-    case PCA9555::Err::I2C_TIMEOUT:
-      return "I2C_TIMEOUT";
-    case PCA9555::Err::I2C_BUS:
-      return "I2C_BUS";
-    default:
-      return "UNKNOWN";
-  }
+  return PCA9555::errorName(err);
 }
 
 inline void printHealthDiag(const PCA9555::SettingsSnapshot& snapshot, uint32_t nowMs) {
-  const bool online = snapshot.state == PCA9555::DriverState::READY ||
-                      snapshot.state == PCA9555::DriverState::DEGRADED;
   (void)nowMs;
   const char* lastErrorText = (snapshot.lastErrorMs == 0U) ? "never"
                                                            : errToStr(snapshot.lastError.code);
   Serial.println("=== Driver Health ===");
   char line[192];
   std::snprintf(line, sizeof(line),
-                "  State: %s Online: %s Consecutive failures: %u Total success: %lu "
+                "  State: %s Bound: %s Consecutive failures: %u Total success: %lu "
                 "Total failures: %lu Last error: %s",
                 stateToStr(snapshot.state),
-                log_bool_str(online),
+                log_bool_str(snapshot.initialized),
                 snapshot.consecutiveFailures,
                 static_cast<unsigned long>(snapshot.totalSuccess),
                 static_cast<unsigned long>(snapshot.totalFailures),

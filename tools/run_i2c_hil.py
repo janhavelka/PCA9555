@@ -782,7 +782,7 @@ def dynamic_cli_command_spec(command: str, default_timeout: float) -> CommandSpe
         )
     if re.fullmatch(r"recover(?:\s+confirm)?", lowered):
         return make(
-            purpose="Run manual driver recovery and reapply cached state.",
+            purpose="Apply the explicit example recovery image.",
             expected=(r"Attempting recovery", r"Status:\s+OK"),
             timeout_s=max(default_timeout, 15.0),
             classifier="recovery",

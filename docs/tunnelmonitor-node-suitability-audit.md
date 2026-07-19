@@ -2,7 +2,8 @@
 
 - Date: 2026-07-19
 - Baseline PCA9555 revision: `46b441e44e6d43ebfaccb255a3b582122463fe94` (`v2.0.0`)
-- Disposition target: PCA9555 `3.0.0` working tree; not yet a tagged release
+- Follow-up implementation revision: `47b6f90d181c32b9ec6fe09093f7d735dfff34bf` on branch `hardening/tunnelmonitor-suitability-reaudit`
+- Disposition target: PCA9555 `3.0.0` candidate at the follow-up revision; not yet a tagged release
 - TunnelMonitor-node revision: `b708f511964db6c51e949e99c67820476f00f9c7` on branch `docs/mb85rc-suitability-contract-facts`
 
 Scope: the original audit was read-only across both repositories. The v3

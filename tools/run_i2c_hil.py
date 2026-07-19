@@ -542,24 +542,26 @@ def recovery_spec_for(spec: CommandSpec) -> CommandSpec | None:
     if dynamic is not None:
         return dataclasses.replace(
             dynamic,
-            purpose=f"Restore-safe-state command after `{spec.command}`.",
+            purpose=f"Apply the configured recovery image after `{spec.command}`.",
             requires_opt_in=spec.requires_opt_in,
             notes=(
-                "Automatic recovery command from HIL metadata. Restores all pins to "
-                "input; output-to-input changes can trigger PCA9555 INT behavior."
+                "Automatic recovery command from HIL metadata. Applies the example "
+                "image (latches high, normal polarity, all pins input); this is a "
+                "fixture default, not a universal product-safe state."
             ),
         )
     return CommandSpec(
         command=spec.recovery_command,
-        purpose=f"Restore-safe-state command after `{spec.command}`.",
+        purpose=f"Apply the configured recovery image after `{spec.command}`.",
         expected=(r"Status:\s+OK",),
         timeout_s=5.0,
         destructive=True,
         requires_opt_in=spec.requires_opt_in,
         classifier="write",
         notes=(
-            "Automatic recovery command from HIL metadata. Restores all pins to "
-            "input; output-to-input changes can trigger PCA9555 INT behavior."
+            "Automatic recovery command from HIL metadata. Applies the example "
+            "image (latches high, normal polarity, all pins input); this is a "
+            "fixture default, not a universal product-safe state."
         ),
     )
 

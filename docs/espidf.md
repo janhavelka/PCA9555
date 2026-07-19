@@ -11,8 +11,10 @@ compiles `src/PCA9555.cpp` and exposes `include/`. `idf_component.yml` must not
 declare Arduino or Wire dependencies, and its version must match
 `library.json`.
 
-When `Config::nowMs` is null, health timestamps remain `0`. Framework time
-sources belong in examples or application glue.
+The adapter returns one terminal `TransportResult` for each native I2C call.
+It does not retry, recover the bus, or return an operation-level in-progress
+value. When `Config::nowMs` is null, health timestamps remain `0`. Framework
+time sources belong in examples or application glue.
 
 ## Native Example
 
@@ -24,6 +26,9 @@ sources belong in examples or application glue.
 - timestamps use `esp_timer_get_time()` through `Config::nowMs`
 - delays use `vTaskDelay()`
 - console input uses fixed command buffers and `fgets()`
+- startup uses passive `bind()` followed by an explicit `probe()`
+- the `recover` CLI spelling applies a fixed example-owned register image
+  through the cooperative API; it is not library or bus recovery
 
 The Arduino and ESP-IDF examples share a command contract, not implementation
 source. The ESP-IDF example must not include Arduino sources, `Wire`, `String`,
@@ -37,7 +42,8 @@ The ESP-IDF CLI requires a final `confirm` suffix before any command that:
 - changes direction
 - changes polarity
 - writes raw registers
-- runs output patterns, sweep, walk, self-test, recovery, or stress flows
+- runs output patterns, sweep, walk, self-test, example-image recovery, or
+  stress flows
 
 Unconfirmed guarded commands print the pending change, why confirmation is
 required, and the exact confirmed command form. This keeps the native example

@@ -1,12 +1,150 @@
 # PCA9555 suitability audit for TunnelMonitor-node
 
 - Date: 2026-07-19
-- PCA9555 revision: `46b441e44e6d43ebfaccb255a3b582122463fe94` (`v2.0.0`)
+- Baseline PCA9555 revision: `46b441e44e6d43ebfaccb255a3b582122463fe94` (`v2.0.0`)
+- Disposition target: PCA9555 `3.0.0` working tree; not yet a tagged release
 - TunnelMonitor-node revision: `b708f511964db6c51e949e99c67820476f00f9c7` on branch `docs/mb85rc-suitability-contract-facts`
 
-Scope: read-only audit of both repositories; this report is the only intended source change.
+Scope: the original audit was read-only across both repositories. The v3
+disposition checks the refactored PCA9555 repository against every original
+finding. TunnelMonitor-node remains read-only and unchanged.
 
-## Conclusion
+## v3 suitability conclusion
+
+PCA9555 3.0.0 resolves the library-ownership and chip-state blockers found in
+the v2 audit. Its intended shape is now a passive chip driver that can sit
+behind a single TunnelMonitor-owned I2C adapter:
+
+- binding and detaching perform no I2C;
+- the adapter reports one terminal attempt and conservative write-effect
+  evidence;
+- the caller owns serialization, request policy, retry, health policy, and bus
+  recovery;
+- complete apply, verify, and input service are bounded cooperative operations;
+- required input-read pointer cleanup is explicit and non-interleaved;
+- caller intent, protocol shadow, observed state, mismatch, and uncertain state
+  are separate;
+- cached read-modify-write helpers cannot operate from invalid or uncertain
+  shadow state;
+- health is observational and never blocks an owner-requested transfer.
+
+This makes the v3 library suitable in principle for TunnelMonitor static digital
+inputs, relays, enables, and on/off mux control behind an owner-private adapter.
+It does not make PCA9555 suitable for PWM, remove the need for hardware-safe
+biasing, make cross-port changes atomic, or define TunnelMonitor's product pin
+map and contracts.
+
+Adoption is still blocked by the six external TunnelMonitor/product findings
+and by release/hardware evidence. Do not add the dependency until the actual
+board facts are frozen, v3 is reviewed and exact-pinned, the owner adapter is
+implemented in a separate TunnelMonitor change, and target HIL is complete.
+
+No new library blocker was identified in the v3 public contract. This statement
+is conditional on the final v3 validation gates passing; it is not a hardware or
+field-readiness claim.
+
+## v3 disposition matrix
+
+Status meanings:
+
+- **Resolved in v3**: the PCA9555 repository now provides the required contract.
+- **Open externally**: the fact or implementation belongs to TunnelMonitor,
+  product hardware, or release validation and was deliberately not invented in
+  this library.
+
+| ID | Baseline hard finding | v3 disposition | Concrete evidence | Status |
+| --- | --- | --- | --- | --- |
+| TM-1 | No target device or channel map | No library default was invented. Address, pin map, direction, safe levels, polarity, unused pins, INT, and required/optional policy remain product facts. | `Config::i2cAddress` validates `0x20`-`0x27`; `RegisterImage` accepts the caller's complete image. | **Open externally** |
+| TM-2 | PCA9555 cannot replace PWM outputs | No software-PWM helper, periodic writer, or scheduler was added. | Public API contains static GPIO/register operations only. | **Open externally** |
+| TM-3 | Software cannot guarantee safe OFF during reset | The README and hardware runbook require electrical safe bias and explicit reset/brownout validation. Software starts from passive binding. | `bind()` performs zero I2C; POR reconciliation is explicit. | **Open externally** |
+| TM-4 | Critical cross-port changes are not atomic | No false atomicity guarantee was added. Same-port mapping or application/hardware break-before-make remains required. | Paired transfers preserve chip register-pair semantics only. | **Open externally** |
+| TM-5 | Current `OutputController` cannot call I2C | The library now supports one owner-private cooperative adapter but does not add a task, queue, or callback into TunnelMonitor. | `start*`, `pollOperation()`, exact request IDs, and fixed transaction budgets. | **Open externally** |
+| TM-6 | TunnelMonitor lacks device and operation contract slots | No TunnelMonitor enums, descriptors, or health records were changed here. | Separate integration work remains required in TunnelMonitor. | **Open externally** |
+| LIB-1 | Dirty state did not fence cached writes | Writable shadow validity and uncertainty are tracked by register pair. Every relevant cached RMW path checks its required pair and fails without I2C when unsafe. | `shadowValidPairs()`, `uncertainPairs()`, `_shadowStatus()`; native tests `test_invalid_output_shadow_fences_all_output_rmw_paths_without_io` and `test_invalid_direction_and_polarity_shadows_fence_relevant_rmw_paths`. | **Resolved in v3** |
+| LIB-2 | Readback overwrote recovery intent | `ObservedState` is separate evidence. Ordinary reads can invalidate a contradicted shadow but never become caller intent. Only explicit verify against a complete caller image can reconcile matching pairs. Recovery image selection belongs to the caller. | `RegisterImage`, `ObservedState`, `readObservedState()`; POR/read-fencing and verify-reconciliation native tests. | **Resolved in v3** |
+| LIB-3 | Failed/repeated begin could abandon a live instance | `bind()`/`begin()` perform only validation and storage. Invalid replacement preserves the current valid binding and performs no I2C. | `test_bind_and_begin_are_passive_for_all_valid_addresses`; `test_invalid_rebind_preserves_live_binding_without_io`. | **Resolved in v3** |
+| LIB-4 | `end()` applied policy and could not report failure | `detach()`/`end()` return `Status`, perform zero I2C, and do not choose a hardware safe state. | Passive lifecycle contract; `test_detach_is_passive_repeatable_and_retains_active_cancellation_result`. | **Resolved in v3** |
+| LIB-5 | Startup rejected valid retained state | Presence and POR-default checks are separate explicit diagnostics. Bind accepts a valid configuration without touching hardware. | `probe()`, `checkPorDefaults()`; explicit diagnostic native tests. | **Resolved in v3** |
+| LIB-6 | Raw direction writes bypassed safe preload | Public raw writes to Configuration registers return `UNSUPPORTED` without I2C. Typed safe direction APIs retain latch-before-direction ordering. | `writeRegister(s)` contract; `test_raw_configuration_writes_are_rejected_without_io`; safe-direction tests. | **Resolved in v3** |
+| LIB-7 | No state-integrity check after independent PCA power loss | Caller-owned `startVerifyImage()` reports exact pair mismatch. `startApplyImage()` applies and verifies a complete image. Readback does not overwrite the expected image. | `OperationResult::mismatchPairs`; `test_verify_reports_exact_pair_mismatches_without_changing_expected_state`. | **Resolved in v3** |
+| LIB-8 | Invalid offline threshold was silently corrected | `offlineThreshold` was removed. The driver has no local offline admission policy. | Three-state `DriverState`; `test_repeated_failures_never_gate_owner_requested_io_or_retry_internally`. | **Resolved in v3** |
+| ARCH-1 | Lifecycle/recovery did too much synchronous work | Lifecycle is zero-I2C. Apply, verify, and owner-safe input work use one fixed operation slot, nonzero request ID, wrap-safe deadline, and caller transaction budget. | Public maximums are 8 apply, 3 verify, and 2 input callbacks; budget/deadline/result tests. | **Resolved in v3** |
+| ARCH-2 | Recovery and offline policy had two owners | Library retry, bus recovery, offline gating, automatic recovery-image selection, and the legacy recovery/job shims were removed. The caller may explicitly apply/verify its image. | Observational READY/DEGRADED state; exact-ID cooperative operations only. | **Resolved in v3** |
+| ARCH-3 | Input errata handling had to be mandatory and non-interleaved | Production input paths retain read/park as one operation. After the read, cancellation or deadline cannot silently skip the bounded park attempt. | Cleanup fields in `OperationResult`; cancel, timeout, park-failure, and interleaving native tests. | **Resolved in v3** |
+| ARCH-4 | Transport and operation state were mixed | A callback returns terminal `TransportResult` for one physical attempt. Operation-level progress is represented only by the cooperative operation API. | `TransportCode`, byte counts, `WriteEffect`, `OperationPhase`, and `OperationOutcome`; short-count and timeout-distinction tests. | **Resolved in v3** |
+| ARCH-5 | Ambiguous writes lacked reconciliation | Per-attempt write effect is explicit. A possibly committed phase becomes uncertain, terminates, and never silently retries or advances to an unsafe phase. Verification/reapply is separate explicit caller policy. | `WriteEffect::NOT_ATTEMPTED/MAY_HAVE_COMMITTED`; terminal apply/verify outcome plus observed validity/mismatch evidence; ambiguous-write and phase-failure tests. | **Resolved in v3** |
+| PKG-1 | Package content and external-consumer validation were weak | `library.json` has a public-source export allowlist. The package checker rejects internal/transient files, unpacks the archive, and compiles a clean callback consumer. | `tools/check_package.py`, `tools/package_consumer.cpp`, CI package gate. | **Resolved in v3** |
+| DOC-1 | Versions, support policy, contribution text, and pinning were stale | Version generation synchronizes all metadata; README pins `v3.0.0`; security and contribution guidance are updated in this release work. | `scripts/generate_version.py check`; README migration/install sections. | **Resolved in v3** |
+| VAL-1 | Target HIL and native ESP-IDF evidence were incomplete | This was not converted into a software claim. CI builds native ESP-IDF, while real board, INT, brownout, and shared-bus evidence remains required. | `docs/release.md`, `docs/hardware_validation.md`. | **Open externally** |
+
+## v3 API additions justified by the audit
+
+The refactor adds only types and helpers with current callers or safety value:
+
+- `Pin`, `Port`, `Level`, `Direction`, and `PinMask` remove ambiguous numeric
+  pin/port mapping;
+- `pinIndex()`, `pinMask()`, `portOf()`, `bitOf()`, `isOutput()`, and
+  `levelFor()` keep repeated mapping logic deterministic;
+- `errorName()` centralizes static diagnostic names already needed by examples;
+- `TransportResult`, `TransportCode`, and `WriteEffect` preserve terminal
+  transport facts without leaking Wire or ESP-IDF errors;
+- `RegisterImage` and `ObservedState` separate caller intent from observations;
+- `OperationKind`, `OperationPhase`, `OperationOutcome`, and `OperationResult`
+  expose bounded progress and exact terminal evidence;
+- `StatePair` bits identify valid, mismatched, completed, and uncertain register
+  pairs without dynamic containers.
+
+No generic request queue, task, registry, plugin interface, rare-operation
+framework, NVM API, calibration API, simulated production bus, or software PWM
+was added. The PCA9555 has no chip function that justifies those abstractions.
+
+## Remaining admission work
+
+Before TunnelMonitor uses this library, complete these tasks outside this
+repository:
+
+1. Freeze the schematic facts and per-product channel table.
+2. Keep PWM channels on ESP32 LEDC or a dedicated PWM device.
+3. Prove electrical inactive states across cold boot, MCU-only reset,
+   PCA9555-only reset/brownout, watchdog reset, and disconnected I2C.
+4. Keep hazardous selectors on one port or define and test break-before-make
+   with a hardware gate where needed.
+5. Add append-only TunnelMonitor device/operation/result contracts and an
+   owner-private adapter under `I2cTask`.
+6. Define the exact safe `RegisterImage`, deadlines, retry eligibility,
+   reconciliation policy, health projection, and absent-device behavior.
+7. Exact-pin the reviewed v3 release or immutable commit.
+8. Run the target HIL matrix and shared-bus soak before field adoption.
+
+## v3 validation evidence from this worktree
+
+The following checks were run after the v3 refactor on 2026-07-19:
+
+| Check | Result |
+| --- | --- |
+| Generated version metadata | PASS: `library.json`, `Version.h`, `idf_component.yml`, and Doxygen report `3.0.0` |
+| Core framework/timing guard | PASS |
+| Arduino and ESP-IDF CLI contract checks | PASS |
+| HIL contract and parser self-tests | PASS |
+| Native fault/contract tests | PASS: 54 of 54, including injected failure at all eight apply-image transfers |
+| PlatformIO packaged-content and clean external-consumer compile | PASS |
+| Arduino ESP32-S2 compile | PASS |
+| Arduino ESP32-S3 compile | PASS |
+| Doxygen generation | PASS |
+| Independent final integration review | APPROVED: no remaining code, API, documentation, or test blocker |
+
+Known evidence limits:
+
+- the local PlatformIO command reported Core 6.1.18, while the repository and
+  CI pin 6.1.19;
+- `idf.py` was not available locally, so native ESP-IDF target builds were not
+  run in this worktree; the CI jobs are configured, but no current CI result was
+  retrieved for this audit;
+- no physical HIL, logic-analyzer capture, brownout test, or shared-bus soak was
+  performed;
+- `v3.0.0` was not tagged or published by this work.
+
+## Baseline v2 conclusion (superseded by the v3 disposition)
 
 PCA9555 v2.0.0 is not ready to be added to TunnelMonitor-node as a production dependency without refactoring.
 

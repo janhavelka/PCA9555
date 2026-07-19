@@ -50,19 +50,33 @@ one pair.
 - `readRegisters()` and `writeRegisters()` are pair-bounded bulk helpers.
 - Input registers are read-only; writes to `0x00` or `0x01` are rejected by the
   public direct write APIs.
-- Successful direct access synchronizes the corresponding cached runtime state.
-- Failed direct writes mark `hardwareStateDirty()` and preserve the original
-  write error through `hardwareStateDirtyError()` because hardware may have
-  accepted one data byte while the driver cache remained unchanged.
+- Direct reads update `ObservedState`; they do not silently replace caller
+  intent or establish the protocol shadow used by cached writes. A contradictory
+  read invalidates that shadow pair so a later cached RMW cannot clobber bits.
+- Explicit `startVerifyImage()` may re-establish matching pairs because its
+  complete comparison image is supplied by the caller; mismatched pairs remain
+  fenced.
+- Raw Configuration-register writes are rejected because they can bypass the
+  required output-latch preload before enabling an output.
+- Other direct writes invalidate the whole affected shadow pair before the
+  physical attempt. Only a complete, successful two-register pair write can
+  re-establish that shadow pair. A failed write can leave the pair uncertain
+  when the transport cannot prove that no register data was accepted.
+- Cached read-modify-write helpers fail with `SHADOW_INVALID` or
+  `STATE_UNCERTAIN` when their required pair is not safe to use.
 
-## Presence, Defaults, and Recovery
+## Presence, Defaults, and Reconciliation
 
-- `probe()` means the configured address responded to a raw configuration-register
-  read. It is not chip-ID proof because PCA9555 has no identity register.
-- `begin()` default checks are plausibility checks against Configuration Port
-  POR defaults (`0xFF/0xFF`), not identity proof.
-- `recover()` re-probes and reapplies cached output, polarity, and configuration
-  state. It cannot force a true PCA9555 power-on reset.
+- `bind()` and its `begin()` compatibility alias perform no I2C.
+- `probe()` means the configured address responded to one raw
+  Configuration-register read. It is not chip-ID proof because PCA9555 has no
+  identity register. Probe is diagnostic and does not update health counters.
+- `checkPorDefaults()` explicitly reads Configuration Port 0/1 and compares
+  them with `0xFF/0xFF`. This is plausibility evidence, not identity proof.
+- Recovery policy belongs to the caller. `startApplyImage()` applies and reads
+  back a complete caller-owned image. `startVerifyImage()` checks an expected
+  image without selecting policy. Neither can force a true PCA9555 power-on
+  reset.
 
 ## Interrupt and Errata Notes
 
@@ -79,5 +93,7 @@ one pair.
   sampled pin state differs from the previous input-register state.
 - The PCA9555 interrupt errata workaround parks the command pointer at
   `cmd::ERRATA_SAFE_CMD` (`0x02`) after input reads. On a shared bus, the input
-  read and pointer-park write must be serialized so no other target transaction
-  interleaves between them.
+  read and pointer-park write are one owner-exclusive protocol sequence; no
+  other operation on this driver may interleave between them. Cooperative
+  cancellation or whole-operation timeout does not silently discard required
+  cleanup after the input read has completed.

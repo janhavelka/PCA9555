@@ -44,8 +44,9 @@ Safety rules:
 - Switch only the intended rail during brownout tests and keep signals through
   safe impedance.
 - `probe()` proves address response only. It is not chip identity.
-- `recover()` reapplies cached desired state. It cannot force a true PCA9555
-  power-on reset.
+- The library does not own bus recovery or select a recovery state. The caller
+  may apply and verify a complete known-safe `RegisterImage`. This cannot force
+  a true PCA9555 power-on reset.
 
 ## Build And Run
 
@@ -202,16 +203,16 @@ and fault/recovery evidence is reviewed.
 | INT port 1 clear | INT pulled up; Port 1 input switchable | Baseline inputs, toggle Port 1 input, read Port 1 | INT asserts on change and clears after reading Port 1 | NOT RUN | |
 | Both-port INT clear | One input on each port switchable | Toggle both, call `readInputsAndClearInterrupt()` or `clearInterrupts()` | INT clears after both input ports are read | NOT RUN | |
 | INT service edge policy | INT pulled up; one switchable input; firmware can re-read/debounce | Toggle near service timing or simulate repeated changes while servicing INT | Application re-read/debounce policy prevents missed or ambiguous input state | NOT RUN | |
-| Errata pointer park | PCA9555 plus a second readable I2C slave; I2C analyzer | Run input reads, then other-slave reads through serialized bus manager | Pointer parks at command `0x02`; no unrelated transaction interleaves in synchronous path | NOT RUN | |
-| Wrong address/NACK | Unused address or safe disconnect | Run `probe`, `begin`, `health`, and selected calls | Errors map to documented `Status`; health/offline behavior matches contract | NOT RUN | |
-| Unplug/replug recovery | PCA9555 can be safely disconnected/reconnected | Reach OFFLINE, reconnect, run `recover`, then `health` and inputs | Normal I/O is blocked while offline; `recover()` returns READY after reconnect | NOT RUN | |
-| Brownout/power-cycle recovery | PCA9555 VCC independently switchable | Drive known state, power-cycle PCA9555 only, run `recover` | Hardware may show POR defaults before recovery; cached state reapplies after recovery | NOT RUN | |
+| Errata pointer park | PCA9555 plus a second readable I2C slave; I2C analyzer | Run input reads, then other-slave reads through the serialized bus owner | Pointer parks at command `0x02`; no other operation on the same driver interleaves between input read and park | NOT RUN | |
+| Wrong address/NACK | Unused address or safe disconnect | Bind without I2C, run `probe`, inspect `health`, then run selected tracked calls | Probe maps address NACK to `DEVICE_NOT_FOUND` without changing health; tracked failures map truthfully and set `DEGRADED`; no local gate suppresses later calls | NOT RUN | |
+| Unplug/replug reconciliation | PCA9555 can be safely disconnected/reconnected | Cause a tracked failure, reconnect, then have the caller probe and apply/verify a known-safe image | Caller-owned bus policy runs once; the driver does not retry or latch offline; successful tracked work returns health to READY | NOT RUN | |
+| Brownout/power-cycle reconciliation | PCA9555 VCC independently switchable | Apply a known state, power-cycle PCA9555 only, observe registers, then apply and verify the caller's safe image | POR defaults are observed before reconciliation; the explicit complete image is restored and verified without relying on stale readback as intent | NOT RUN | |
 | 100 kHz operation | Firmware/app sets I2C to 100 kHz | Run scan/probe/selftest/stress and selected I/O checks | Operations complete without unexplained failures; final health READY | NOT RUN | |
 | 400 kHz operation | Repo default or equivalent 400 kHz setup | Run scan/probe/selftest/stress and selected I/O checks | Operations complete without unexplained failures; final health READY | NOT RUN | |
 | Shared-bus soak | PCA9555 plus another active I2C target | Run long read/write soak with other-target traffic through bus manager | No hangs, resets, unexpected INT loss, or unexplained I2C failures | NOT RUN | |
 | Arduino ESP32-S2 run | `env:esp32s2dev` and CLI example | Upload, monitor, run version/help, scan/probe, read inputs, safe output toggle, and `health` | CLI runs and final health is READY | NOT RUN | |
 | Arduino ESP32-S3 run | `env:esp32s3dev` and CLI example | Upload, monitor, run version/help, scan/probe, read inputs, safe output toggle, and `health` | CLI runs and final health is READY | NOT RUN | |
-| ESP-IDF hardware run | Native `examples/espidf_basic` or equivalent app | Build/flash native IDF app and run basic input/output/recovery checks | Native IDF path works without Arduino/Wire; final cleanup succeeds | NOT RUN | |
+| ESP-IDF hardware run | Native `examples/espidf_basic` or equivalent app | Build/flash native IDF app and run basic input/output/example-image reconciliation checks | Native IDF path works without Arduino/Wire; final cleanup succeeds | NOT RUN | |
 
 ## Claim Summary
 

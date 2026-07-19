@@ -1,8 +1,9 @@
 # PCA9555 Documentation
 
-This folder keeps durable project documentation only. User-facing usage lives in
-the repository README, runnable behavior lives in `examples/`, and API details
-live in Doxygen comments under `include/`.
+This folder keeps durable public project documentation. User-facing lifecycle,
+transport, cooperative-operation, and migration guidance lives in the
+repository README. Runnable behavior lives in `examples/`, and API details live
+in Doxygen comments under `include/`.
 
 ## Documents
 

@@ -29,7 +29,7 @@ PCA9555::TransportResult writeReadI2c(uint8_t address,
       read == nullptr || readLength == 0U || timeoutMs == 0U) {
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::IO_ERROR, 0,
-        PCA9555::WriteEffect::NOT_APPLICABLE);
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
   for (std::size_t i = 0; i < readLength; ++i) {
     read[i] = 0xFFU;
@@ -46,6 +46,35 @@ int main() {
 
   PCA9555::PCA9555 device{};
   const PCA9555::Status bound = device.bind(config);
-  const PCA9555::Status detached = device.end();
-  return bound.ok() && detached.ok() ? 0 : 1;
+  if (!bound.ok()) return 1;
+
+  constexpr uint32_t REQUEST_ID = 17U;
+  if (!device.startReadInputs(REQUEST_ID, 0U, 100U).inProgress()) return 2;
+
+  uint8_t used = 0U;
+  if (!device.pollOperation(REQUEST_ID, 0U, 1U, used).inProgress() ||
+      used != 1U) {
+    return 3;
+  }
+  if (!device.pollOperation(REQUEST_ID, 1U, 1U, used).ok() || used != 1U) {
+    return 4;
+  }
+
+  PCA9555::OperationResult result{};
+  if (!device.takeOperationResult(REQUEST_ID, result).ok() ||
+      result.requestId != REQUEST_ID ||
+      result.kind != PCA9555::OperationKind::READ_INPUTS ||
+      result.outcome != PCA9555::OperationOutcome::SUCCEEDED ||
+      result.transactionsUsed != PCA9555::MAX_READ_INPUTS_TRANSACTIONS ||
+      !result.observed.valid(PCA9555::PAIR_INPUTS) ||
+      result.observed.inputs != 0xFFFFU || !result.cleanupAttempted ||
+      result.cleanupRequired) {
+    return 5;
+  }
+  if (!device.takeOperationResult(REQUEST_ID, result)
+           .is(PCA9555::Err::NO_RESULT)) {
+    return 6;
+  }
+
+  return device.end().ok() ? 0 : 7;
 }

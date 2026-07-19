@@ -4,11 +4,13 @@
 
 | Version | Security fixes |
 | --- | --- |
-| 3.x | Supported |
+| 3.x after publication | Supported |
+| 3.0.0 working-tree candidate | Not yet released |
 | 2.x and older | Not supported |
 
 Pin an exact reviewed release or immutable commit. Moving branches are not a
-safe production dependency policy.
+safe production dependency policy. The current 3.0.0 source metadata does not
+mean that a `v3.0.0` release has already been published.
 
 ## Reporting a vulnerability
 

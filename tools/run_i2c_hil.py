@@ -214,11 +214,11 @@ OPTIONAL_COMMANDS: tuple[CommandSpec, ...] = (
         timeout_s=25.0,
         destructive=True,
         requires_opt_in="--include-output-tests",
-        recovery_command="dirin 0xFFFF confirm",
+        recovery_command="recover confirm",
         classifier="selftest",
         notes=(
-            "The CLI labels this safe, but it changes PCA9555 latches, direction, "
-            "and polarity before restoring. Use only on a known-safe fixture."
+            "This command changes PCA9555 latches, direction, and polarity before "
+            "restoring them. Use only on a known-safe fixture."
         ),
     ),
     CommandSpec(
@@ -237,7 +237,7 @@ OPTIONAL_COMMANDS: tuple[CommandSpec, ...] = (
         timeout_s=180.0,
         destructive=True,
         requires_opt_in="--include-output-tests",
-        recovery_command="dirin 0xFFFF confirm",
+        recovery_command="recover confirm",
         classifier="stress_mix",
         notes="Mixed stress drives outputs and changes configuration; opt-in only.",
     ),

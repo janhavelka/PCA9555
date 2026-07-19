@@ -163,8 +163,12 @@ These checks must not be treated as serial-only PASS results:
 | INT behavior and errata pointer park | OPERATOR_CHECK_REQUIRED | Requires wiring, logic analyzer, or MCU capture |
 
 For opt-in mutating commands that declare a recovery action, the runner inserts
-the recovery command into the execution plan. The current restore-safe-state
-command is `dirin 0xFFFF confirm`.
+the example-owned `recover confirm` command into the execution plan. That
+command applies the example image (latches high, normal polarity, all pins
+input). It is a fixture default, not a universal product-safe state. Replace it
+with an operator-approved complete image when the attached hardware needs a
+different inactive level or polarity; `dirin 0xFFFF confirm` alone changes only
+direction and is not a complete state restore.
 
 Even if all serial commands classify as PASS, the runner's final verdict remains
 `OPERATOR_REVIEW_REQUIRED` until manual wiring, physical output, INT, errata,

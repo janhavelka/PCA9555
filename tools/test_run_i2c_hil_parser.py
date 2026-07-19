@@ -198,14 +198,14 @@ def test_recovery_spec_uses_dynamic_expected_patterns() -> None:
     recovery = runner.recovery_spec_for(selftest)
 
     assert_true(recovery is not None, "selftest should have recovery spec")
-    assert_equal(recovery.command, "dirin 0xFFFF confirm", "selftest recovery command")
-    assert_equal(recovery.classifier, "direction", "recovery should use dynamic direction classifier")
+    assert_equal(recovery.command, "recover confirm", "selftest recovery command")
+    assert_equal(recovery.classifier, "recovery", "recovery should use dynamic recovery classifier")
     result, evidence = runner.classify(
         recovery,
-        "[I] Pins configured as INPUT: mask=0xFFFF\n",
+        "Attempting recovery...\nStatus: OK\n",
         "prompt",
     )
-    assert_equal(result, "PASS", "dirin recovery transcript should pass")
+    assert_equal(result, "PASS", "complete-image recovery transcript should pass")
     assert_true(evidence, "recovery PASS should include evidence")
 
 

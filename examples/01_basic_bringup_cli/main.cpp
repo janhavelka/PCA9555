@@ -340,6 +340,29 @@ void printStatus(const PCA9555::Status& st) {
   Serial.flush();
 }
 
+PCA9555::Status restoreOutputAndDirection(
+    const PCA9555::PortData& outputs,
+    const PCA9555::PortData& directions) {
+  PCA9555::Status status = device.writeOutputs(outputs);
+  if (status.ok()) status = device.setConfiguration(directions);
+  return status;
+}
+
+PCA9555::Status restoreWritableState(
+    const PCA9555::PortData& outputs,
+    const PCA9555::PortData& polarity,
+    const PCA9555::PortData& directions) {
+  PCA9555::Status status = device.writeOutputs(outputs);
+  if (!status.ok()) return status;
+  const PCA9555::Status polarityStatus = device.setPolarity(polarity);
+  const PCA9555::Status directionStatus = device.setConfiguration(directions);
+  if (!polarityStatus.ok() && !directionStatus.ok()) {
+    LOGE("Writable-state direction restore also failed");
+    printStatus(directionStatus);
+  }
+  return polarityStatus.ok() ? directionStatus : polarityStatus;
+}
+
 PCA9555::Status applyExampleRecoveryImage() {
   uint32_t requestId = nextOperationRequestId++;
   if (requestId == 0U) {
@@ -1178,8 +1201,27 @@ void runSelfTest() {
   auto reportSkip = [&](const char* name, const char* note) {
     report(name, SelftestOutcome::SKIP, note);
   };
+  auto printResult = [&]() {
+    Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
+                  goodIfNonZeroColor(stats.pass),
+                  static_cast<unsigned long>(stats.pass),
+                  LOG_COLOR_RESET,
+                  goodIfZeroColor(stats.fail),
+                  static_cast<unsigned long>(stats.fail),
+                  LOG_COLOR_RESET,
+                  skipCountColor(stats.skip),
+                  static_cast<unsigned long>(stats.skip),
+                  LOG_COLOR_RESET);
+  };
+  auto requireStep = [&](const char* name, const PCA9555::Status& status) {
+    reportCheck(name, status.ok(), status.ok() ? "" : errToStr(status.code));
+    if (!status.ok()) {
+      reportSkip("remaining checks", "selftest aborted after state setup or restore failure");
+    }
+    return status.ok();
+  };
 
-  Serial.println("=== PCA9555 selftest (safe commands) ===");
+  Serial.println("=== PCA9555 selftest (guarded mutating commands) ===");
 
   const uint32_t succBefore = device.totalSuccess();
   const uint32_t failBefore = device.totalFailures();
@@ -1190,10 +1232,7 @@ void runSelfTest() {
   if (st.code == PCA9555::Err::NOT_INITIALIZED) {
     reportSkip("probe responds", "driver not initialized");
     reportSkip("remaining checks", "selftest aborted");
-    Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
-                  goodIfNonZeroColor(stats.pass), static_cast<unsigned long>(stats.pass), LOG_COLOR_RESET,
-                  goodIfZeroColor(stats.fail), static_cast<unsigned long>(stats.fail), LOG_COLOR_RESET,
-                  skipCountColor(stats.skip), static_cast<unsigned long>(stats.skip), LOG_COLOR_RESET);
+    printResult();
     return;
   }
   const bool probeHealthUnchanged =
@@ -1250,66 +1289,85 @@ void runSelfTest() {
               snapshot.state == PCA9555::DriverState::READY,
               "");
 
-  // --- writeOutput + readback ---
+  // Capture the complete writable state and deliberately establish all three
+  // protocol-shadow pairs before exercising cached read-modify-write helpers.
   PCA9555::PortData savedOut;
-  device.readOutputs(savedOut);
+  PCA9555::PortData savedCfg;
+  PCA9555::PortData savedPol;
+  st = device.readOutputs(savedOut);
+  if (!requireStep("capture output latches", st)) { printResult(); return; }
+  st = device.getConfiguration(savedCfg);
+  if (!requireStep("capture direction", st)) { printResult(); return; }
+  st = device.getPolarity(savedPol);
+  if (!requireStep("capture polarity", st)) { printResult(); return; }
+  st = device.writeOutputs(savedOut);
+  if (!requireStep("establish output shadow", st)) { printResult(); return; }
+  st = device.setPolarity(savedPol);
+  if (!requireStep("establish polarity shadow", st)) { printResult(); return; }
+  st = device.setConfiguration(savedCfg);
+  if (!requireStep("establish direction shadow", st)) { printResult(); return; }
+
+  // --- writeOutput + readback ---
   st = device.writeOutput(PCA9555::Port::PORT_0, 0xAA);
   if (st.ok()) {
     PCA9555::PortData readback;
-    device.readOutputs(readback);
-    reportCheck("writeOutput(PORT_0, 0xAA) + readback", readback.port0 == 0xAA, "");
+    st = device.readOutputs(readback);
+    reportCheck("writeOutput(PORT_0, 0xAA) + readback",
+                st.ok() && readback.port0 == 0xAA,
+                st.ok() ? "" : errToStr(st.code));
   } else {
     reportCheck("writeOutput(PORT_0, 0xAA)", false, errToStr(st.code));
   }
   st = device.writeOutput(PCA9555::Port::PORT_1, 0x55);
   if (st.ok()) {
     PCA9555::PortData readback;
-    device.readOutputs(readback);
-    reportCheck("writeOutput(PORT_1, 0x55) + readback", readback.port1 == 0x55, "");
+    st = device.readOutputs(readback);
+    reportCheck("writeOutput(PORT_1, 0x55) + readback",
+                st.ok() && readback.port1 == 0x55,
+                st.ok() ? "" : errToStr(st.code));
   } else {
     reportCheck("writeOutput(PORT_1, 0x55)", false, errToStr(st.code));
   }
-  // Restore outputs
-  device.writeOutput(PCA9555::Port::PORT_0, savedOut.port0);
-  device.writeOutput(PCA9555::Port::PORT_1, savedOut.port1);
+  st = device.writeOutputs(savedOut);
+  if (!requireStep("restore output latches", st)) { printResult(); return; }
 
   // --- setPortConfiguration + readback ---
-  PCA9555::PortData savedCfg;
-  device.getConfiguration(savedCfg);
   st = device.setPortConfiguration(PCA9555::Port::PORT_0, 0x0F);
   if (st.ok()) {
     PCA9555::PortData readback;
-    device.getConfiguration(readback);
-    reportCheck("setPortConfiguration(PORT_0, 0x0F) + readback", readback.port0 == 0x0F, "");
+    st = device.getConfiguration(readback);
+    reportCheck("setPortConfiguration(PORT_0, 0x0F) + readback",
+                st.ok() && readback.port0 == 0x0F,
+                st.ok() ? "" : errToStr(st.code));
   } else {
     reportCheck("setPortConfiguration(PORT_0, 0x0F)", false, errToStr(st.code));
   }
-  // Restore config
-  device.setPortConfiguration(PCA9555::Port::PORT_0, savedCfg.port0);
-  device.setPortConfiguration(PCA9555::Port::PORT_1, savedCfg.port1);
+  st = device.setConfiguration(savedCfg);
+  if (!requireStep("restore direction", st)) { printResult(); return; }
 
   // --- setPortPolarity + readback ---
-  PCA9555::PortData savedPol;
-  device.getPolarity(savedPol);
   st = device.setPortPolarity(PCA9555::Port::PORT_0, 0x0F);
   if (st.ok()) {
     PCA9555::PortData readback;
-    device.getPolarity(readback);
-    reportCheck("setPortPolarity(PORT_0, 0x0F) + readback", readback.port0 == 0x0F, "");
+    st = device.getPolarity(readback);
+    reportCheck("setPortPolarity(PORT_0, 0x0F) + readback",
+                st.ok() && readback.port0 == 0x0F,
+                st.ok() ? "" : errToStr(st.code));
   } else {
     reportCheck("setPortPolarity(PORT_0, 0x0F)", false, errToStr(st.code));
   }
   st = device.setPinPolarity(PCA9555::Pin::P10, true);
   if (st.ok()) {
     PCA9555::PortData readback;
-    device.getPolarity(readback);
-    reportCheck("setPinPolarity(8/P10, 1) + readback", (readback.port1 & 0x01U) != 0U, "");
+    st = device.getPolarity(readback);
+    reportCheck("setPinPolarity(8/P10, 1) + readback",
+                st.ok() && (readback.port1 & 0x01U) != 0U,
+                st.ok() ? "" : errToStr(st.code));
   } else {
     reportCheck("setPinPolarity(8/P10, 1)", false, errToStr(st.code));
   }
-  // Restore polarity
-  device.setPortPolarity(PCA9555::Port::PORT_0, savedPol.port0);
-  device.setPortPolarity(PCA9555::Port::PORT_1, savedPol.port1);
+  st = device.setPolarity(savedPol);
+  if (!requireStep("restore polarity", st)) { printResult(); return; }
 
   // --- readRegister all 8 ---
   bool allRegsOk = true;
@@ -1322,8 +1380,6 @@ void runSelfTest() {
   reportCheck("readRegister(0-7) all OK", allRegsOk, "");
 
   // --- bulk register helpers ---
-  PCA9555::PortData savedBulkOut;
-  device.readOutputs(savedBulkOut);
   const uint8_t bulkOut[2] = {0xA5, 0x5A};
   st = device.writeRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, bulkOut, 2);
   if (st.ok()) {
@@ -1334,8 +1390,9 @@ void runSelfTest() {
   } else {
     reportCheck("writeRegisters(OUT, 2)", false, errToStr(st.code));
   }
-  const uint8_t restoreBulkOut[2] = {savedBulkOut.port0, savedBulkOut.port1};
-  device.writeRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, restoreBulkOut, 2);
+  const uint8_t restoreBulkOut[2] = {savedOut.port0, savedOut.port1};
+  st = device.writeRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, restoreBulkOut, 2);
+  if (!requireStep("restore bulk output latches", st)) { printResult(); return; }
 
   uint8_t bulkCfg[2] = {};
   st = device.readRegisters(PCA9555::cmd::REG_CONFIG_PORT_0, bulkCfg, 2);
@@ -1343,29 +1400,26 @@ void runSelfTest() {
 
   // --- writeRegister (writable range 2-7) ---
   uint8_t savedReg2 = 0;
-  device.readRegister(2, savedReg2);
+  st = device.readRegister(2, savedReg2);
+  if (!requireStep("capture output register 0", st)) { printResult(); return; }
   st = device.writeRegister(2, 0xBB);
   if (st.ok()) {
     uint8_t readback = 0;
-    device.readRegister(2, readback);
-    reportCheck("writeRegister(2, 0xBB) + readback", readback == 0xBB, "");
+    st = device.readRegister(2, readback);
+    reportCheck("writeRegister(2, 0xBB) + readback",
+                st.ok() && readback == 0xBB,
+                st.ok() ? "" : errToStr(st.code));
   } else {
     reportCheck("writeRegister(2, 0xBB)", false, errToStr(st.code));
   }
-  device.writeRegister(2, savedReg2); // restore
+  st = device.writeRegister(2, savedReg2);
+  if (!requireStep("restore output register 0", st)) { printResult(); return; }
 
   // --- bit manipulation helpers ---
-  PCA9555::PortData savedBitOut;
-  PCA9555::PortData savedBitCfg;
-  PCA9555::PortData savedBitPol;
-  device.readOutputs(savedBitOut);
-  device.getConfiguration(savedBitCfg);
-  device.getPolarity(savedBitPol);
-
   st = device.writeOutputs(PORTS_ALL_LOW);
-  if (st.ok()) {
-    st = device.setConfiguration(PORTS_ALL_LOW);
-  }
+  if (!requireStep("prepare bit-test output latches", st)) { printResult(); return; }
+  st = device.setConfiguration(PORTS_ALL_LOW);
+  if (!requireStep("prepare bit-test direction", st)) { printResult(); return; }
   if (st.ok()) {
     st = device.setOutputBits(0x0103U);
   }
@@ -1462,13 +1516,19 @@ void runSelfTest() {
     reportCheck("clearInvertBits(0x0001)", false, errToStr(st.code));
   }
 
-  device.writeOutputs(savedBitOut);
-  device.setPolarity(savedBitPol);
-  device.setConfiguration(savedBitCfg);
-
-  // --- explicit example-image reconciliation ---
-  st = applyExampleRecoveryImage();
-  reportCheck("recover example image", st.ok(), st.ok() ? "" : errToStr(st.code));
+  st = device.writeOutputs(savedOut);
+  if (!requireStep("restore bit-test output latches", st)) { printResult(); return; }
+  const PCA9555::Status polarityRestore = device.setPolarity(savedPol);
+  reportCheck("restore bit-test polarity", polarityRestore.ok(),
+              polarityRestore.ok() ? "" : errToStr(polarityRestore.code));
+  const PCA9555::Status directionRestore = device.setConfiguration(savedCfg);
+  reportCheck("restore bit-test direction", directionRestore.ok(),
+              directionRestore.ok() ? "" : errToStr(directionRestore.code));
+  if (!polarityRestore.ok() || !directionRestore.ok()) {
+    reportSkip("remaining checks", "selftest aborted after restore failure");
+    printResult();
+    return;
+  }
 
   // --- passive binding state ---
   reportCheck("isBound", device.isBound(), "");
@@ -1477,10 +1537,7 @@ void runSelfTest() {
   const uint32_t succDelta = device.totalSuccess() - succBefore;
   const uint32_t failDelta = device.totalFailures() - failBefore;
 
-  Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
-                goodIfNonZeroColor(stats.pass), static_cast<unsigned long>(stats.pass), LOG_COLOR_RESET,
-                goodIfZeroColor(stats.fail), static_cast<unsigned long>(stats.fail), LOG_COLOR_RESET,
-                skipCountColor(stats.skip), static_cast<unsigned long>(stats.skip), LOG_COLOR_RESET);
+  printResult();
   Serial.printf("  Health delta: %ssuccess +%lu%s, %sfailures +%lu%s\n",
                 goodIfNonZeroColor(succDelta),
                 static_cast<unsigned long>(succDelta),
@@ -1610,11 +1667,23 @@ void runStressMix(int count) {
   st = device.setPolarity(PORTS_ALL_LOW);
   if (!st.ok()) {
     printStatus(st);
+    const PCA9555::Status restore =
+        restoreWritableState(savedOut, savedPol, savedCfg);
+    if (!restore.ok()) {
+      LOGE("stress_mix restore after polarity setup failure failed");
+      printStatus(restore);
+    }
     return;
   }
   st = device.setConfiguration(PORTS_ALL_LOW);
   if (!st.ok()) {
     printStatus(st);
+    const PCA9555::Status restore =
+        restoreWritableState(savedOut, savedPol, savedCfg);
+    if (!restore.ok()) {
+      LOGE("stress_mix restore after direction setup failure failed");
+      printStatus(restore);
+    }
     return;
   }
 
@@ -1660,9 +1729,12 @@ void runStressMix(int count) {
                         totalFail);
   }
 
-  device.writeOutputs(savedOut);
-  device.setPolarity(savedPol);
-  device.setConfiguration(savedCfg);
+  st = restoreWritableState(savedOut, savedPol, savedCfg);
+  if (!st.ok()) {
+    LOGE("stress_mix state restore failed");
+    printStatus(st);
+    totalFail++;
+  }
 
   const uint32_t elapsed = millis() - startMs;
   const float successPct = (count > 0)
@@ -1743,7 +1815,16 @@ void cmdSweep(const String& args) {
   st = device.writeOutputs(PORTS_ALL_LOW);
   if (!st.ok()) { printStatus(st); return; }
   st = device.setConfiguration(PORTS_ALL_LOW);
-  if (!st.ok()) { printStatus(st); return; }
+  if (!st.ok()) {
+    printStatus(st);
+    const PCA9555::Status restore =
+        restoreOutputAndDirection(savedOut, savedCfg);
+    if (!restore.ok()) {
+      LOGE("Sweep restore after setup failure failed");
+      printStatus(restore);
+    }
+    return;
+  }
 
   Serial.printf("=== Sweep Test (delay=%ld ms) ===\n", delayMs);
   int pass = 0, fail = 0;
@@ -1822,9 +1903,13 @@ void cmdSweep(const String& args) {
     }
   }
 
-  // Restore
-  device.setConfiguration(savedCfg);
-  device.writeOutputs(savedOut);
+  // Restore latches before re-enabling any saved output directions.
+  st = restoreOutputAndDirection(savedOut, savedCfg);
+  if (!st.ok()) {
+    LOGE("Sweep state restore failed");
+    printStatus(st);
+    fail++;
+  }
 
   Serial.println("--- Summary ---");
   Serial.printf("  %s%d passed%s, %s%d failed%s\n",
@@ -1851,9 +1936,20 @@ void cmdWalk(const String& args) {
   st = device.readOutputs(savedOut);
   if (!st.ok()) { printStatus(st); return; }
 
-  // Set all pins to output
-  st = device.setConfiguration(PORTS_ALL_LOW);
+  // Preload a known low latch image before enabling outputs.
+  st = device.writeOutputs(PORTS_ALL_LOW);
   if (!st.ok()) { printStatus(st); return; }
+  st = device.setConfiguration(PORTS_ALL_LOW);
+  if (!st.ok()) {
+    printStatus(st);
+    const PCA9555::Status restore =
+        restoreOutputAndDirection(savedOut, savedCfg);
+    if (!restore.ok()) {
+      LOGE("Walk restore after setup failure failed");
+      printStatus(restore);
+    }
+    return;
+  }
 
   Serial.printf("=== Walking-1 Test (delay=%ld ms) ===\n", delayMs);
   int pass = 0, fail = 0;
@@ -1888,10 +1984,13 @@ void cmdWalk(const String& args) {
     }
   }
 
-  // All off, then restore
-  device.writeOutputs(PORTS_ALL_LOW);
-  device.setConfiguration(savedCfg);
-  device.writeOutputs(savedOut);
+  // Restore latches before re-enabling any saved output directions.
+  st = restoreOutputAndDirection(savedOut, savedCfg);
+  if (!st.ok()) {
+    LOGE("Walk state restore failed");
+    printStatus(st);
+    fail++;
+  }
 
   Serial.println("--- Summary ---");
   Serial.printf("  %s%d passed%s, %s%d failed%s\n",
@@ -2023,7 +2122,7 @@ void printHelp() {
   cli::printHelpItem("probe", "Probe device (no health tracking)");
   cli::printHelpItem("recover [confirm]", "Apply the explicit example recovery image");
   cli::printHelpItem("verbose [0|1]", "Enable/disable verbose output");
-  cli::printHelpItem("selftest [confirm]", "Run safe API self-test incl. readback, masks, direction, and polarity");
+  cli::printHelpItem("selftest [confirm]", "Run guarded mutating API self-test incl. readback, masks, direction, and polarity");
   cli::printHelpItem("stress [N]", "Run N readInputs cycles (default 10)");
   cli::printHelpItem("stress_mix [N] [confirm]", "Run N mixed read/write/config/polarity/mask cycles (default 50)");
 }

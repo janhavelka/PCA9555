@@ -85,8 +85,7 @@ PCA9555::TransportResult mapI2c(
   }
   if (err == ESP_ERR_INVALID_ARG) {
     return PCA9555::TransportResult::Error(
-        PCA9555::TransportCode::IO_ERROR, err,
-        PCA9555::WriteEffect::NOT_ATTEMPTED);
+        PCA9555::TransportCode::IO_ERROR, err, writeEffect);
   }
   if (err == ESP_ERR_INVALID_RESPONSE || err == ESP_ERR_NOT_FOUND) {
     return PCA9555::TransportResult::Error(
@@ -123,7 +122,7 @@ esp_err_t ensureDevice(NativeBus& bus, uint8_t addr) {
 PCA9555::TransportResult i2cWrite(uint8_t addr, const uint8_t* data,
                                   size_t len, uint32_t timeoutMs, void* user) {
   NativeBus* bus = static_cast<NativeBus*>(user);
-  if (bus == nullptr || bus->bus == nullptr) {
+  if (bus == nullptr || bus->bus == nullptr || data == nullptr || len == 0U) {
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::IO_ERROR, 0,
         PCA9555::WriteEffect::NOT_ATTEMPTED);
@@ -140,18 +139,20 @@ PCA9555::TransportResult i2cWriteRead(uint8_t addr, const uint8_t* tx,
                                       size_t txLen, uint8_t* rx, size_t rxLen,
                                       uint32_t timeoutMs, void* user) {
   NativeBus* bus = static_cast<NativeBus*>(user);
-  if (bus == nullptr || bus->bus == nullptr) {
+  if (bus == nullptr || bus->bus == nullptr || tx == nullptr || txLen == 0U ||
+      rx == nullptr || rxLen == 0U) {
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::IO_ERROR, 0,
-        PCA9555::WriteEffect::NOT_APPLICABLE);
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
   esp_err_t err = ensureDevice(*bus, addr);
   if (err != ESP_OK) {
-    return mapI2c(err, 0U, 0U);
+    return mapI2c(err, 0U, 0U, PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
   err = i2c_master_transmit_receive(bus->device, tx, txLen, rx, rxLen,
                                     timeoutArg(timeoutMs));
-  return mapI2c(err, txLen, rxLen);
+  return mapI2c(err, txLen, rxLen,
+                PCA9555::WriteEffect::MAY_HAVE_COMMITTED);
 }
 
 bool initBus() {
@@ -562,20 +563,29 @@ void delayMs(uint32_t delay) {
   }
 }
 
-void restoreState(const PCA9555::PortData& outputs, const PCA9555::PortData& polarity,
-                  const PCA9555::PortData& config) {
+PCA9555::Status restoreOutputAndDirection(
+    const PCA9555::PortData& outputs,
+    const PCA9555::PortData& config) {
   PCA9555::Status st = gDev.writeOutputs(outputs);
   printStatus("restore output latches", st);
-  if (!st.ok()) {
-    return;
-  }
-  st = gDev.setPolarity(polarity);
-  printStatus("restore polarity", st);
-  if (!st.ok()) {
-    return;
-  }
+  if (!st.ok()) return st;
   st = gDev.setConfiguration(config);
   printStatus("restore direction", st);
+  return st;
+}
+
+PCA9555::Status restoreState(const PCA9555::PortData& outputs,
+                             const PCA9555::PortData& polarity,
+                             const PCA9555::PortData& config) {
+  PCA9555::Status st = gDev.writeOutputs(outputs);
+  printStatus("restore output latches", st);
+  if (!st.ok()) return st;
+  st = gDev.setPolarity(polarity);
+  printStatus("restore polarity", st);
+  const PCA9555::Status polarityStatus = st;
+  const PCA9555::Status directionStatus = gDev.setConfiguration(config);
+  printStatus("restore direction", directionStatus);
+  return polarityStatus.ok() ? directionStatus : polarityStatus;
 }
 
 void reportCheck(const char* label, bool passed, uint32_t* passCount, uint32_t* failCount) {
@@ -1030,6 +1040,7 @@ void cmdSweep(const char* args) {
   st = gDev.setConfiguration(portsFrom(PORTS_ALL_LOW));
   printStatus("sweep force outputs", st);
   if (!st.ok()) {
+    (void)restoreOutputAndDirection(savedOut, savedCfg);
     return;
   }
 
@@ -1066,11 +1077,8 @@ void cmdSweep(const char* args) {
     }
   }
 
-  st = gDev.writeOutputs(savedOut);
-  printStatus("sweep restore output latches", st);
-  if (st.ok()) {
-    printStatus("sweep restore direction", gDev.setConfiguration(savedCfg));
-  }
+  st = restoreOutputAndDirection(savedOut, savedCfg);
+  if (!st.ok()) ++fail;
   printf("Sweep result: pass=%lu fail=%lu\n", static_cast<unsigned long>(pass),
          static_cast<unsigned long>(fail));
 }
@@ -1115,6 +1123,7 @@ void cmdWalk(const char* args) {
   st = gDev.setConfiguration(portsFrom(PORTS_ALL_LOW));
   printStatus("walk force outputs", st);
   if (!st.ok()) {
+    (void)restoreOutputAndDirection(savedOut, savedCfg);
     return;
   }
 
@@ -1135,11 +1144,8 @@ void cmdWalk(const char* args) {
     }
   }
 
-  st = gDev.writeOutputs(savedOut);
-  printStatus("walk restore output latches", st);
-  if (st.ok()) {
-    printStatus("walk restore direction", gDev.setConfiguration(savedCfg));
-  }
+  st = restoreOutputAndDirection(savedOut, savedCfg);
+  if (!st.ok()) ++fail;
   printf("Walk result: pass=%lu fail=%lu\n", static_cast<unsigned long>(pass),
          static_cast<unsigned long>(fail));
 }
@@ -1204,6 +1210,14 @@ void cmdSelfTest(const char* args) {
     st = gDev.setConfiguration(portsFrom(PORTS_ALL_LOW));
   }
   reportCheck("force outputs low", st.ok(), &pass, &fail);
+  if (!st.ok()) {
+    const PCA9555::Status restore = restoreState(savedOut, savedPol, savedCfg);
+    reportCheck("restore after setup failure", restore.ok(), &pass, &fail);
+    printf("Selftest result: pass=%lu fail=%lu\n",
+           static_cast<unsigned long>(pass),
+           static_cast<unsigned long>(fail));
+    return;
+  }
 
   st = gDev.setOutputBits(0x0103U);
   if (st.ok()) {
@@ -1259,7 +1273,8 @@ void cmdSelfTest(const char* args) {
   }
   reportCheck("clearInvertBits readback", st.ok() && data.combined() == 0x0100U, &pass, &fail);
 
-  restoreState(savedOut, savedPol, savedCfg);
+  st = restoreState(savedOut, savedPol, savedCfg);
+  reportCheck("restore writable state", st.ok(), &pass, &fail);
   const uint32_t succDelta = gDev.totalSuccess() - succBefore;
   const uint32_t failDelta = gDev.totalFailures() - failBefore;
   printf("Selftest result: pass=%lu fail=%lu\n", static_cast<unsigned long>(pass),
@@ -1372,6 +1387,7 @@ void runStressMix(uint32_t count) {
   }
   printStatus("stress_mix prepare", st);
   if (!st.ok()) {
+    (void)restoreState(savedOut, savedPol, savedCfg);
     return;
   }
 
@@ -1420,7 +1436,8 @@ void runStressMix(uint32_t count) {
     vTaskDelay(pdMS_TO_TICKS(1));
   }
 
-  restoreState(savedOut, savedPol, savedCfg);
+  st = restoreState(savedOut, savedPol, savedCfg);
+  if (!st.ok()) ++totalFail;
   const uint32_t elapsed = nowMs(nullptr) - start;
   puts("=== stress_mix summary ===");
   printf("  Total: ok=%lu fail=%lu duration_ms=%lu\n",

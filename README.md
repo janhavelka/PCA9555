@@ -22,8 +22,8 @@ validation are still required before a field-readiness claim.
   most two callbacks for read plus pointer park. Safe direction APIs use at
   most two callbacks for latch preload plus direction write.
 - Compound apply, verify, and input-read work has one fixed cooperative
-  operation slot with a caller-supplied request ID, deadline, and transfer
-  budget.
+  operation slot with a caller-supplied request ID, admission time,
+  whole-operation timeout, and transfer budget.
 - Writable intent, observed register values, shadow validity, and uncertain
   write effects are separate state.
 - Public pin, port, level, and direction arguments use typed enums.
@@ -105,11 +105,13 @@ if (!status.ok()) {
 ```
 
 For a successful write, report the complete transmitted byte count; the driver
-then classifies the write as committed. On failure, report
+then classifies the write as committed. On a register-write failure, report
 `WriteEffect::NOT_ATTEMPTED` only when the adapter proves that no register data
-was accepted. Otherwise report `WriteEffect::MAY_HAVE_COMMITTED`. Read
-transactions use `WriteEffect::NOT_APPLICABLE` and report both completed byte
-counts. Short successful transfers are rejected by the driver.
+was accepted. For write-then-read, the same field describes the command write
+phase: `NOT_ATTEMPTED` proves the command byte was not accepted, `COMMITTED`
+proves it was accepted, and `MAY_HAVE_COMMITTED` is the conservative fallback.
+Always report completed byte counts that are known at the device boundary.
+Short successful transfers are rejected by the driver.
 
 `Config::i2cTimeoutMs` bounds each callback. It does not configure the bus or
 replace the whole-operation deadline.
@@ -119,15 +121,20 @@ replace the whole-operation deadline.
 ```cpp
 using namespace PCA9555;
 
-device.preloadOutput(Pin::P03, Level::LOW_LEVEL);
-device.setDirection(Pin::P03, Direction::OUTPUT_MODE);
-device.writePin(Pin::P03, Level::HIGH_LEVEL);
+// First establish and verify a complete caller-owned RegisterImage with the
+// cooperative startApplyImage()/pollOperation()/takeOperationResult() flow.
+Status status = device.preloadOutput(Pin::P03, Level::LOW_LEVEL);
+if (status.ok()) status = device.setDirection(Pin::P03, Direction::OUTPUT_MODE);
+if (status.ok()) status = device.writePin(Pin::P03, Level::HIGH_LEVEL);
 
 Level sense = Level::LOW_LEVEL;
-device.readPin(Pin::P10, sense);
+if (status.ok()) status = device.readPin(Pin::P10, sense);
 
 PortData outputs{};
-device.readOutputs(outputs);
+if (status.ok()) status = device.readOutputs(outputs);
+if (!status.ok()) {
+  // Caller handles the exact error; the driver does not retry.
+}
 ```
 
 The `Pin` names match the data sheet: `P00` through `P07`, then `P10` through
@@ -182,7 +189,8 @@ cycle with the intended transaction budget.
 
 These bounds are exposed as `MAX_APPLY_IMAGE_TRANSACTIONS`,
 `MAX_VERIFY_IMAGE_TRANSACTIONS`, and `MAX_READ_INPUTS_TRANSACTIONS`. The final
-pointer-park transfer after an input read is mandatory and cannot be disabled.
+pointer-park transfer after a completed input read, or after a failed receive
+whose command may have reached the chip, is mandatory and cannot be disabled.
 
 The whole-operation timeout must be from 1 through `INT32_MAX` milliseconds.
 Deadline comparison is wrap-safe. Before each cooperative callback, the driver
@@ -191,10 +199,14 @@ derives a positive per-transfer allowance no greater than
 callbacks allowed in that poll. A callback already in progress remains
 synchronous and is bounded by that supplied allowance.
 
-Cancellation and caller-forced timeout are cooperative. If an input read has
-completed, the pointer-park cleanup remains required and gets a bounded attempt
-before the requested terminal result becomes available. Cleanup outcome is
-reported separately in `OperationResult`.
+Cancellation and caller-forced timeout are cooperative. If an input read
+completed, or its command phase may have reached the chip before the receive
+failed, pointer-park cleanup remains required and gets one bounded attempt
+before the terminal result becomes available. The original read failure stays
+the primary result; cleanup outcome is reported separately in
+`OperationResult`. `cleanupAfterDeadline` is set only when that cleanup is
+polled at or after the stored operation deadline; an explicit earlier
+`timeoutOperation()` request does not set it.
 
 A terminal result remains pending until taken exactly once. While work is
 active or a result is pending, new operation admission and binding replacement
@@ -204,8 +216,8 @@ methods return `Err::BUSY` without invoking a callback, so no synchronous call
 can interleave between its phases.
 
 `detach()`/`end()` never perform I2C. Detaching during ordinary active work
-cancels it and retains the terminal result for one take. If a successful input
-read already owes pointer-park cleanup, detach returns `Err::BUSY` and keeps the
+cancels it and retains the terminal result for one take. If an input transaction
+already owes pointer-park cleanup, detach returns `Err::BUSY` and keeps the
 binding so the caller can give that cleanup its bounded poll.
 
 ## Register state and write ambiguity
@@ -222,9 +234,9 @@ Relevant evidence is explicit:
 - `mismatchPairs`: observed writable pairs that did not match the expected
   image;
 - `uncertainPairs`: pairs whose hardware effect cannot be proved;
-- `WriteEffect`: whether one transport write was not attempted, committed, or
-  may have committed. Successful apply/verify outcomes and readback evidence
-  report operation-level verification separately.
+- `WriteEffect`: whether one callback's relevant device-side transmit phase was
+  not attempted, committed, or may have committed. Successful apply/verify
+  outcomes and readback evidence report operation-level verification separately.
 
 When a write may have committed, the affected shadow is invalidated before a
 later cached update can overwrite unrelated bits. Use `startVerifyImage()` to
@@ -258,12 +270,14 @@ ISR-safe. Keep it in stable storage and serialize every call through one owner.
 ## Interrupt errata
 
 `readInputs()`, `clearInterrupts()`, and cooperative input service read both
-input ports and, after a successful read, write the nonzero safe command byte
-used by the TI errata workaround. These full-pair APIs are the recommended INT
-service path. Scalar `readInput()`/`readPin()` calls read only the selected port,
-then park the pointer; they do not service pending changes on the other port.
-The owner must keep each read/park sequence exclusive. A park failure remains
-observable even when input data was read successfully.
+input ports and then write the nonzero safe command byte used by the TI errata
+workaround. If a failed receive leaves the command phase accepted or uncertain,
+they still attempt the park once and preserve the read error as primary. A
+proven not-attempted command does not need cleanup. These full-pair APIs are the
+recommended INT service path. Scalar `readInput()`/`readPin()` calls read only
+the selected port, then apply the same park rule; they do not service pending
+changes on the other port. The owner must keep each read/park sequence exclusive.
+A park failure remains observable even when input data was read successfully.
 
 `applyInterruptErrataWorkaround()` is an advanced one-transfer diagnostic. It
 does not replace owner-exclusive input service.
@@ -280,8 +294,9 @@ Version 3.0.0 is a breaking release:
   reserved only for source compatibility and v3 never gates I2C;
 - lock hooks, offline thresholds, implicit reset-default checks, and cached
   desired configuration were removed from `Config`;
-- typed `Pin`, `Port`, `Level`, and `Direction` values replace untyped API
-  arguments;
+- typed `Pin`, `Port`, `Level`, and `Direction` values are the canonical API;
+  narrow bool compatibility overloads remain where they preserve the same
+  validation and hardware behavior;
 - apply, verify, and input-read compounds use exact-ID cooperative operations;
 - the v2 job scheduler, `tick()`, `recover()`, duplicate unlocked errata alias,
   last-job/input accessors, and ambiguous `isOnline()` helper were removed.

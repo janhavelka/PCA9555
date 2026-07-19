@@ -43,8 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Apply-image work preloads output latches, writes polarity and direction,
   verifies all writable pairs, reads inputs, and performs the mandatory
   pointer-park workaround in at most eight transport callbacks.
-- Successful input-read cleanup remains bounded and observable after a caller
-  cancellation or whole-operation timeout request.
+- Input-read cleanup remains bounded and observable after success, after a
+  failed receive whose command may have reached the chip, and after caller
+  cancellation or whole-operation timeout. Proven not-attempted commands do not
+  schedule unnecessary cleanup, and the original read failure remains primary.
 - Cached intent, observed hardware state, shadow validity, and uncertain write
   effects are separate. Cached read-modify-write helpers fail when the required
   shadow is invalid or uncertain.

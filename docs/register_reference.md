@@ -46,7 +46,8 @@ one pair.
 ## Direct Access Rules
 
 - `readRegister()` reads a single register.
-- `writeRegister()` writes a single writable register (`0x02` through `0x07`).
+- `writeRegister()` writes one Output or Polarity register (`0x02` through
+  `0x05`). Direct Configuration writes (`0x06`/`0x07`) are rejected.
 - `readRegisters()` and `writeRegisters()` are pair-bounded bulk helpers.
 - Input registers are read-only; writes to `0x00` or `0x01` are rejected by the
   public direct write APIs.

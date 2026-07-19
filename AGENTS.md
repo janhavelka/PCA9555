@@ -80,6 +80,9 @@ Rules:
 - Each callback invocation is exactly one terminal physical attempt. Transport
   callbacks must not return an operation-level in-progress result. The library
   never retries a callback or recovers the bus.
+- `WriteEffect` describes the device-side transmit phase. For write-read
+  callbacks it must conservatively state whether the command byte was accepted;
+  `NOT_ATTEMPTED` is valid only when the adapter can prove it was not.
 - Transport errors MUST map to `Status` (no leaking `Wire`, `esp_err_t`, etc.).
 - The library MUST NOT configure bus timeouts or pins.
 - Do not implement chip protocols manually if an existing hardened project library already provides the needed timeout, recovery, and testability behavior.
@@ -144,15 +147,17 @@ The driver follows a **passive cooperative** model:
 - `bind()` and `begin()` validate and store callbacks without touching I2C.
 - Single-transfer APIs may complete synchronously. Synchronous compound
   convenience APIs have fixed transfer counts and documented worst-case latency.
-- Multi-transfer apply, verify, safe-direction, and input-read/errata work uses
-  one fixed-capacity operation slot. Admission performs zero I/O. The caller
-  supplies a nonzero request ID, whole-operation deadline, current time, and
-  transaction budget.
+- Complete-image apply/verify and input-read/errata work uses one fixed-capacity
+  operation slot. Admission performs zero I/O. The caller supplies a nonzero
+  request ID, current time, whole-operation timeout, and transaction budget.
+  Safe-direction convenience APIs remain synchronous and use at most two
+  callbacks; owner-budgeted configuration uses the complete-image operation.
 - A terminal operation result is retained until consumed exactly once. A new
   operation is rejected while work or an unconsumed result exists.
 - Cancellation is cooperative between synchronous callbacks. If an input read
-  completed, the required nonzero pointer-park cleanup remains observable and
-  bounded before cancellation/timeout becomes terminal.
+  completed, or its command phase may have reached the chip before failure, the
+  required nonzero pointer-park cleanup remains observable and bounded before
+  cancellation/timeout becomes terminal.
 - PCA9555 has no conversion wait, NVM, calibration storage, endurance-limited
   write, or other rare maintenance procedure. Do not add a speculative rare-
   operation framework.

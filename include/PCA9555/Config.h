@@ -19,27 +19,33 @@ enum class TransportCode : uint8_t {
   IO_ERROR
 };
 
-/// Conservative evidence about a write transaction's device-register effect.
+/// Conservative evidence about a callback's device-side transmit phase.
 enum class WriteEffect : uint8_t {
   NOT_APPLICABLE = 0,
-  NOT_ATTEMPTED,          ///< Transport proves no register data was accepted.
-  COMMITTED,              ///< The complete write was accepted.
-  MAY_HAVE_COMMITTED      ///< Some or all register data may have been accepted.
+  NOT_ATTEMPTED,      ///< Transport proves no relevant TX byte was accepted.
+  COMMITTED,          ///< The complete relevant TX phase was accepted.
+  MAY_HAVE_COMMITTED  ///< Some or all relevant TX bytes may have been accepted.
 };
 
 /// Typed terminal outcome returned by an injected transport callback.
 struct TransportResult {
   TransportCode code = TransportCode::IO_ERROR;
   int32_t detail = 0;
+  /// For i2cWrite, describes register-data mutation after the leading command.
+  /// For i2cWriteRead, describes acceptance of the command write phase.
   WriteEffect writeEffect = WriteEffect::MAY_HAVE_COMMITTED;
+  /// TX bytes known accepted at the device boundary, including the command.
   size_t completedTxBytes = 0;
+  /// RX bytes known returned by the device.
   size_t completedRxBytes = 0;
 
   constexpr bool ok() const { return code == TransportCode::OK; }
 
   static constexpr TransportResult Ok(size_t txBytes, size_t rxBytes) {
-    return TransportResult{TransportCode::OK, 0, WriteEffect::NOT_APPLICABLE,
-                           txBytes, rxBytes};
+    return TransportResult{
+        TransportCode::OK, 0,
+        txBytes == 0U ? WriteEffect::NOT_APPLICABLE : WriteEffect::COMMITTED,
+        txBytes, rxBytes};
   }
 
   static constexpr TransportResult Error(
@@ -57,6 +63,7 @@ using I2cWriteFn = TransportResult (*)(uint8_t addr, const uint8_t* data,
                                        void* user);
 
 /// One terminal, synchronous write-then-read attempt using a repeated START.
+/// writeEffect describes whether the device accepted the command write phase.
 using I2cWriteReadFn = TransportResult (*)(
     uint8_t addr, const uint8_t* txData, size_t txLen, uint8_t* rxData,
     size_t rxLen, uint32_t timeoutMs, void* user);

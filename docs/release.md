@@ -45,7 +45,8 @@ test names and assertions for:
 - wrap-safe whole-operation deadlines and per-poll transaction budgets;
 - request-ID mismatch, cancellation, timeout, exactly-once result delivery, and
   pending-result admission blocking;
-- input-read/pointer-park exclusivity and cleanup after cancel/timeout;
+- input-read/pointer-park exclusivity, accepted-versus-not-attempted failed
+  command handling, and cleanup after failure/cancel/timeout;
 - odd-start register-pair behavior and raw Configuration-write rejection.
 
 ## Release candidate

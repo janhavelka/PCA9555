@@ -39,9 +39,9 @@ and by release/hardware evidence. Do not add the dependency until the actual
 board facts are frozen, v3 is reviewed and exact-pinned, the owner adapter is
 implemented in a separate TunnelMonitor change, and target HIL is complete.
 
-No new library blocker was identified in the v3 public contract. This statement
-is conditional on the final v3 validation gates passing; it is not a hardware or
-field-readiness claim.
+No remaining library blocker was identified in the v3 public contract after the
+follow-up self-audit described below. This is not a hardware or field-readiness
+claim.
 
 ## v3 disposition matrix
 
@@ -70,12 +70,36 @@ Status meanings:
 | LIB-8 | Invalid offline threshold was silently corrected | `offlineThreshold` was removed. The driver has no local offline admission policy. | Three-state `DriverState`; `test_repeated_failures_never_gate_owner_requested_io_or_retry_internally`. | **Resolved in v3** |
 | ARCH-1 | Lifecycle/recovery did too much synchronous work | Lifecycle is zero-I2C. Apply, verify, and owner-safe input work use one fixed operation slot, nonzero request ID, wrap-safe deadline, and caller transaction budget. | Public maximums are 8 apply, 3 verify, and 2 input callbacks; budget/deadline/result tests. | **Resolved in v3** |
 | ARCH-2 | Recovery and offline policy had two owners | Library retry, bus recovery, offline gating, automatic recovery-image selection, and the legacy recovery/job shims were removed. The caller may explicitly apply/verify its image. | Observational READY/DEGRADED state; exact-ID cooperative operations only. | **Resolved in v3** |
-| ARCH-3 | Input errata handling had to be mandatory and non-interleaved | Production input paths retain read/park as one operation. After the read, cancellation or deadline cannot silently skip the bounded park attempt. | Cleanup fields in `OperationResult`; cancel, timeout, park-failure, and interleaving native tests. | **Resolved in v3** |
-| ARCH-4 | Transport and operation state were mixed | A callback returns terminal `TransportResult` for one physical attempt. Operation-level progress is represented only by the cooperative operation API. | `TransportCode`, byte counts, `WriteEffect`, `OperationPhase`, and `OperationOutcome`; short-count and timeout-distinction tests. | **Resolved in v3** |
+| ARCH-3 | Input errata handling had to be mandatory and non-interleaved | Production input paths retain read/park as one operation. A successful read or a failed receive whose command was accepted or is uncertain owes one bounded park attempt. A proven not-attempted command does not. Cancellation or deadline cannot silently skip owed cleanup. | Cleanup fields in `OperationResult`; accepted/uncertain/not-attempted failure, short-read, cancel, timeout, park-failure, and interleaving native tests. | **Resolved in v3** |
+| ARCH-4 | Transport and operation state were mixed | A callback returns terminal `TransportResult` for one physical attempt. Its `WriteEffect` also reports command-phase acceptance for write-read calls. Operation-level progress is represented only by the cooperative operation API. | `TransportCode`, byte counts, `WriteEffect`, `OperationPhase`, and `OperationOutcome`; short-count, command-effect, and timeout-distinction tests. | **Resolved in v3** |
 | ARCH-5 | Ambiguous writes lacked reconciliation | Per-attempt write effect is explicit. A possibly committed phase becomes uncertain, terminates, and never silently retries or advances to an unsafe phase. Verification/reapply is separate explicit caller policy. | `WriteEffect::NOT_ATTEMPTED/MAY_HAVE_COMMITTED`; terminal apply/verify outcome plus observed validity/mismatch evidence; ambiguous-write and phase-failure tests. | **Resolved in v3** |
 | PKG-1 | Package content and external-consumer validation were weak | `library.json` has a public-source export allowlist. The package checker rejects internal/transient files, unpacks the archive, and compiles a clean callback consumer. | `tools/check_package.py`, `tools/package_consumer.cpp`, CI package gate. | **Resolved in v3** |
 | DOC-1 | Versions, support policy, contribution text, and pinning were stale | Version generation synchronizes all metadata; README pins `v3.0.0`; security and contribution guidance are updated in this release work. | `scripts/generate_version.py check`; README migration/install sections. | **Resolved in v3** |
-| VAL-1 | Target HIL and native ESP-IDF evidence were incomplete | This was not converted into a software claim. CI builds native ESP-IDF, while real board, INT, brownout, and shared-bus evidence remains required. | `docs/release.md`, `docs/hardware_validation.md`. | **Open externally** |
+| VAL-1 | Target HIL and native ESP-IDF evidence were incomplete | This was not converted into a software claim. CI is configured to build native ESP-IDF, while real board, INT, brownout, and shared-bus evidence remains required. | `docs/release.md`, `docs/hardware_validation.md`. | **Open externally** |
+
+## Follow-up self-audit closure
+
+The implementation and this report were reread together after the first v3
+pass. The follow-up found and closed these in-scope gaps:
+
+- failed input receives now retain command-phase evidence and perform the
+  nonzero pointer park when the command was accepted or may have been accepted;
+  the original read error and failed `READ_INPUTS` phase remain primary, while
+  cleanup status is separate;
+- an explicit early `timeoutOperation()` no longer falsely sets
+  `cleanupAfterDeadline`;
+- fault tests cover ambiguous writes in every apply write phase, short-success
+  byte counts, failed input cleanup, rebind reset, health-counter saturation,
+  interrupt/settings/port helpers, and exact-once packaged consumption;
+- Arduino and native ESP-IDF guarded self-test, mixed-stress, walk, and sweep
+  paths establish the needed shadows, preload latches before enabling outputs,
+  restore latches before direction, and report restore failures;
+- transport, safe-direction, direct-register, release-support, and hardware
+  recovery wording now matches the implemented ownership boundaries, and the
+  HIL runner restores the complete example image instead of direction alone.
+
+The fixes remain bounded: no retry, queue, task, bus manager, product pin map,
+or TunnelMonitor source change was added.
 
 ## v3 API additions justified by the audit
 
@@ -126,12 +150,12 @@ The following checks were run after the v3 refactor on 2026-07-19:
 | Core framework/timing guard | PASS |
 | Arduino and ESP-IDF CLI contract checks | PASS |
 | HIL contract and parser self-tests | PASS |
-| Native fault/contract tests | PASS: 54 of 54, including injected failure at all eight apply-image transfers |
+| Native fault/contract tests | PASS: 64 of 64, including every apply phase, all ambiguous apply writes, accepted/uncertain/not-attempted failed input command cleanup, and Arduino Wire command-effect mapping |
 | PlatformIO packaged-content and clean external-consumer compile | PASS |
 | Arduino ESP32-S2 compile | PASS |
 | Arduino ESP32-S3 compile | PASS |
-| Doxygen generation | PASS |
-| Independent final integration review | APPROVED: no remaining code, API, documentation, or test blocker |
+| Doxygen generation | PASS: zero warnings |
+| Independent follow-up contract review | PASS after the identified input-failure cleanup and documentation gaps were closed |
 
 Known evidence limits:
 
@@ -145,6 +169,12 @@ Known evidence limits:
 - `v3.0.0` was not tagged or published by this work.
 
 ## Baseline v2 conclusion (superseded by the v3 disposition)
+
+Everything from this heading through the original recommendations is the
+historical audit of exact revision `46b441e44e6d43ebfaccb255a3b582122463fe94`.
+Present-tense wording and source line references in that section describe that
+v2 baseline, not the v3 tree. The v3 matrix and follow-up closure above are the
+current disposition.
 
 PCA9555 v2.0.0 is not ready to be added to TunnelMonitor-node as a production dependency without refactoring.
 
@@ -174,6 +204,9 @@ TunnelMonitor's architecture documents are authoritative for the application. In
 - library initialization and recovery must be passive, and a library must not independently latch an offline policy (`../../TunnelMonitor-node/docs/guidelines/dependency_policy.md:23-27`);
 - the I2C owner normally advances bounded device work one transfer per poll (`../../TunnelMonitor-node/docs/guidelines/i2c_peripherals.md:100-134`);
 - production dependencies must be exact-pinned and stay behind narrow project adapters (`../../TunnelMonitor-node/docs/guidelines/dependency_policy.md:8-12,64-83`).
+- TunnelMonitor already has an owner-private adapter precedent in
+  `../../TunnelMonitor-node/src/i2c/Rv3032Adapter.cpp:184,398`; PCA9555 should
+  follow that ownership shape rather than expose itself to unrelated modules.
 
 No TunnelMonitor-node source or documentation was changed.
 
@@ -644,7 +677,7 @@ The PCA9555 library does not need:
 
 ## Verification and release findings
 
-### Current automated result
+### Baseline v2 automated result
 
 Audit commands passed on 2026-07-19:
 
@@ -680,7 +713,7 @@ Before TunnelMonitor field adoption, run target-board tests for:
 - INT assertion/clear behavior if INT is wired;
 - a continuous soak with reset count, uptime, queue, timeout, and recovery telemetry.
 
-### Package and consumer validation need cleanup
+### Baseline v2 package and consumer validation need cleanup
 
 The PlatformIO package currently has no curated export filter (`library.json:42-48`). The packed archive includes repository tooling and tracked build logs, while excluding `docs/` even though the packaged README links into those docs. CI checks that packing succeeds, but it does not unpack the artifact and compile a clean consumer (`.github/workflows/ci.yml:91-119`).
 

@@ -172,22 +172,22 @@ inline PCA9555::TransportResult wireWriteRead(uint8_t addr, const uint8_t* tx,
   if (wire == nullptr) {
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::IO_ERROR, 0,
-        PCA9555::WriteEffect::NOT_APPLICABLE);
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
   if ((txLen > 0 && tx == nullptr) || (rxLen > 0 && rx == nullptr)) {
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::IO_ERROR, 0,
-        PCA9555::WriteEffect::NOT_APPLICABLE);
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
   if (txLen == 0 || rxLen == 0) {
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::IO_ERROR, 0,
-        PCA9555::WriteEffect::NOT_APPLICABLE);
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
   if (txLen > 128 || rxLen > 128) {
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::IO_ERROR, 0,
-        PCA9555::WriteEffect::NOT_APPLICABLE);
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
 
   ScopedWireTimeout scopedTimeout(*wire, timeoutMs);
@@ -196,19 +196,23 @@ inline PCA9555::TransportResult wireWriteRead(uint8_t addr, const uint8_t* tx,
   if (written != txLen) {
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::IO_ERROR, static_cast<int32_t>(written),
-        PCA9555::WriteEffect::NOT_APPLICABLE, 0U, 0U);
+        PCA9555::WriteEffect::NOT_ATTEMPTED, 0U, 0U);
   }
 
   uint8_t result = wire->endTransmission(false);  // Repeated start
   if (result != 0) {
-    return mapWireResult(result);
+    const PCA9555::WriteEffect commandEffect =
+        (result == 2U || result == 3U)
+            ? PCA9555::WriteEffect::NOT_ATTEMPTED
+            : PCA9555::WriteEffect::MAY_HAVE_COMMITTED;
+    return mapWireResult(result, commandEffect);
   }
 
   size_t read = wire->requestFrom(addr, static_cast<uint8_t>(rxLen));
   if (read != rxLen) {
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::IO_ERROR, static_cast<int32_t>(read),
-        PCA9555::WriteEffect::NOT_APPLICABLE, txLen, read);
+        PCA9555::WriteEffect::COMMITTED, txLen, read);
   }
 
   for (size_t i = 0; i < rxLen; ++i) {
@@ -217,7 +221,7 @@ inline PCA9555::TransportResult wireWriteRead(uint8_t addr, const uint8_t* tx,
     } else {
       return PCA9555::TransportResult::Error(
           PCA9555::TransportCode::IO_ERROR, 0,
-          PCA9555::WriteEffect::NOT_APPLICABLE, txLen, i);
+          PCA9555::WriteEffect::COMMITTED, txLen, i);
     }
   }
 

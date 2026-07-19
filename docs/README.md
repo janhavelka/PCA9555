@@ -22,6 +22,12 @@ in Doxygen comments under `include/`.
 - [Release checklist](release.md): merge, release-candidate, and
   production-claim gates.
 
+The source repository also retains
+`docs/tunnelmonitor-node-suitability-audit.md` as the architecture decision
+record for that integration review. It is repository evidence, not public
+package guidance, and is deliberately excluded from the package and generated
+API manual.
+
 ## External References
 
 - [TI PCA9555 product page](https://www.ti.com/product/PCA9555)
@@ -29,7 +35,8 @@ in Doxygen comments under `include/`.
 
 ## Removed From Permanent Docs
 
-Prompt audit reports, merge reconciliation notes, generated PDF extractions,
-and one-off implementation progress reports are intentionally not kept here.
-Those are useful during development, but they make the docs harder to scan after
-the decisions have been folded into README, tests, and API comments.
+Routine prompt transcripts, merge reconciliation notes, generated PDF
+extractions, and one-off implementation progress reports are intentionally not
+kept here. Audits that remain the traceable basis for an architecture or
+integration decision may be retained as repository-only evidence as noted
+above.

@@ -163,6 +163,8 @@ struct OperationResult {
   uint8_t uncertainPairs = PAIR_NONE;
   bool cleanupRequired = false;
   bool cleanupAttempted = false;
+  /// True only when required pointer cleanup was polled at or after the stored
+  /// whole-operation deadline. An earlier explicit timeout request stays false.
   bool cleanupAfterDeadline = false;
   ObservedState observed{};
 
@@ -319,6 +321,7 @@ class PCA9555 {
     OperationKind kind = OperationKind::NONE;
     OperationPhase phase = OperationPhase::NONE;
     OperationOutcome requestedOutcome = OperationOutcome::NONE;
+    OperationPhase requestedTerminalPhase = OperationPhase::NONE;
     Status requestedStatus = Status::Ok();
     RegisterImage expected{};
     OperationResult result{};
@@ -338,11 +341,15 @@ class PCA9555 {
                           const Status& status);
   void _recordPairObservation(uint8_t pair, uint16_t value, uint32_t nowMs);
   void _compareObserved(uint8_t pair, uint16_t expected);
-  Status _readRegs(uint8_t startReg, uint8_t* buf, size_t len, bool tracked);
+  Status _readRegs(uint8_t startReg, uint8_t* buf, size_t len, bool tracked,
+                   WriteEffect* commandEffect = nullptr);
   Status _writeRegs(uint8_t startReg, const uint8_t* buf, size_t len,
                     uint8_t affectedPair, uint16_t intended,
                     bool establishWholePair, bool tracked);
   Status _readInputPair(PortData& data, bool& readCompleted);
+  Status _readInputRegisters(uint8_t startReg, uint8_t* buf, size_t len,
+                             bool& readCompleted);
+  Status _readPin(Pin pin, Level& level, bool& readCompleted);
   Status _parkPointer();
   Status _readPair(uint8_t startReg, uint16_t& value, uint8_t pair,
                    uint32_t nowMs);
@@ -353,13 +360,15 @@ class PCA9555 {
 
   Status _mapTransportResult(const TransportResult& result,
                              size_t expectedTx, size_t expectedRx,
-                             bool write, WriteEffect& effect) const;
+                             bool registerWrite, WriteEffect& effect) const;
   Status _i2cWriteReadRaw(const uint8_t* txBuf, size_t txLen,
-                          uint8_t* rxBuf, size_t rxLen);
+                          uint8_t* rxBuf, size_t rxLen,
+                          WriteEffect& commandEffect);
   Status _i2cWriteRaw(const uint8_t* buf, size_t len,
                       WriteEffect& effect);
   Status _i2cWriteReadTracked(const uint8_t* txBuf, size_t txLen,
-                              uint8_t* rxBuf, size_t rxLen);
+                              uint8_t* rxBuf, size_t rxLen,
+                              WriteEffect& commandEffect);
   Status _i2cWriteTracked(const uint8_t* buf, size_t len,
                           WriteEffect& effect);
   Status _updateHealth(const Status& status);

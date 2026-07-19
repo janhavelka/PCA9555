@@ -126,9 +126,11 @@ uint32_t PCA9555::_nowMs() const {
 
 Status PCA9555::_mapTransportResult(const TransportResult& result,
                                     size_t expectedTx, size_t expectedRx,
-                                    bool write, WriteEffect& effect) const {
-  effect = WriteEffect::NOT_APPLICABLE;
-  if (write) {
+                                    bool registerWrite,
+                                    WriteEffect& effect) const {
+  effect = expectedTx == 0U ? WriteEffect::NOT_APPLICABLE
+                            : WriteEffect::MAY_HAVE_COMMITTED;
+  if (registerWrite) {
     if (result.code == TransportCode::OK &&
         result.completedTxBytes == expectedTx &&
         result.completedRxBytes == expectedRx) {
@@ -140,6 +142,14 @@ Status PCA9555::_mapTransportResult(const TransportResult& result,
     } else {
       effect = WriteEffect::MAY_HAVE_COMMITTED;
     }
+  } else if (expectedTx != 0U) {
+    if (result.completedTxBytes == expectedTx) {
+      effect = WriteEffect::COMMITTED;
+    } else if (result.writeEffect == WriteEffect::NOT_ATTEMPTED &&
+               result.completedTxBytes == 0U &&
+               result.completedRxBytes == 0U) {
+      effect = WriteEffect::NOT_ATTEMPTED;
+    }
   }
 
   if (result.code == TransportCode::OK) {
@@ -147,7 +157,7 @@ Status PCA9555::_mapTransportResult(const TransportResult& result,
         result.completedRxBytes == expectedRx) {
       return Status::Ok();
     }
-    if (write && effect != WriteEffect::NOT_ATTEMPTED) {
+    if (registerWrite && effect != WriteEffect::NOT_ATTEMPTED) {
       effect = WriteEffect::MAY_HAVE_COMMITTED;
     }
     return Status::Error(Err::I2C_ERROR, "incomplete successful transport",
@@ -172,15 +182,18 @@ Status PCA9555::_mapTransportResult(const TransportResult& result,
 }
 
 Status PCA9555::_i2cWriteReadRaw(const uint8_t* txBuf, size_t txLen,
-                                 uint8_t* rxBuf, size_t rxLen) {
+                                 uint8_t* rxBuf, size_t rxLen,
+                                 WriteEffect& commandEffect) {
   const Status bound = _boundStatus();
-  if (!bound.ok()) return bound;
+  if (!bound.ok()) {
+    commandEffect = WriteEffect::NOT_ATTEMPTED;
+    return bound;
+  }
   const uint32_t timeout = _operationTimeoutActive ? _callbackTimeoutMs
                                                     : _config.i2cTimeoutMs;
   const TransportResult result = _config.i2cWriteRead(
       _config.i2cAddress, txBuf, txLen, rxBuf, rxLen, timeout, _config.i2cUser);
-  WriteEffect ignored = WriteEffect::NOT_APPLICABLE;
-  return _mapTransportResult(result, txLen, rxLen, false, ignored);
+  return _mapTransportResult(result, txLen, rxLen, false, commandEffect);
 }
 
 Status PCA9555::_i2cWriteRaw(const uint8_t* buf, size_t len,
@@ -212,8 +225,10 @@ Status PCA9555::_updateHealth(const Status& status) {
 }
 
 Status PCA9555::_i2cWriteReadTracked(const uint8_t* txBuf, size_t txLen,
-                                     uint8_t* rxBuf, size_t rxLen) {
-  return _updateHealth(_i2cWriteReadRaw(txBuf, txLen, rxBuf, rxLen));
+                                     uint8_t* rxBuf, size_t rxLen,
+                                     WriteEffect& commandEffect) {
+  return _updateHealth(
+      _i2cWriteReadRaw(txBuf, txLen, rxBuf, rxLen, commandEffect));
 }
 
 Status PCA9555::_i2cWriteTracked(const uint8_t* buf, size_t len,
@@ -304,7 +319,10 @@ void PCA9555::_syncObservedRegister(uint8_t reg, uint8_t value,
 }
 
 Status PCA9555::_readRegs(uint8_t startReg, uint8_t* buf, size_t len,
-                          bool tracked) {
+                          bool tracked, WriteEffect* commandEffect) {
+  if (commandEffect != nullptr) {
+    *commandEffect = WriteEffect::NOT_ATTEMPTED;
+  }
   const Status bound = _boundStatus();
   if (!bound.ok()) return bound;
   if (_operation.active && !_insideOperationTransfer) {
@@ -315,8 +333,12 @@ Status PCA9555::_readRegs(uint8_t startReg, uint8_t* buf, size_t len,
     return Status::Error(Err::INVALID_PARAM, "invalid register read");
   }
   const uint8_t command = startReg;
-  return tracked ? _i2cWriteReadTracked(&command, 1U, buf, len)
-                 : _i2cWriteReadRaw(&command, 1U, buf, len);
+  WriteEffect localEffect = WriteEffect::NOT_ATTEMPTED;
+  const Status status = tracked
+      ? _i2cWriteReadTracked(&command, 1U, buf, len, localEffect)
+      : _i2cWriteReadRaw(&command, 1U, buf, len, localEffect);
+  if (commandEffect != nullptr) *commandEffect = localEffect;
+  return status;
 }
 
 Status PCA9555::_writeRegs(uint8_t startReg, const uint8_t* buf, size_t len,
@@ -384,13 +406,32 @@ Status PCA9555::_parkPointer() {
 }
 
 Status PCA9555::_readInputPair(PortData& data, bool& readCompleted) {
+  uint8_t values[2] = {0U, 0U};
+  const Status status = _readInputRegisters(
+      cmd::REG_INPUT_PORT_0, values, 2U, readCompleted);
+  if (readCompleted) {
+    const uint16_t value = static_cast<uint16_t>(
+        values[0] | (static_cast<uint16_t>(values[1]) << 8U));
+    data = PortData::fromCombined(value);
+    _recordPairObservation(PAIR_INPUTS, value, _nowMs());
+  } else {
+    _observed.validPairs = static_cast<uint8_t>(
+        _observed.validPairs & ~PAIR_INPUTS);
+  }
+  return status;
+}
+
+Status PCA9555::_readInputRegisters(uint8_t startReg, uint8_t* buf,
+                                    size_t len, bool& readCompleted) {
   readCompleted = false;
-  uint16_t value = 0U;
-  Status status = _readPair(cmd::REG_INPUT_PORT_0, value, PAIR_INPUTS, _nowMs());
-  if (!status.ok()) return status;
-  data = PortData::fromCombined(value);
-  readCompleted = true;
-  return _parkPointer();
+  WriteEffect commandEffect = WriteEffect::NOT_ATTEMPTED;
+  const Status readStatus =
+      _readRegs(startReg, buf, len, true, &commandEffect);
+  readCompleted = readStatus.ok();
+  if (commandEffect == WriteEffect::NOT_ATTEMPTED) return readStatus;
+
+  const Status cleanupStatus = _parkPointer();
+  return readStatus.ok() ? cleanupStatus : readStatus;
 }
 
 Status PCA9555::probe() {
@@ -401,7 +442,9 @@ Status PCA9555::probe() {
   }
   uint8_t value = 0U;
   const uint8_t reg = cmd::REG_CONFIG_PORT_0;
-  Status status = _i2cWriteReadRaw(&reg, 1U, &value, 1U);
+  WriteEffect commandEffect = WriteEffect::NOT_ATTEMPTED;
+  Status status =
+      _i2cWriteReadRaw(&reg, 1U, &value, 1U, commandEffect);
   if (status.code == Err::I2C_NACK_ADDR) {
     return Status::Error(Err::DEVICE_NOT_FOUND, "address did not respond",
                          status.detail);
@@ -561,6 +604,7 @@ Status PCA9555::_requestTerminal(uint32_t requestId,
     if (!_operation.terminalRequested) {
       _operation.terminalRequested = true;
       _operation.requestedOutcome = outcome;
+      _operation.requestedTerminalPhase = _operation.phase;
       _operation.requestedStatus = status;
     }
     return Status::Error(Err::IN_PROGRESS, "pointer cleanup still required");
@@ -583,6 +627,7 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
   Status status = Status::Ok();
   uint16_t value = 0U;
   const OperationPhase phase = _operation.phase;
+  bool deferredReadFailure = false;
 
   switch (phase) {
     case OperationPhase::APPLY_OUTPUTS:
@@ -671,7 +716,9 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
 
     case OperationPhase::READ_INPUTS: {
       uint8_t data[2] = {0U, 0U};
-      status = _readRegs(cmd::REG_INPUT_PORT_0, data, 2U, true);
+      WriteEffect commandEffect = WriteEffect::NOT_ATTEMPTED;
+      status = _readRegs(cmd::REG_INPUT_PORT_0, data, 2U, true,
+                         &commandEffect);
       if (status.ok()) {
         value = static_cast<uint16_t>(data[0] |
                                       (static_cast<uint16_t>(data[1]) << 8U));
@@ -684,6 +731,17 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
             _operation.result.completedPairs | PAIR_INPUTS);
         _operation.result.cleanupRequired = true;
         _operation.phase = OperationPhase::POINTER_PARK;
+      } else if (commandEffect != WriteEffect::NOT_ATTEMPTED) {
+        // The input command may be the chip's active register pointer even
+        // though the receive phase failed. Preserve the read failure and park
+        // the pointer as a separate, bounded cleanup transfer.
+        _operation.result.cleanupRequired = true;
+        _operation.terminalRequested = true;
+        _operation.requestedOutcome = OperationOutcome::FAILED;
+        _operation.requestedTerminalPhase = phase;
+        _operation.requestedStatus = status;
+        _operation.phase = OperationPhase::POINTER_PARK;
+        deferredReadFailure = true;
       }
       break;
     }
@@ -694,8 +752,12 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
       _operation.result.cleanupStatus = status;
       if (status.ok()) _operation.result.cleanupRequired = false;
       if (_operation.terminalRequested) {
+        const OperationPhase terminalPhase =
+            _operation.requestedTerminalPhase == OperationPhase::NONE
+                ? phase
+                : _operation.requestedTerminalPhase;
         _finishOperation(_operation.requestedOutcome,
-                         _operation.requestedStatus, phase);
+                         _operation.requestedStatus, terminalPhase);
       } else if (status.ok()) {
         _finishOperation(OperationOutcome::SUCCEEDED, Status::Ok(), phase);
       }
@@ -706,7 +768,7 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
       return Status::Error(Err::INVALID_PARAM, "invalid operation phase");
   }
 
-  if (!status.ok() && _operation.active) {
+  if (!status.ok() && _operation.active && !deferredReadFailure) {
     const bool indeterminate = _lastWriteEffect == WriteEffect::MAY_HAVE_COMMITTED &&
         (phase == OperationPhase::APPLY_OUTPUTS ||
          phase == OperationPhase::APPLY_POLARITY ||
@@ -747,6 +809,7 @@ Status PCA9555::pollOperation(uint32_t requestId, uint32_t nowMs,
     if (!_operation.terminalRequested) {
       _operation.terminalRequested = true;
       _operation.requestedOutcome = OperationOutcome::TIMED_OUT;
+      _operation.requestedTerminalPhase = _operation.phase;
       _operation.requestedStatus =
           Status::Error(Err::TIMEOUT, "operation deadline expired");
     }
@@ -788,13 +851,11 @@ Status PCA9555::pollOperation(uint32_t requestId, uint32_t nowMs,
                        _operation.phase);
       break;
     }
-    const bool timeoutCleanup = cleanupOwed &&
-        _operation.terminalRequested &&
-        _operation.requestedOutcome == OperationOutcome::TIMED_OUT;
-    if ((deadline || timeoutCleanup) && cleanupOwed) {
+    if (deadline && cleanupOwed) {
       if (!_operation.terminalRequested) {
         _operation.terminalRequested = true;
         _operation.requestedOutcome = OperationOutcome::TIMED_OUT;
+        _operation.requestedTerminalPhase = _operation.phase;
         _operation.requestedStatus =
             Status::Error(Err::TIMEOUT, "operation deadline expired");
       }
@@ -869,37 +930,44 @@ Status PCA9555::readInput(Port port, uint8_t& value) {
   const uint8_t reg = port == Port::PORT_0 ? cmd::REG_INPUT_PORT_0
                                            : cmd::REG_INPUT_PORT_1;
   uint8_t observed = 0U;
-  Status status = _readRegs(reg, &observed, 1U, true);
-  if (!status.ok()) return status;
-  value = observed;
-  _syncObservedRegister(reg, observed, _nowMs());
-  return _parkPointer();
+  bool readCompleted = false;
+  const Status status =
+      _readInputRegisters(reg, &observed, 1U, readCompleted);
+  if (readCompleted) {
+    value = observed;
+    _syncObservedRegister(reg, observed, _nowMs());
+  }
+  return status;
+}
+
+Status PCA9555::_readPin(Pin pin, Level& level, bool& readCompleted) {
+  readCompleted = false;
+  if (!isValidPin(pin)) return Status::Error(Err::INVALID_PARAM, "invalid pin");
+  uint8_t value = 0U;
+  const uint8_t reg = portOf(pin) == Port::PORT_0 ? cmd::REG_INPUT_PORT_0
+                                                  : cmd::REG_INPUT_PORT_1;
+  const Status status =
+      _readInputRegisters(reg, &value, 1U, readCompleted);
+  if (readCompleted) {
+    _syncObservedRegister(reg, value, _nowMs());
+    level = (value & static_cast<uint8_t>(1U << bitOf(pin))) != 0U
+                ? Level::HIGH_LEVEL
+                : Level::LOW_LEVEL;
+  }
+  return status;
 }
 
 Status PCA9555::readPin(Pin pin, Level& level) {
-  if (!isValidPin(pin)) return Status::Error(Err::INVALID_PARAM, "invalid pin");
-  uint8_t value = 0U;
-  const uint8_t reg = portOf(pin) == Port::PORT_0 ? cmd::REG_INPUT_PORT_0
-                                                  : cmd::REG_INPUT_PORT_1;
-  Status status = _readRegs(reg, &value, 1U, true);
-  if (!status.ok()) return status;
-  _syncObservedRegister(reg, value, _nowMs());
-  level = (value & static_cast<uint8_t>(1U << bitOf(pin))) != 0U
-              ? Level::HIGH_LEVEL
-              : Level::LOW_LEVEL;
-  return _parkPointer();
+  bool readCompleted = false;
+  return _readPin(pin, level, readCompleted);
 }
 
 Status PCA9555::readPin(Pin pin, bool& high) {
-  if (!isValidPin(pin)) return Status::Error(Err::INVALID_PARAM, "invalid pin");
-  uint8_t value = 0U;
-  const uint8_t reg = portOf(pin) == Port::PORT_0 ? cmd::REG_INPUT_PORT_0
-                                                  : cmd::REG_INPUT_PORT_1;
-  Status status = _readRegs(reg, &value, 1U, true);
-  if (!status.ok()) return status;
-  _syncObservedRegister(reg, value, _nowMs());
-  high = (value & static_cast<uint8_t>(1U << bitOf(pin))) != 0U;
-  return _parkPointer();
+  Level level = Level::LOW_LEVEL;
+  bool readCompleted = false;
+  const Status status = _readPin(pin, level, readCompleted);
+  if (readCompleted) high = level == Level::HIGH_LEVEL;
+  return status;
 }
 
 Status PCA9555::writeOutputs(const PortData& data) {
@@ -1252,11 +1320,15 @@ Status PCA9555::readRegisters(uint8_t startReg, uint8_t* buf, size_t len) {
     return Status::Error(Err::INVALID_PARAM, "invalid register read");
   }
   uint8_t values[2] = {0U, 0U};
-  const Status status = _readRegs(startReg, values, len, true);
-  if (!status.ok()) return status;
+  const uint8_t pair = pairForRegister(startReg);
+  bool readCompleted = false;
+  const Status status = pair == PAIR_INPUTS
+      ? _readInputRegisters(startReg, values, len, readCompleted)
+      : _readRegs(startReg, values, len, true);
+  if (pair != PAIR_INPUTS) readCompleted = status.ok();
+  if (!readCompleted) return status;
   for (size_t i = 0U; i < len; ++i) buf[i] = values[i];
   const uint32_t nowMs = _nowMs();
-  const uint8_t pair = pairForRegister(startReg);
   if (len == 2U) {
     const uint16_t value = (startReg & 0x01U) == 0U
         ? static_cast<uint16_t>(values[0] |
@@ -1267,8 +1339,7 @@ Status PCA9555::readRegisters(uint8_t startReg, uint8_t* buf, size_t len) {
   } else {
     _syncObservedRegister(startReg, values[0], nowMs);
   }
-  if (pair == PAIR_INPUTS) return _parkPointer();
-  return Status::Ok();
+  return status;
 }
 
 Status PCA9555::writeRegister(uint8_t reg, uint8_t value) {

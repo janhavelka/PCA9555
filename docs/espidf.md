@@ -16,6 +16,12 @@ It does not retry, recover the bus, or return an operation-level in-progress
 value. When `Config::nowMs` is null, health timestamps remain `0`. Framework
 time sources belong in examples or application glue.
 
+For `i2cWriteRead`, the adapter reports whether the command write phase was
+definitely not attempted, definitely accepted, or may have been accepted. A
+combined native transfer failure is conservative when the framework cannot
+identify the failed phase. This lets input APIs decide whether the mandatory
+nonzero pointer-park cleanup is owed without guessing that a failure was safe.
+
 ## Native Example
 
 `examples/espidf_basic` is a native ESP-IDF application:

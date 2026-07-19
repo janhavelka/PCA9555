@@ -46,6 +46,9 @@ static_assert(sizeof(::PCA9555::TransportCode) == sizeof(uint8_t),
               "Transport codes have fixed width");
 static_assert(sizeof(::PCA9555::WriteEffect) == sizeof(uint8_t),
               "Write effects have fixed width");
+static_assert(::PCA9555::TransportResult::Ok(1U, 1U).writeEffect ==
+                  ::PCA9555::WriteEffect::COMMITTED,
+              "successful write-read proves its command phase committed");
 static_assert(sizeof(::PCA9555::Pin) == sizeof(uint8_t),
               "Pin values have fixed width");
 static_assert(sizeof(::PCA9555::OperationKind) == sizeof(uint8_t),

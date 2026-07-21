@@ -1068,28 +1068,27 @@ Key changes across datasheet revisions that may affect designs based on older re
 
 ---
 
-## 19. Raw Implementation Checklist
+## 19. Board Integration Review Points
 
-- [ ] **Hardware address**: Set A0, A1, A2 pins to VCC or GND; connect directly (no floating).
-- [ ] **I2C pullups**: Add external pullup resistors on SDA and SCL. Typical values: 2.2 kΩ to 10 kΩ depending on bus capacitance and speed.
-- [ ] **INT pullup**: Add external pullup on INT line (10 kΩ typical).
-- [ ] **Bypass capacitor**: Place 0.1 μF (min) and optionally 10 μF capacitor close to VCC/GND pins.
-- [ ] **POR wait**: Ensure VCC is stable above VPORR (max 1.5 V) before first I2C transaction. No explicit delay documented — just ensure supply is stable.
-- [ ] **Verify communication**: Read any register (e.g., Configuration Port 0 at 0x06, expect 0xFF) to confirm I2C connectivity.
-- [ ] **Set output latch values before configuring as outputs**: Write Output Port registers (0x02, 0x03) to desired latch values before writing Configuration registers (0x06, 0x07) with 0 bits to avoid transient glitches.
-- [ ] **Configure polarity inversion** if needed: Write to 0x04, 0x05.
-- [ ] **Configure pin directions**: Write to 0x06, 0x07. Bit=1 → input, Bit=0 → output.
-- [ ] **Clear pending interrupts**: Read Input Port 0 (0x00) and Input Port 1 (0x01).
-- [ ] **Apply interrupt errata workaround**: After reading input ports, write a command byte ≠ 0x00 (e.g., dummy write of command byte 0x02) before communicating with other devices on the bus.
-- [ ] **Service interrupts**: On INT falling edge, read the relevant Input Port register(s). Both ports must be read separately to clear interrupts from each port.
-- [ ] **Re-apply errata workaround** after each input port read operation.
-- [ ] **Output read-back**: To verify output pin states, read the Input Port register (not the Output Port register, which returns the flip-flop value, not the actual pin).
-- [ ] **Handle output-to-input transitions**: Be aware a false interrupt may occur when changing Configuration bits from 0 to 1.
-- [ ] **Burst operations**: Use auto-increment (within register pairs) for efficient 2-byte reads/writes to both ports in one transaction.
-- [ ] **Do not float address pins**: A0, A1, A2 must be connected to VCC or GND.
-- [ ] **Current budget**: Ensure total sink current per port ≤ 100 mA, total source per port ≤ 80 mA, device total source ≤ 160 mA.
-- [ ] **Battery applications**: Minimize standby current by ensuring input pins are at VCC level (not floating low or driven low) when possible.
-- [ ] **No software reset available**: If device enters an unknown state, the only recovery is power cycling VCC below VPORF then back up.
+These are per-board review points, not unfinished library tasks:
+
+- **Hardware address**: Tie A0, A1, and A2 to VCC or GND. Do not leave them floating.
+- **I2C pull-ups**: Add external pull-up resistors on SDA and SCL. Select values for bus capacitance and speed; 2.2 kΩ to 10 kΩ is a common range.
+- **INT pull-up**: Add an external pull-up on INT when the signal is used.
+- **Bypass capacitor**: Place at least 0.1 μF close to VCC/GND; add board-appropriate bulk capacitance where needed.
+- **POR conditions**: Ensure VCC is stable above VPORR before the first transaction. The datasheet does not specify a fixed post-threshold delay.
+- **Address response and defaults**: An ACK proves only address response. Check Configuration `0xFF/0xFF` only after a confirmed PCA9555 power cycle; retained state is valid after an MCU-only reset.
+- **Safe output enable**: Write Output registers `0x02/0x03` before clearing Configuration bits in `0x06/0x07`.
+- **Polarity**: Write `0x04/0x05` only when input inversion is explicitly required.
+- **Direction encoding**: Configuration bit `1` means input; `0` means push-pull output.
+- **Interrupt clearing**: Read both Input registers when both port sources must be cleared.
+- **Interrupt errata**: After an input read, write a nonzero command such as `0x02` before another target read can occur on the shared bus.
+- **Physical output verification**: Read Input registers for sampled pin level. Output-register reads return latch state only.
+- **Output-to-input transitions**: Account for possible false interrupt behavior when Configuration bits change from `0` to `1`.
+- **Pair transfers**: Use pair-local auto-increment for bounded two-byte reads and writes.
+- **Current budget**: Respect per-pin, per-port, and whole-device sink/source limits.
+- **Low-power use**: Inputs held low draw current through the internal pull-up; define unused-pin states deliberately.
+- **Reset and reconciliation**: A true PCA9555 reset requires VCC to cross the POR thresholds. Software can apply a known register image, but that is reconciliation, not reset.
 
 ---
 

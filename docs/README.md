@@ -15,8 +15,8 @@ and API contracts live in Doxygen comments under `include/PCA9555/`.
 - [Hardware validation](hardware_validation.md): HIL runner usage, target run
   template, evidence checklist, and hardware validation matrix.
 - [HIL validation summary](reports/hil-validation-summary-20260625.md):
-  compact result of the June 2026 COM5 hardware attempts and the remaining
-  serial-channel blocker.
+  historical v2-era result of the June 2026 COM5 attempts and the recorded
+  serial-channel blocker. It is not current v3 hardware evidence.
 - [ESP-IDF notes](espidf.md): native ESP-IDF component/example boundary,
   transport ownership, and static contract checks.
 - [Release checklist](release.md): merge, release-candidate, and
@@ -52,11 +52,3 @@ API manual.
 
 - [TI PCA9555 product page](https://www.ti.com/product/PCA9555)
 - [TI PCA9555 datasheet](https://www.ti.com/lit/ds/symlink/pca9555.pdf)
-
-## Removed From Permanent Docs
-
-Routine prompt transcripts, merge reconciliation notes, generated PDF
-extractions, and one-off implementation progress reports are intentionally not
-kept here. Audits that remain the traceable basis for an architecture or
-integration decision may be retained as repository-only evidence as noted
-above.

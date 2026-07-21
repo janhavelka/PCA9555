@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the documentation index.
 - Updated contribution and release guidance so Doxygen must complete without
   warnings and generated HTML remains an ignored local artifact.
+- Removed the superseded v2 refactor plan from the live TunnelMonitor
+  suitability record, clarified that the retained June HIL summary is
+  historical v2 evidence, and changed generic board-review checkboxes so they
+  are not mistaken for unfinished library work.
 
 ## [3.0.0] - 2026-07-19
 

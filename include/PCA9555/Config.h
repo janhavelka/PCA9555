@@ -29,7 +29,9 @@ enum class WriteEffect : uint8_t {
 
 /// Typed terminal outcome returned by an injected transport callback.
 struct TransportResult {
+  /// Framework-neutral terminal transport classification.
   TransportCode code = TransportCode::IO_ERROR;
+  /// Adapter-defined static numeric detail for diagnostics.
   int32_t detail = 0;
   /// For i2cWrite, describes register-data mutation after the leading command.
   /// For i2cWriteRead, describes acceptance of the command write phase.
@@ -39,8 +41,10 @@ struct TransportResult {
   /// RX bytes known returned by the device.
   size_t completedRxBytes = 0;
 
+  /// Return true only for a complete successful transport attempt.
   constexpr bool ok() const { return code == TransportCode::OK; }
 
+  /// Construct a successful result with exact completed byte counts.
   static constexpr TransportResult Ok(size_t txBytes, size_t rxBytes) {
     return TransportResult{
         TransportCode::OK, 0,
@@ -48,6 +52,7 @@ struct TransportResult {
         txBytes, rxBytes};
   }
 
+  /// Construct a failed result with conservative transfer evidence.
   static constexpr TransportResult Error(
       TransportCode error, int32_t detailCode = 0,
       WriteEffect effect = WriteEffect::MAY_HAVE_COMMITTED,
@@ -71,21 +76,31 @@ using I2cWriteReadFn = TransportResult (*)(
 /// Optional monotonic uint32_t millisecond source for synchronous health stamps.
 using NowMsFn = uint32_t (*)(void* user);
 
+/// Minimum accepted per-callback timeout.
 static constexpr uint32_t MIN_I2C_TIMEOUT_MS = 1UL;
+/// Maximum accepted per-callback timeout.
 static constexpr uint32_t MAX_I2C_TIMEOUT_MS = 1000UL;
+/// Default per-callback timeout used by Config.
 static constexpr uint32_t DEFAULT_I2C_TIMEOUT_MS = 50UL;
 
 /// Passive driver binding. Context pointers and callbacks must remain valid
 /// until detach()/end() or a later successful bind().
 struct Config {
+  /// Required one-attempt write callback.
   I2cWriteFn i2cWrite = nullptr;
+  /// Required one-attempt repeated-start write-read callback.
   I2cWriteReadFn i2cWriteRead = nullptr;
+  /// Opaque context forwarded to both I2C callbacks.
   void* i2cUser = nullptr;
 
+  /// Optional monotonic time callback used only for health timestamps.
   NowMsFn nowMs = nullptr;
+  /// Opaque context forwarded to nowMs.
   void* timeUser = nullptr;
 
+  /// PCA9555 7-bit address in the inclusive range 0x20 through 0x27.
   uint8_t i2cAddress = 0x20;
+  /// Per-callback timeout in milliseconds.
   uint32_t i2cTimeoutMs = DEFAULT_I2C_TIMEOUT_MS;
 };
 

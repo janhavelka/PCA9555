@@ -28,7 +28,7 @@ field claims. A host test or compile result is not hardware evidence.
 | ESP32-S2 Arduino build | `python -m platformio run -e esp32s2dev` | PASS |
 | ESP32-S3 Arduino build | `python -m platformio run -e esp32s3dev` | PASS |
 | Packaged external consumer | `python tools/check_package.py` | Export allowlist and clean consumer compile PASS |
-| API documentation | `doxygen Doxyfile` | Exit 0; review warnings |
+| API documentation | `doxygen Doxyfile` | Exit 0 with no warnings; undocumented public symbols and documentation errors are fatal |
 | Documentation review | README, changelog, public headers, `docs/` | Lifecycle, bounds, failures, migration, and validation status agree |
 | Clean artifacts | `git status --short` after validation | No generated build/package output added |
 
@@ -61,7 +61,7 @@ Before creating a release candidate or final tag:
 4. Confirm `library.json`, `idf_component.yml`, Doxygen, and generated
    `Version.h` all report `3.0.0`.
 5. Confirm the public package does not contain tests, CI, internal audit files,
-   transient logs, or repository-control files.
+   transient logs, generated Doxygen HTML, or repository-control files.
 6. Tag only the reviewed commit as `v3.0.0`.
 
 For external integrations, pin the exact tag or an immutable audited commit.

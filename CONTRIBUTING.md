@@ -26,8 +26,13 @@ python tools/check_package.py
 doxygen Doxyfile
 ```
 
-6. Review `git status --short` and the final diff for generated artifacts or
-   unrelated user changes.
+`doxygen Doxyfile` is strict: undocumented public symbols and documentation
+errors fail the command. Generated output under `docs/doxygen/` is local and
+ignored; do not add it to a commit or package.
+
+6. Review `git status --short`, `git diff --check`, and the final diff for
+   generated artifacts, broken relative documentation links, or unrelated user
+   changes.
 
 ## Engineering rules
 

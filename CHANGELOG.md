@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Completed per-symbol Doxygen descriptions for the public transport, status,
+  state, lifecycle, cooperative-operation, register, and health contracts.
+- Narrowed generated API documentation to public headers and durable project
+  guides; undocumented public symbols and documentation errors now fail the
+  Doxygen gate instead of being hidden by `EXTRACT_ALL`.
+- Added a concrete status/error guide, input-data-versus-pointer-cleanup rule,
+  generated-documentation workflow, and clearer document ownership to README
+  and the documentation index.
+- Updated contribution and release guidance so Doxygen must complete without
+  warnings and generated HTML remains an ignored local artifact.
+
 ## [3.0.0] - 2026-07-19
 
 ### Added

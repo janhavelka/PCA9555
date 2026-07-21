@@ -116,6 +116,30 @@ Short successful transfers are rejected by the driver.
 `Config::i2cTimeoutMs` bounds each callback. It does not configure the bus or
 replace the whole-operation deadline.
 
+## Error handling
+
+Every fallible API returns `Status`. The driver never logs, throws, retries, or
+turns a failed callback into success. `Status::msg` always points to static
+storage; `Status::detail` carries error-specific numeric evidence.
+
+| Status | Meaning and caller action |
+| --- | --- |
+| `INVALID_CONFIG`, `INVALID_PARAM`, `NOT_INITIALIZED` | Local validation or binding failure. No callback is invoked. |
+| `BUSY` | Another operation owns the device, a result is pending, or the request ID does not match. Inspect `BusyDetail`; do not bypass ownership. |
+| `DEVICE_NOT_FOUND` | Explicit `probe()` received an address NACK. This is address-response evidence, not chip identity. |
+| `I2C_NACK_ADDR`, `I2C_NACK_DATA`, `I2C_TIMEOUT`, `I2C_BUS`, `I2C_ERROR` | One transport callback failed. The adapter detail is retained and health is updated for tracked calls. |
+| `TIMEOUT` | The caller-owned cooperative operation deadline expired or the caller explicitly requested timeout. It is distinct from one callback timing out. |
+| `SHADOW_INVALID`, `STATE_UNCERTAIN` | Cached read-modify-write is unsafe. Verify or apply a complete caller-owned image before continuing. |
+| `VERIFY_MISMATCH` | Readback did not match the complete expected image. Inspect `OperationResult::mismatchPairs`. |
+| `IN_PROGRESS`, `NO_RESULT`, `CANCELLED` | Cooperative lifecycle evidence; keep the exact request ID and consume each terminal result once. |
+
+Read output parameters only when the corresponding receive completed. Input
+APIs deliberately retain valid received data even if the following mandatory
+pointer park fails; in that case the returned `Status` reports the park failure
+while the data output is valid. Cooperative callers use
+`OperationResult::observed.valid(PAIR_INPUTS)` and the cleanup fields to make
+the same distinction explicitly.
+
 ## Typed synchronous APIs
 
 ```cpp
@@ -316,6 +340,24 @@ The `recover` CLI spelling is retained for operator familiarity, but it now
 means: apply the example's explicit image of high output latches, normal
 polarity, and all pins input. It is application policy, not a library bus
 recovery API.
+
+## Documentation
+
+The documentation index at `docs/README.md` separates public API guidance,
+chip/register facts, release gates, hardware evidence, and repository-only
+architecture records. Public API details are maintained in the headers under
+`include/PCA9555/`.
+
+Generate the local HTML reference with:
+
+```bash
+doxygen Doxyfile
+```
+
+Open `docs/doxygen/html/index.html` after generation. Generated HTML is ignored
+by Git and is not shipped in the library package. Doxygen treats undocumented
+public symbols and documentation errors as failures; internal example helpers
+are intentionally outside the generated API surface.
 
 See the [release checklist](docs/release.md) for current automated gates and
 the [hardware validation runbook](docs/hardware_validation.md) for evidence that

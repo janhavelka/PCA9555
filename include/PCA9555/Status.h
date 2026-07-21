@@ -68,19 +68,29 @@ enum class BusyDetail : int32_t {
 
 /// Status returned by all fallible public operations.
 struct Status {
+  /// Stable error classification.
   Err code = Err::OK;
+  /// Error-specific numeric evidence; interpretation depends on code.
   int32_t detail = 0;
   const char* msg = "";  ///< Static storage only.
 
+  /// Construct the default non-error status.
   constexpr Status() = default;
+  /// Construct a status from explicit static evidence.
   constexpr Status(Err c, int32_t d, const char* m) : code(c), detail(d), msg(m) {}
 
+  /// Return true only when code is Err::OK.
   constexpr bool ok() const { return code == Err::OK; }
+  /// Test for one exact error code.
   constexpr bool is(Err err) const { return code == err; }
+  /// Return true when cooperative work remains active.
   constexpr bool inProgress() const { return code == Err::IN_PROGRESS; }
+  /// Explicit boolean conversion equivalent to ok().
   constexpr explicit operator bool() const { return ok(); }
 
+  /// Construct the canonical success status.
   static constexpr Status Ok() { return Status{Err::OK, 0, "OK"}; }
+  /// Construct a failure status with a static message and optional detail.
   static constexpr Status Error(Err err, const char* message,
                                 int32_t detailCode = 0) {
     return Status{err, detailCode, message};

@@ -7,22 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- Reduced live planning documentation to current hardware-validation and
-  external-integration work; completed v3 release and audit evidence remains in
-  Git history.
-- Condensed HIL output to reviewed Markdown and machine-readable JSON summaries
-  instead of aggregate and per-command CLI transcripts.
-- Moved the AI-coder datasheet extraction under `docs/` and normalized
-  `CODEOWNERS` under `.github/`.
-
-### Removed
-
-- The historical v2 HIL report and completed TunnelMonitor audit after retaining
-  the still-actionable serial-channel constraint in the hardware guide. The
-  comprehensive datasheet extraction remains as intentional AI-coder context.
-
 ## [3.0.0] - 2026-07-22
 
 ### Added
@@ -93,6 +77,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   suitability record, clarified that the retained June HIL summary is
   historical v2 evidence, and changed generic board-review checkboxes so they
   are not mistaken for unfinished library work.
+- Reduced live planning documentation to current hardware-validation and
+  external-integration work; completed v3 release and audit evidence remains in
+  Git history.
+- Condensed HIL output to reviewed Markdown and machine-readable JSON summaries
+  instead of aggregate and per-command CLI transcripts.
+- Moved the AI-coder datasheet extraction under `docs/` and normalized
+  `CODEOWNERS` under `.github/`.
 
 ### Removed
 
@@ -110,6 +101,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The broad v2 `hardwareStateDirty()` and `hardwareStateDirtyError` spellings.
   Use `uncertainPairs()` for ambiguous write effects and `shadowValidPairs()`
   for the separate read-modify-write validity fence.
+- The historical v2 HIL report and completed TunnelMonitor audit after retaining
+  the still-actionable serial-channel constraint in the hardware guide. The
+  comprehensive datasheet extraction remains as intentional AI-coder context.
 
 ## [2.0.0] - 2026-06-25
 

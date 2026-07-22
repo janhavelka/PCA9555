@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Reduced live planning documentation to current hardware-validation and
+  external-integration work; completed v3 release and audit evidence remains in
+  Git history.
+- Condensed HIL output to reviewed Markdown and machine-readable JSON summaries
+  instead of aggregate and per-command CLI transcripts.
+
+### Removed
+
+- The redundant full datasheet extraction and historical v2 HIL report after
+  preserving their actionable chip facts and serial-channel constraint in the
+  maintained guides.
+
 ## [3.0.0] - 2026-07-22
 
 ### Added
@@ -135,7 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public documentation now distinguishes output latch state, input-register sense, configuration direction, and physical pin behavior.
 - Release wording is scoped to production-oriented hardening until the hardware validation matrix is executed.
 - Transient prompt files and detailed one-off HIL runner reports were removed;
-  the durable COM5 finding is preserved in `docs/reports/hil-validation-summary-20260625.md`.
+  the durable COM5 constraint is summarized in `docs/hardware_validation.md`.
 
 ### Fixed
 

@@ -47,9 +47,7 @@ INPUT                  = README.md \
                          docs/espidf.md \
                          docs/hardware_validation.md \
                          docs/register_reference.md \
-                         docs/release.md \
-                         docs/reports/hil-validation-summary-20260625.md \
-                         PCA9555_io_expander_implementation_manual.md
+                         docs/release.md
 FILE_PATTERNS          = *.h *.cpp *.md
 RECURSIVE              = YES
 EXCLUDE                = docs/tunnelmonitor-node-suitability-audit.md

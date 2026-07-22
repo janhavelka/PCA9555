@@ -321,7 +321,6 @@ def make_aggregate_stats(result_counts: dict[str, int], failures: int = 0):
         max_latency_s=0.1,
         effective_hz=1.0,
         stop_reason="duration_limit",
-        transcript_path=None,
     )
 
 
@@ -419,7 +418,16 @@ def test_dry_run_artifacts_include_classifier_and_timing_options() -> None:
             "summary command rows should include classifier",
         )
         summary_md = (log_dirs[0] / "summary.md").read_text(encoding="utf-8")
-        assert_true("| Command | Classifier |" in summary_md, "summary table should include classifier")
+        assert_true("## Results" in summary_md, "summary should include condensed results")
+        assert_true("Raw CLI output is not retained" in summary_md, "summary should document bounded evidence")
+        assert_true(
+            not (log_dirs[0] / "serial_transcript.txt").exists(),
+            "dry-run should not create a serial transcript",
+        )
+        assert_true(
+            not (log_dirs[0] / "transcripts").exists(),
+            "dry-run should not create per-command transcripts",
+        )
 
 
 class ZeroWaitingSerial:

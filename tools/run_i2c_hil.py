@@ -55,12 +55,6 @@ class CommandSpec:
     notes: str = ""
     classifier: str = "generic"
 
-    @property
-    def command_id(self) -> str:
-        cleaned = re.sub(r"[^A-Za-z0-9]+", "_", self.command.strip()).strip("_")
-        return cleaned.lower() or "command"
-
-
 @dataclasses.dataclass
 class CommandResult:
     command: str
@@ -72,7 +66,6 @@ class CommandResult:
     elapsed_s: float
     notes: str
     evidence: list[str]
-    transcript_path: str | None = None
 
 
 @dataclasses.dataclass
@@ -92,7 +85,6 @@ class AggregateStats:
     max_latency_s: float | None
     effective_hz: float
     stop_reason: str
-    transcript_path: str | None = None
     serial_reopens: int = 0
 
 
@@ -106,7 +98,7 @@ DEFAULT_SAFE_COMMANDS: tuple[CommandSpec, ...] = (
     ),
     CommandSpec(
         command="help",
-        purpose="Capture CLI command surface in the transcript.",
+        purpose="Verify the CLI command surface.",
         expected=(r"PCA9555 CLI Help",),
         timeout_s=3.0,
         classifier="section",
@@ -322,7 +314,6 @@ def create_log_dir(base: pathlib.Path) -> pathlib.Path:
         candidate = base / f"{stamp}{suffix}"
         try:
             candidate.mkdir(parents=True, exist_ok=False)
-            (candidate / "transcripts").mkdir(exist_ok=False)
             return candidate
         except FileExistsError:
             continue
@@ -401,7 +392,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "Zero disables. USB CDC boards may reset when the port is reopened."
         ),
     )
-    parser.add_argument("--verbose", action="store_true", help="Print command progress while still saving transcripts.")
+    parser.add_argument("--verbose", action="store_true", help="Print command progress.")
     parser.add_argument("--include-output-tests", action="store_true")
     parser.add_argument("--include-soak", action="store_true")
     parser.add_argument("--include-fault-tests", action="store_true")
@@ -1048,7 +1039,6 @@ def run_serial_command(
     prompt: str,
     idle_gap_s: float,
     allow_idle_completion: bool,
-    transcript_path: pathlib.Path | None,
 ) -> tuple[CommandResult, str]:
     start = time.monotonic()
     ser.write((spec.command + "\n").encode("utf-8"))
@@ -1062,8 +1052,6 @@ def run_serial_command(
         completion_tokens=spec.completion_tokens,
     )
     elapsed = time.monotonic() - start
-    if transcript_path is not None:
-        transcript_path.write_text(strip_ansi(raw), encoding="utf-8")
     normalized = strip_ansi(raw)
     if decoded_ends_with_prompt(normalized, prompt):
         normalized = normalized[: -len(prompt)]
@@ -1079,7 +1067,6 @@ def run_serial_command(
             elapsed_s=elapsed,
             notes=spec.notes,
             evidence=evidence,
-            transcript_path=str(transcript_path) if transcript_path is not None else None,
         )
     return command_result, raw
 
@@ -1110,7 +1097,6 @@ def run_aggregate_commands(
     allow_idle_completion: bool,
     interval_s: float,
     failure_limit: int,
-    transcript_path: pathlib.Path,
     verbose: bool,
     serial_mod=None,
     args: argparse.Namespace | None = None,
@@ -1128,7 +1114,6 @@ def run_aggregate_commands(
     last_reopen_mono = started_mono
     reopen_interval_s = args.serial_reopen_interval_s if args is not None else 0.0
 
-    append_transcript(transcript_path, f"{label}:start", f"{started_wall.isoformat(timespec='seconds')}\n")
     index = 0
     while True:
         if max_commands > 0 and len(results) >= max_commands:
@@ -1148,11 +1133,6 @@ def run_aggregate_commands(
             and args is not None
             and (now - last_reopen_mono) >= reopen_interval_s
         ):
-            append_transcript(
-                transcript_path,
-                f"{label}:serial-reopen",
-                f"reopening serial after {now - last_reopen_mono:.3f}s\n",
-            )
             try:
                 ser.close()
             except Exception:
@@ -1184,15 +1164,13 @@ def run_aggregate_commands(
         index += 1
         if hasattr(ser, "reset_input_buffer"):
             ser.reset_input_buffer()
-        result, raw = run_serial_command(
+        result, _ = run_serial_command(
             ser,
             spec,
             prompt=prompt,
             idle_gap_s=idle_gap_s,
             allow_idle_completion=allow_idle_completion,
-            transcript_path=None,
         )
-        append_transcript(transcript_path, f"{label}:{result.command}", raw)
         results.append(result)
         latencies.append(result.elapsed_s)
         command_counts[result.command] = command_counts.get(result.command, 0) + 1
@@ -1231,10 +1209,8 @@ def run_aggregate_commands(
         max_latency_s=max(latencies) if latencies else None,
         effective_hz=(len(results) / elapsed) if elapsed > 0 else 0.0,
         stop_reason=stop_reason,
-        transcript_path=str(transcript_path),
         serial_reopens=serial_reopens,
     )
-    append_transcript(transcript_path, f"{label}:end", json.dumps(dataclasses.asdict(stats), indent=2) + "\n")
     return stats, results, ser
 
 
@@ -1271,7 +1247,6 @@ def aggregate_result(stats: AggregateStats) -> CommandResult:
         elapsed_s=stats.elapsed_s,
         notes="Generated by bounded repeated-command runner.",
         evidence=evidence,
-        transcript_path=stats.transcript_path,
     )
 
 
@@ -1328,60 +1303,11 @@ def exit_code_for_results(results: list[CommandResult], dry_run: bool) -> int:
     return 0
 
 
-def write_transcript_header(path: pathlib.Path, args: argparse.Namespace, command_count: int) -> None:
-    header = (
-        f"PCA9555 I2C HIL serial transcript\n"
-        f"timestamp: {_dt.datetime.now().isoformat(timespec='seconds')}\n"
-        f"port: {args.port or 'N/A'}\n"
-        f"baud: {args.baud}\n"
-        f"dry_run: {args.dry_run}\n"
-        f"boot_settle_s: {args.boot_settle_s}\n"
-        f"startup_timeout_s: {args.startup_timeout}\n"
-        f"idle_timeout_s: {args.idle_gap}\n"
-        f"serial_reopen_interval_s: {args.serial_reopen_interval_s}\n"
-        f"allow_idle_completion: {args.allow_idle_completion}\n"
-        f"commands: {command_count}\n\n"
-    )
-    path.write_text(header, encoding="utf-8")
-
-
-def append_transcript(path: pathlib.Path, command: str, raw_or_note: str) -> None:
-    with path.open("a", encoding="utf-8", errors="replace") as handle:
-        handle.write(f"\n===== COMMAND: {command} =====\n")
-        handle.write(raw_or_note)
-        if not raw_or_note.endswith("\n"):
-            handle.write("\n")
-
-
-def write_operator_checklist(path: pathlib.Path, skipped: list[CommandSpec]) -> None:
-    lines = [
-        "# PCA9555 HIL Operator Checklist",
-        "",
-        "Manual and visual checks are not serial PASS results. Mark them only after evidence is attached.",
-        "",
-        "## Manual Checks",
-        "",
-        "| Check | Purpose | Required Evidence | Result |",
-        "| --- | --- | --- | --- |",
-    ]
-    for spec in MANUAL_CHECKS:
-        lines.append(f"| `{spec.command}` | {spec.purpose} | {spec.notes} | OPERATOR_CHECK_REQUIRED |")
-    lines.extend(["", "## Skipped Unsafe Or Opt-In Commands", ""])
-    lines.extend(["| Command | Required Opt-In | Notes |", "| --- | --- | --- |"])
-    if skipped:
-        for spec in skipped:
-            lines.append(f"| `{spec.command}` | `{spec.requires_opt_in or 'manual'}` | {spec.notes} |")
-    else:
-        lines.append("| None | N/A | All requested opt-in commands were included. |")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def write_summary_files(
     log_dir: pathlib.Path,
     args: argparse.Namespace,
     results: list[CommandResult],
     skipped: list[CommandSpec],
-    artifact_paths: dict[str, str],
     aggregate_stats: list[AggregateStats],
 ) -> None:
     branch = git_output(["branch", "--show-current"])
@@ -1389,6 +1315,14 @@ def write_summary_files(
     status_short = git_output(["status", "--short"])
     verdict = final_verdict(results, args.dry_run)
     now = _dt.datetime.now().isoformat(timespec="seconds")
+    summary_json = log_dir / "summary.json"
+    summary_md = log_dir / "summary.md"
+    artifacts = {
+        "summary_json": str(summary_json),
+        "summary_md": str(summary_md),
+    }
+    if args.report:
+        artifacts["report"] = str(pathlib.Path(args.report))
     data = {
         "timestamp": now,
         "repo": str(pathlib.Path.cwd()),
@@ -1410,56 +1344,65 @@ def write_summary_files(
         "dry_run": args.dry_run,
         "final_verdict": verdict,
         "pyserial_install_hint": PYSERIAL_HINT,
-        "artifacts": artifact_paths,
-        "commands": [dataclasses.asdict(result) for result in results],
+        "artifacts": artifacts,
+        "commands": [
+            {
+                "command": result.command,
+                "classifier": result.classifier,
+                "serial_result": result.serial_result,
+                "operator_result": result.operator_result,
+                "completion_reason": result.completion_reason,
+                "elapsed_s": round(result.elapsed_s, 3),
+                "evidence": result.evidence[:6],
+            }
+            for result in results
+        ],
         "aggregate_stats": [dataclasses.asdict(stats) for stats in aggregate_stats],
-        "skipped_opt_in_commands": [dataclasses.asdict(spec) for spec in skipped],
-        "manual_checks": [dataclasses.asdict(spec) for spec in MANUAL_CHECKS],
+        "skipped_opt_in_commands": [spec.command for spec in skipped],
+        "manual_checks": [spec.command for spec in MANUAL_CHECKS],
         "identity_note": (
             "I2C ACK and scan results prove only address response. PCA9555 has no "
             "documented chip ID register, so this runner does not claim chip identity."
         ),
     }
-    (log_dir / "summary.json").write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    summary_json.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+    result_counts: dict[str, int] = {}
+    for result in results:
+        result_counts[result.serial_result] = result_counts.get(result.serial_result, 0) + 1
+    counts_text = ", ".join(f"{key}={value}" for key, value in sorted(result_counts.items())) or "none"
+    findings = [
+        result
+        for result in results
+        if result.serial_result in {"FAIL", "TIMEOUT", "SERIAL_OK_OR_REVIEW", "REVIEW_REQUIRED"}
+    ]
 
     lines = [
         "# PCA9555 I2C HIL Summary",
         "",
         f"- Date/time: {now}",
-        f"- Branch: `{branch}`",
-        f"- Commit: `{commit}`",
-        f"- Worktree: `{status_short if status_short else 'clean'}`",
-        f"- Serial port: `{args.port or 'N/A'}`",
-        f"- Baud: `{args.baud}`",
-        f"- Serial DTR: `{args.serial_dtr}`",
-        f"- Serial RTS: `{args.serial_rts}`",
-        f"- I2C address: `{args.address}`",
-        f"- Timeout override: `{args.timeout if args.timeout is not None else 'per-command defaults'}`",
-        f"- Startup timeout: `{args.startup_timeout}`",
-        f"- Idle timeout: `{args.idle_gap}`",
-        f"- Allow idle completion: `{args.allow_idle_completion}`",
-        f"- Boot settle: `{args.boot_settle_s}`",
-        f"- Serial reopen interval: `{args.serial_reopen_interval_s}`",
-        (
-            "- Serial reopen note: host serial is closed and reopened only between "
-            "aggregate commands; USB CDC targets may reset, so this is not proof of "
-            "uninterrupted firmware uptime."
-        ),
+        f"- Revision: `{branch}` at `{commit}` ({status_short if status_short else 'clean'})",
+        f"- Target: `{args.port or 'N/A'}` at `{args.baud}` baud, PCA9555 `{args.address}`",
+        f"- Serial lines: DTR `{args.serial_dtr}`, RTS `{args.serial_rts}`; reopen interval `{args.serial_reopen_interval_s}s`",
+        f"- Timing: startup `{args.startup_timeout}s`, idle `{args.idle_gap}s`, command override `{args.timeout}`",
         f"- Dry run: `{args.dry_run}`",
         f"- Final verdict: `{verdict}`",
         "",
-        "## Command Sequence",
+        "## Results",
         "",
-        "| Command | Classifier | Purpose | Serial Result | Operator Result | Completion | Elapsed | Notes |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        f"- Command results: {counts_text}",
+        f"- Detailed machine results: `{summary_json}`",
+        "- Raw CLI output is not retained; only bounded classifier evidence is kept for findings.",
     ]
-    for result in results:
-        notes = result.notes.replace("|", "/") if result.notes else ""
-        lines.append(
-            f"| `{result.command}` | `{result.classifier}` | {result.purpose} | `{result.serial_result}` | "
-            f"`{result.operator_result}` | `{result.completion_reason}` | "
-            f"{result.elapsed_s:.2f}s | {notes} |"
-        )
+    if findings:
+        lines.extend(["", "### Findings", ""])
+        for result in findings:
+            evidence = "; ".join(item.replace("|", "/") for item in result.evidence[:3])
+            lines.append(
+                f"- `{result.command}`: `{result.serial_result}` via "
+                f"`{result.completion_reason}` ({result.elapsed_s:.2f}s)"
+                + (f" — {evidence}" if evidence else "")
+            )
     if aggregate_stats:
         lines.extend(["", "## Aggregate Timing", ""])
         lines.extend(
@@ -1476,30 +1419,29 @@ def write_summary_files(
                 f"| `{stats.label}` | {stats.completed} | {stats.failures} | {stats.serial_reopens} | "
                 f"{min_s} | {mean_s} | {max_s} | {stats.effective_hz:.3f} | `{stats.stop_reason}` |"
             )
-    lines.extend(["", "## Evidence Excerpts", ""])
-    for result in results:
-        if result.serial_result in {"FAIL", "TIMEOUT", "SERIAL_OK_OR_REVIEW", "REVIEW_REQUIRED"}:
-            lines.append(f"### `{result.command}`")
-            if result.evidence:
-                for item in result.evidence:
-                    lines.append(f"- `{item}`")
-            else:
-                lines.append("- No concise serial evidence captured; inspect transcript.")
-            lines.append("")
     lines.extend(
         [
-            "## Artifacts",
             "",
-            f"- Serial transcript: `{artifact_paths['serial_transcript']}`",
-            f"- Operator checklist: `{artifact_paths['operator_checklist']}`",
-            f"- Machine summary: `{artifact_paths['summary_json']}`",
+            "## Open Operator Checks",
             "",
-            "## Identity And Hardware Claim Guard",
-            "",
-            "No physical HIL validation is implied by a dry run. A scan or probe proves only I2C ACK at the address, not PCA9555 identity.",
+            ", ".join(f"`{spec.command}`" for spec in MANUAL_CHECKS) + ".",
         ]
     )
-    summary_md = log_dir / "summary.md"
+    if skipped:
+        lines.extend(
+            [
+                "",
+                "Skipped opt-in commands: " + ", ".join(f"`{spec.command}`" for spec in skipped) + ".",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Claim Guard",
+            "",
+            "A dry run is not physical HIL. A scan or probe proves only I2C ACK at the address, not PCA9555 identity.",
+        ]
+    )
     summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
     if args.report:
         report_path = pathlib.Path(args.report)
@@ -1513,22 +1455,11 @@ def run(argv: list[str]) -> int:
         return run_parser_self_test()
 
     log_dir = create_log_dir(pathlib.Path(args.out))
-    transcript_path = log_dir / "serial_transcript.txt"
-    checklist_path = log_dir / "operator_checklist.md"
-    summary_json_path = log_dir / "summary.json"
-    write_transcript_header(transcript_path, args, 0)
 
     specs = build_command_sequence(args)
     skipped: list[CommandSpec] = []
     results: list[CommandResult] = []
     aggregate_stats: list[AggregateStats] = []
-    command_count = sum(
-        1
-        for spec in specs
-        if not spec.operator_check and not ((spec.destructive or spec.requires_opt_in) and not opt_in_enabled(spec, args))
-    )
-
-    write_transcript_header(transcript_path, args, command_count)
 
     if args.dry_run:
         for spec in specs:
@@ -1538,8 +1469,6 @@ def run(argv: list[str]) -> int:
                 skipped.append(spec)
                 results.append(skipped_result(spec, "SKIPPED_UNSAFE", spec.requires_opt_in or "manual"))
             else:
-                note = f"[DRY-RUN] would send: {spec.command}\n"
-                append_transcript(transcript_path, spec.command, note)
                 results.append(skipped_result(spec, "SKIPPED_DRY_RUN", "dry_run"))
     else:
         if not args.port:
@@ -1555,14 +1484,9 @@ def run(argv: list[str]) -> int:
             return 2
         try:  # pragma: no cover - hardware path
             if args.boot_settle_s > 0:
-                append_transcript(
-                    transcript_path,
-                    "boot-settle",
-                    f"waiting {args.boot_settle_s:.3f}s before startup prompt detection\n",
-                )
                 time.sleep(args.boot_settle_s)
             startup_start = time.monotonic()
-            startup_raw, startup_reason = read_until(
+            _, startup_reason = read_until(
                 ser,
                 prompt=args.prompt,
                 timeout_s=args.startup_timeout,
@@ -1570,7 +1494,6 @@ def run(argv: list[str]) -> int:
                 allow_idle_completion=args.allow_idle_completion,
             )
             startup_elapsed = time.monotonic() - startup_start
-            append_transcript(transcript_path, "startup", startup_raw)
             if startup_reason == "timeout":
                 results.append(
                     CommandResult(
@@ -1594,7 +1517,6 @@ def run(argv: list[str]) -> int:
                     else:
                         results.append(skipped_result(spec, "SKIPPED_STARTUP_TIMEOUT", "startup_timeout"))
             else:
-                command_index = 0
                 for spec in specs:
                     if spec.operator_check:
                         results.append(skipped_result(spec, "OPERATOR_CHECK_REQUIRED", "manual"))
@@ -1603,19 +1525,15 @@ def run(argv: list[str]) -> int:
                         skipped.append(spec)
                         results.append(skipped_result(spec, "SKIPPED_UNSAFE", spec.requires_opt_in or "manual"))
                         continue
-                    command_index += 1
                     if hasattr(ser, "reset_input_buffer"):
                         ser.reset_input_buffer()
-                    command_transcript = log_dir / "transcripts" / f"{command_index:02d}_{spec.command_id}.txt"
-                    result, raw_segment = run_serial_command(
+                    result, _ = run_serial_command(
                         ser,
                         spec,
                         prompt=args.prompt,
                         idle_gap_s=args.idle_gap,
                         allow_idle_completion=args.allow_idle_completion,
-                        transcript_path=command_transcript,
                     )
-                    append_transcript(transcript_path, spec.command, raw_segment)
                     results.append(result)
 
                 serial_setup_clean = not any(command_result_is_serial_anomaly(result) for result in results)
@@ -1632,18 +1550,12 @@ def run(argv: list[str]) -> int:
                         for warmup_index in range(args.benchmark_warmup):
                             if hasattr(ser, "reset_input_buffer"):
                                 ser.reset_input_buffer()
-                            warmup_result, warmup_raw = run_serial_command(
+                            warmup_result, _ = run_serial_command(
                                 ser,
                                 bench_spec,
                                 prompt=args.prompt,
                                 idle_gap_s=args.idle_gap,
                                 allow_idle_completion=args.allow_idle_completion,
-                                transcript_path=None,
-                            )
-                            append_transcript(
-                                transcript_path,
-                                f"benchmark-warmup-{warmup_index + 1}:{bench_spec.command}",
-                                warmup_raw,
                             )
                             if args.verbose:
                                 print(
@@ -1665,7 +1577,6 @@ def run(argv: list[str]) -> int:
                                 allow_idle_completion=args.allow_idle_completion,
                                 interval_s=0.0,
                                 failure_limit=1,
-                                transcript_path=log_dir / "benchmark_transcript.txt",
                                 verbose=args.verbose,
                                 serial_mod=serial_mod,
                                 args=args,
@@ -1696,7 +1607,6 @@ def run(argv: list[str]) -> int:
                         allow_idle_completion=args.allow_idle_completion,
                         interval_s=args.soak_interval_s,
                         failure_limit=args.soak_failure_limit,
-                        transcript_path=log_dir / "soak_transcript.txt",
                         verbose=args.verbose,
                         serial_mod=serial_mod,
                         args=args,
@@ -1709,20 +1619,8 @@ def run(argv: list[str]) -> int:
             except Exception:
                 pass
 
-    write_operator_checklist(checklist_path, skipped)
-    artifacts = {
-        "log_dir": str(log_dir),
-        "serial_transcript": str(transcript_path),
-        "operator_checklist": str(checklist_path),
-        "summary_json": str(summary_json_path),
-        "summary_md": str(log_dir / "summary.md"),
-    }
-    if args.report:
-        artifacts["report"] = str(pathlib.Path(args.report))
-    write_summary_files(log_dir, args, results, skipped, artifacts, aggregate_stats)
+    write_summary_files(log_dir, args, results, skipped, aggregate_stats)
 
-    checklist_text = checklist_path.read_text(encoding="utf-8")
-    print(checklist_text)
     print(f"HIL artifacts: {log_dir}")
     verdict = final_verdict(results, args.dry_run)
     print(f"Final verdict: {verdict}")

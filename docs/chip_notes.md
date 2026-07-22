@@ -8,7 +8,6 @@ Primary sources:
 
 - TI PCA9555 datasheet, SCPS131J, revised March 2021
 - TI application note SLVAFL0, I2C auto-increment feature
-- Local source extraction: `../PCA9555_io_expander_implementation_manual.md`
 
 ## Identity And Limits
 

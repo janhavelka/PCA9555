@@ -13,17 +13,10 @@ and API contracts live in Doxygen comments under `include/PCA9555/`.
 - [Chip notes](chip_notes.md): durable electrical, reset, current, interrupt,
   and layout facts extracted from the source chip documentation.
 - [Hardware validation](hardware_validation.md): HIL runner usage, target run
-  template, evidence checklist, and hardware validation matrix.
-- [HIL validation summary](reports/hil-validation-summary-20260625.md):
-  historical v2-era result of the June 2026 COM5 attempts and the recorded
-  serial-channel blocker. It is not current v3 hardware evidence.
+  command contract, known serial-channel constraint, and open hardware gates.
 - [ESP-IDF notes](espidf.md): native ESP-IDF component/example boundary,
   transport ownership, and static contract checks.
-- [Release checklist](release.md): merge, release-candidate, and
-  production-claim gates.
-- [Implementation manual](../PCA9555_io_expander_implementation_manual.md):
-  detailed chip-fact extraction used as supporting review material. The TI
-  datasheet remains authoritative.
+- [Release status](release.md): remaining real-target work and allowed claims.
 - [Changelog](../CHANGELOG.md): versioned API and behavior history.
 - [Security policy](../SECURITY.md): supported-version and vulnerability
   reporting policy.
@@ -42,11 +35,9 @@ generation command. Parameter names and types remain visible in each generated
 signature; longer ownership, timing, and failure contracts stay next to their
 public declarations and in the root README.
 
-The source repository also retains
-`docs/tunnelmonitor-node-suitability-audit.md` as the architecture decision
-record for that integration review. It is repository evidence, not public
-package guidance, and is deliberately excluded from the package and generated
-API manual.
+The source repository also retains the unfinished external adoption work in
+`docs/tunnelmonitor-node-suitability-audit.md`. It is repository-only project
+context and is excluded from the package and generated API manual.
 
 ## External References
 

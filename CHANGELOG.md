@@ -14,12 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Git history.
 - Condensed HIL output to reviewed Markdown and machine-readable JSON summaries
   instead of aggregate and per-command CLI transcripts.
+- Moved the AI-coder datasheet extraction under `docs/` and normalized
+  `CODEOWNERS` under `.github/`.
 
 ### Removed
 
-- The redundant full datasheet extraction and historical v2 HIL report after
-  preserving their actionable chip facts and serial-channel constraint in the
-  maintained guides.
+- The historical v2 HIL report and completed TunnelMonitor audit after retaining
+  the still-actionable serial-channel constraint in the hardware guide. The
+  comprehensive datasheet extraction remains as intentional AI-coder context.
 
 ## [3.0.0] - 2026-07-22
 

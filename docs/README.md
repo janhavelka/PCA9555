@@ -17,6 +17,9 @@ and API contracts live in Doxygen comments under `include/PCA9555/`.
 - [ESP-IDF notes](espidf.md): native ESP-IDF component/example boundary,
   transport ownership, and static contract checks.
 - [Release status](release.md): remaining real-target work and allowed claims.
+- [Datasheet extraction](datasheet_extraction.md):
+  comprehensive datasheet extraction retained as AI-coder and implementation
+  review context. The TI datasheet remains authoritative.
 - [Changelog](../CHANGELOG.md): versioned API and behavior history.
 - [Security policy](../SECURITY.md): supported-version and vulnerability
   reporting policy.
@@ -34,10 +37,6 @@ Missing public-symbol documentation and Doxygen documentation errors fail the
 generation command. Parameter names and types remain visible in each generated
 signature; longer ownership, timing, and failure contracts stay next to their
 public declarations and in the root README.
-
-The source repository also retains the unfinished external adoption work in
-`docs/tunnelmonitor-node-suitability-audit.md`. It is repository-only project
-context and is excluded from the package and generated API manual.
 
 ## External References
 

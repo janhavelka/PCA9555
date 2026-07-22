@@ -47,10 +47,10 @@ INPUT                  = README.md \
                          docs/espidf.md \
                          docs/hardware_validation.md \
                          docs/register_reference.md \
-                         docs/release.md
+                         docs/release.md \
+                         docs/datasheet_extraction.md
 FILE_PATTERNS          = *.h *.cpp *.md
 RECURSIVE              = YES
-EXCLUDE                = docs/tunnelmonitor-node-suitability-audit.md
 EXCLUDE_PATTERNS       = */.pio/* */.git/* */test/* */docs/doxygen/*
 # Hide generated preprocessor overrides; typed Version.h constants remain public.
 EXCLUDE_SYMBOLS        = PCA9555_*

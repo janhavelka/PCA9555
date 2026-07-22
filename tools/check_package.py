@@ -26,6 +26,7 @@ REQUIRED_FILES = {
     "SECURITY.md",
     "docs/README.md",
     "docs/chip_notes.md",
+    "docs/datasheet_extraction.md",
     "docs/espidf.md",
     "docs/hardware_validation.md",
     "docs/register_reference.md",
@@ -45,10 +46,8 @@ REQUIRED_FILES = {
 FORBIDDEN_FILES = {
     ".gitignore",
     "AGENTS.md",
-    "CODEOWNERS",
     "build_output.txt",
     "build_result.txt",
-    "docs/tunnelmonitor-node-suitability-audit.md",
     "platformio.ini",
 }
 

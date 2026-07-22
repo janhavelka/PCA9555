@@ -49,6 +49,7 @@
       "examples/**",
       "docs/README.md",
       "docs/chip_notes.md",
+      "docs/datasheet_extraction.md",
       "docs/espidf.md",
       "docs/hardware_validation.md",
       "docs/register_reference.md",

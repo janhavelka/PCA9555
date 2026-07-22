@@ -51,13 +51,19 @@ Rules:
 - Do not add placeholder classes, future stubs, empty managers, broad frameworks, plugin systems, registries, generic layers, or speculative extension points unless the current task explicitly requires them.
 - Prefer explicit state, explicit ownership, and small local helpers over hidden global state.
 - Deterministic: no unbounded loops, waits, retries, allocations, queues, or buffers in steady paths.
-- All timeouts use deadlines; never `delay()` in library code.
-- Non-blocking lifecycle: `Status begin(const Config&)`, `void tick(uint32_t nowMs)`, `void end()`.
-- Any I/O that can exceed ~1-2 ms must be split into state machine steps driven by `tick()`.
+- All multi-transfer operation timeouts use wrap-safe deadlines; never `delay()` in library code.
+- Passive lifecycle: `Status bind(const Config&)` and the compatibility
+  `begin()` alias validate/store callbacks with zero I/O. `end()` performs zero
+  I/O. Presence checks and register changes are explicit operations.
+- Single-transfer register operations may complete synchronously. Multi-transfer
+  chip work must expose fixed cooperative phases driven by the caller with an
+  explicit transaction budget. A resource owner may use a budget of one so one
+  owner poll performs at most one transport callback.
 - No heap allocation in steady state (no `String`, `std::vector`, `new` in normal ops).
 - Avoid dynamic allocation in steady embedded paths unless it is already an accepted local pattern and the bound is clear.
 - Every hardware operation that can block must have a timeout and an observable failure path.
-- Recovery logic must be bounded, deterministic, and testable.
+- Chip-state verification and reconciliation must be bounded, deterministic,
+  explicit, and testable. Bus recovery and retry policy belong to the caller.
 - Do not hide hardware failures behind silent retries or fake success.
 - No logging in library code; examples may log.
 - No macros for constants; use `static constexpr`. Macros only for conditional compile or logging helpers.
@@ -71,6 +77,12 @@ Rules:
 - Device drivers must not directly own or reconfigure a shared bus unless this repository's architecture explicitly says so.
 - `Config` MUST accept a transport adapter (function pointers or abstract interface).
 - I2C transactions MUST be timeout-bounded and report errors clearly.
+- Each callback invocation is exactly one terminal physical attempt. Transport
+  callbacks must not return an operation-level in-progress result. The library
+  never retries a callback or recovers the bus.
+- `WriteEffect` describes the device-side transmit phase. For write-read
+  callbacks it must conservatively state whether the command byte was accepted;
+  `NOT_ATTEMPTED` is valid only when the adapter can prove it was not.
 - Transport errors MUST map to `Status` (no leaking `Wire`, `esp_err_t`, etc.).
 - The library MUST NOT configure bus timeouts or pins.
 - Do not implement chip protocols manually if an existing hardened project library already provides the needed timeout, recovery, and testability behavior.
@@ -107,7 +119,9 @@ struct Status {
 ## PCA9555 Driver Requirements
 
 - I2C address configurable: 0x20–0x27 (3 hardware address pins A0, A1, A2).
-- Check device presence in `begin()` by reading configuration register (expect 0xFF default).
+- `bind()`/`begin()` perform zero I/O. `probe()` is the explicit address-response
+  check. POR-default checking is a separate explicit diagnostic and is not chip
+  identity proof.
 - 16 I/O pins organized as two 8-bit ports (Port 0: P00–P07, Port 1: P10–P17).
 - Each pin independently configurable as input or output.
 - 8 internal registers in 4 pairs:
@@ -126,31 +140,47 @@ struct Status {
 
 ---
 
-## Driver Architecture: Managed Synchronous Driver
+## Driver Architecture: Passive Cooperative Driver
 
-The driver follows a **managed synchronous** model with health tracking:
+The driver follows a **passive cooperative** model:
 
-- All public I2C operations are **blocking** (no async — PCA9555 has no EEPROM/NVM writes).
-- `tick()` may be used for periodic input polling or interrupt-driven read scheduling.
-- Health is tracked via **tracked transport wrappers** -- public API never calls `_updateHealth()` directly.
-- Recovery is **manual** via `recover()` - the application controls retry strategy.
+- `bind()` and `begin()` validate and store callbacks without touching I2C.
+- Single-transfer APIs may complete synchronously. Synchronous compound
+  convenience APIs have fixed transfer counts and documented worst-case latency.
+- Complete-image apply/verify and input-read/errata work uses one fixed-capacity
+  operation slot. Admission performs zero I/O. The caller supplies a nonzero
+  request ID, current time, whole-operation timeout, and transaction budget.
+  Safe-direction convenience APIs remain synchronous and use at most two
+  callbacks; owner-budgeted configuration uses the complete-image operation.
+- A terminal operation result is retained until consumed exactly once. A new
+  operation is rejected while work or an unconsumed result exists.
+- Cancellation is cooperative between synchronous callbacks. If an input read
+  completed, or its command phase may have reached the chip before failure, the
+  required nonzero pointer-park cleanup remains observable and bounded before
+  cancellation/timeout becomes terminal.
+- PCA9555 has no conversion wait, NVM, calibration storage, endurance-limited
+  write, or other rare maintenance procedure. Do not add a speculative rare-
+  operation framework.
+- Health counters are observational only. They never suppress a requested I2C
+  operation or take recovery authority from the caller.
+- The caller owns serialization, scheduling, transfer timeout selection, retry
+  eligibility/policy, absolute admission policy, device health policy, and bus
+  recovery.
 
-### DriverState (4 states only)
+### DriverState (3 states only)
 
 ```cpp
 enum class DriverState : uint8_t {
-  UNINIT,    // begin() not called or end() called
-  READY,     // Operational, consecutiveFailures == 0
-  DEGRADED,  // 1 <= consecutiveFailures < offlineThreshold
-  OFFLINE    // consecutiveFailures >= offlineThreshold
+  UNINIT,    // callbacks not bound, or end() called
+  READY,     // callbacks bound; last tracked transfer succeeded or none attempted
+  DEGRADED   // callbacks bound; last tracked transfer failed
 };
 ```
 
 State transitions:
-- `begin()` success -> READY
+- `bind()`/`begin()` success -> READY (presence is not implied)
 - Any I2C failure in READY -> DEGRADED
-- Success in DEGRADED/OFFLINE -> READY
-- Failures reach `offlineThreshold` -> OFFLINE
+- Success in DEGRADED -> READY
 - `end()` -> UNINIT
 
 ### Transport Wrapper Architecture
@@ -173,12 +203,13 @@ Transport callbacks (Config::i2cWrite, i2cWriteRead)
 - Public API methods NEVER call `_updateHealth()` directly
 - `readRegs()`/`writeRegs()` use TRACKED wrappers -> health updated automatically
 - `probe()` uses RAW wrappers -> no health tracking (diagnostic only)
-- `recover()` tracks probe failures (driver is initialized, so failures count)
+- There is no library bus-recovery API. Explicit register-image verification
+  and reconciliation own only PCA9555 protocol phases.
 
 ### Health Tracking Rules
 
 - `_updateHealth()` called ONLY inside tracked transport wrappers.
-- State transitions guarded by `_initialized` (no DEGRADED/OFFLINE before `begin()` succeeds).
+- State transitions guarded by the bound state (no DEGRADED before bind/begin succeeds).
 - NOT called for config/param validation errors (INVALID_CONFIG, INVALID_PARAM).
 - NOT called for precondition errors (NOT_INITIALIZED).
 - `probe()` uses raw I2C and does NOT update health (diagnostic only).
@@ -189,7 +220,7 @@ Transport callbacks (Config::i2cWrite, i2cWriteRead)
 - `_lastErrorMs` - timestamp of last failed I2C operation
 - `_lastError` - most recent error Status
 - `_consecutiveFailures` - failures since last success (resets on success)
-- `_totalFailures` / `_totalSuccess` - lifetime counters (wrap at max)
+- `_totalFailures` / `_totalSuccess` - lifetime counters (saturate at max)
 
 ---
 

@@ -1,34 +1,47 @@
 # Security Policy
 
-## Supported Versions
+## Supported versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 1.0.x   | :white_check_mark: |
+| Version | Security fixes |
+| --- | --- |
+| 3.x after publication | Supported |
+| 3.0.0 working-tree candidate | Not yet released |
+| 2.x and older | Not supported |
 
-## Reporting a Vulnerability
+Pin an exact reviewed release or immutable commit. Moving branches are not a
+safe production dependency policy. The current 3.0.0 source metadata does not
+mean that a `v3.0.0` release has already been published.
 
-If you discover a security vulnerability within this library, please follow responsible disclosure:
+## Reporting a vulnerability
 
-1. **Do NOT** open a public GitHub issue.
-2. Email the maintainer at: `info@thymos.cz`.
-3. Include:
-   - A description of the vulnerability
-   - Steps to reproduce
-   - Potential impact
-   - Any suggested fixes (optional)
+Do not open a public issue for a suspected vulnerability. Email
+`info@thymos.cz` with:
 
-We will acknowledge receipt within 48 hours and aim to provide a fix or mitigation within 14 days for critical issues.
+- the affected version or commit;
+- a clear description and impact;
+- reproducible steps or a minimal test;
+- relevant target, framework, and transport details;
+- a suggested fix, if available.
+
+Do not include production credentials, private device data, or destructive
+hardware instructions.
 
 ## Scope
 
-This library is designed for embedded systems. Security considerations include:
-- No dynamic memory allocation in steady state (reduces attack surface)
-- No network code (networking is out of scope for this library)
-- No persistent storage by default (NVS side effects are opt-in)
+The library is a non-owning PCA9555 chip driver. It has no network stack,
+persistent storage, dynamic plugin loading, credential handling, or bus
+recovery authority.
 
-## Security Best Practices for Users
+Security and safety relevant properties include:
 
-- Always validate external inputs before passing to `Config`
-- Use hardware watchdogs in production deployments
-- Keep dependencies updated
+- fixed-capacity state and no steady-state heap allocation;
+- terminal, timeout-bounded transport callbacks;
+- explicit error results and conservative uncertain-write handling;
+- bounded cooperative compound operations;
+- no hidden retry or fake-success path;
+- passive lifecycle with no implicit hardware mutation;
+- caller-owned serialization, retry policy, health policy, and bus recovery.
+
+The application remains responsible for validating untrusted commands, limiting
+access to hardware-control interfaces, watchdog policy, electrical safety, and
+dependency review.

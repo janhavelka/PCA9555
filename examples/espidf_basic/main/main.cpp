@@ -39,6 +39,7 @@ NativeBus gBus;
 PCA9555::PCA9555 gDev;
 PCA9555::Config gCfg;
 bool gVerbose = false;
+uint32_t gNextOperationRequestId = 1U;
 
 static constexpr uint32_t DEFAULT_SWEEP_DELAY_MS = 200U;
 static constexpr uint32_t MAX_PIN_TEST_DELAY_MS = 10000U;
@@ -47,6 +48,8 @@ static constexpr uint32_t DEFAULT_STRESS_MIX_COUNT = 50U;
 static constexpr uint32_t MAX_STRESS_COUNT = 10000U;
 static constexpr uint16_t PORTS_ALL_LOW = 0x0000U;
 static constexpr uint16_t PORTS_ALL_HIGH = 0xFFFFU;
+static constexpr PCA9555::RegisterImage EXAMPLE_RECOVERY_IMAGE{
+    0xFFFFU, 0x0000U, 0xFFFFU};
 static constexpr const char* CONFIRM_REASON_OUTPUT =
     "output latch writes can drive external hardware when affected pins are outputs";
 static constexpr const char* CONFIRM_REASON_DIRECTION =
@@ -60,7 +63,7 @@ static constexpr const char* CONFIRM_REASON_PATTERN =
 static constexpr const char* CONFIRM_REASON_STRESS =
     "stress diagnostics repeatedly access or mutate device state and can affect connected hardware";
 static constexpr const char* CONFIRM_REASON_RECOVER =
-    "recover can reapply cached output latches, polarity, and direction after a fault";
+    "recover applies the example image: latches high, normal polarity, all pins input";
 
 uint32_t nowMs(void*) {
   return static_cast<uint32_t>(esp_timer_get_time() / 1000LL);
@@ -70,20 +73,26 @@ int timeoutArg(uint32_t timeoutMs) {
   return timeoutMs > static_cast<uint32_t>(INT_MAX) ? INT_MAX : static_cast<int>(timeoutMs);
 }
 
-PCA9555::Status mapI2c(esp_err_t err, const char* msg) {
+PCA9555::TransportResult mapI2c(
+    esp_err_t err, size_t txBytes, size_t rxBytes,
+    PCA9555::WriteEffect writeEffect = PCA9555::WriteEffect::NOT_APPLICABLE) {
   if (err == ESP_OK) {
-    return PCA9555::Status::Ok();
+    return PCA9555::TransportResult::Ok(txBytes, rxBytes);
   }
   if (err == ESP_ERR_TIMEOUT) {
-    return PCA9555::Status::Error(PCA9555::Err::I2C_TIMEOUT, msg, err);
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::TIMEOUT, err, writeEffect);
   }
   if (err == ESP_ERR_INVALID_ARG) {
-    return PCA9555::Status::Error(PCA9555::Err::INVALID_PARAM, msg, err);
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, err, writeEffect);
   }
   if (err == ESP_ERR_INVALID_RESPONSE || err == ESP_ERR_NOT_FOUND) {
-    return PCA9555::Status::Error(PCA9555::Err::I2C_NACK_ADDR, msg, err);
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, err, writeEffect);
   }
-  return PCA9555::Status::Error(PCA9555::Err::I2C_BUS, msg, err);
+  return PCA9555::TransportResult::Error(
+      PCA9555::TransportCode::BUS_ERROR, err, writeEffect);
 }
 
 esp_err_t addDevice(NativeBus& bus, uint8_t addr, i2c_master_dev_handle_t* out) {
@@ -110,31 +119,40 @@ esp_err_t ensureDevice(NativeBus& bus, uint8_t addr) {
   return err;
 }
 
-PCA9555::Status i2cWrite(uint8_t addr, const uint8_t* data, size_t len,
-                         uint32_t timeoutMs, void* user) {
+PCA9555::TransportResult i2cWrite(uint8_t addr, const uint8_t* data,
+                                  size_t len, uint32_t timeoutMs, void* user) {
   NativeBus* bus = static_cast<NativeBus*>(user);
-  if (bus == nullptr || bus->bus == nullptr) {
-    return PCA9555::Status::Error(PCA9555::Err::INVALID_CONFIG, "I2C bus not initialized");
+  if (bus == nullptr || bus->bus == nullptr || data == nullptr || len == 0U) {
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, 0,
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
   esp_err_t err = ensureDevice(*bus, addr);
-  if (err == ESP_OK) {
-    err = i2c_master_transmit(bus->device, data, len, timeoutArg(timeoutMs));
+  if (err != ESP_OK) {
+    return mapI2c(err, 0U, 0U, PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
-  return mapI2c(err, "I2C write failed");
+  err = i2c_master_transmit(bus->device, data, len, timeoutArg(timeoutMs));
+  return mapI2c(err, len, 0U, PCA9555::WriteEffect::MAY_HAVE_COMMITTED);
 }
 
-PCA9555::Status i2cWriteRead(uint8_t addr, const uint8_t* tx, size_t txLen,
-                             uint8_t* rx, size_t rxLen, uint32_t timeoutMs,
-                             void* user) {
+PCA9555::TransportResult i2cWriteRead(uint8_t addr, const uint8_t* tx,
+                                      size_t txLen, uint8_t* rx, size_t rxLen,
+                                      uint32_t timeoutMs, void* user) {
   NativeBus* bus = static_cast<NativeBus*>(user);
-  if (bus == nullptr || bus->bus == nullptr) {
-    return PCA9555::Status::Error(PCA9555::Err::INVALID_CONFIG, "I2C bus not initialized");
+  if (bus == nullptr || bus->bus == nullptr || tx == nullptr || txLen == 0U ||
+      rx == nullptr || rxLen == 0U) {
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, 0,
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
   esp_err_t err = ensureDevice(*bus, addr);
-  if (err == ESP_OK) {
-    err = i2c_master_transmit_receive(bus->device, tx, txLen, rx, rxLen, timeoutArg(timeoutMs));
+  if (err != ESP_OK) {
+    return mapI2c(err, 0U, 0U, PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
-  return mapI2c(err, "I2C write-read failed");
+  err = i2c_master_transmit_receive(bus->device, tx, txLen, rx, rxLen,
+                                    timeoutArg(timeoutMs));
+  return mapI2c(err, txLen, rxLen,
+                PCA9555::WriteEffect::MAY_HAVE_COMMITTED);
 }
 
 bool initBus() {
@@ -366,7 +384,11 @@ void beginDriver() {
   gCfg.i2cUser = &gBus;
   gCfg.nowMs = nowMs;
   gCfg.i2cTimeoutMs = I2C_TIMEOUT_MS;
-  printStatus("begin", gDev.begin(gCfg));
+  PCA9555::Status status = gDev.bind(gCfg);
+  printStatus("bind", status);
+  if (status.ok()) {
+    printStatus("probe", gDev.probe());
+  }
 }
 
 void printHelp() {
@@ -406,9 +428,9 @@ void scanBus() {
 }
 
 void printDrv() {
-  printf("state=%u initialized=%d online=%d ok=%lu fail=%lu consecutive=%u addr=0x%02X\n",
+  printf("state=%u initialized=%d bound=%d ok=%lu fail=%lu consecutive=%u addr=0x%02X\n",
          static_cast<unsigned>(gDev.state()), gDev.isInitialized() ? 1 : 0,
-         gDev.isOnline() ? 1 : 0, static_cast<unsigned long>(gDev.totalSuccess()),
+         gDev.isBound() ? 1 : 0, static_cast<unsigned long>(gDev.totalSuccess()),
          static_cast<unsigned long>(gDev.totalFailures()),
          static_cast<unsigned>(gDev.consecutiveFailures()), gCfg.i2cAddress);
 }
@@ -501,11 +523,34 @@ const char* portName(PCA9555::Port port) {
 }
 
 uint8_t physicalPortForPin(PCA9555::Pin pin) {
-  return pin < PCA9555::cmd::PINS_PER_PORT ? 0U : 1U;
+  return PCA9555::pinIndex(pin) < PCA9555::cmd::PINS_PER_PORT ? 0U : 1U;
+}
+
+PCA9555::Status applyExampleRecoveryImage() {
+  uint32_t requestId = gNextOperationRequestId++;
+  if (requestId == 0U) {
+    requestId = gNextOperationRequestId++;
+  }
+  PCA9555::Status status = gDev.startApplyImage(
+      requestId, EXAMPLE_RECOVERY_IMAGE, nowMs(nullptr), 250U);
+  if (!status.inProgress()) {
+    return status;
+  }
+  for (uint8_t step = 0;
+       step < PCA9555::MAX_APPLY_IMAGE_TRANSACTIONS && status.inProgress();
+       ++step) {
+    uint8_t transactionsUsed = 0U;
+    status = gDev.pollOperation(requestId, nowMs(nullptr), 1U,
+                                transactionsUsed);
+  }
+  PCA9555::OperationResult result{};
+  const PCA9555::Status taken = gDev.takeOperationResult(requestId, result);
+  return taken.ok() ? result.status : taken;
 }
 
 uint8_t physicalBitForPin(PCA9555::Pin pin) {
-  return static_cast<uint8_t>(pin % PCA9555::cmd::PINS_PER_PORT);
+  return static_cast<uint8_t>(PCA9555::pinIndex(pin) %
+                              PCA9555::cmd::PINS_PER_PORT);
 }
 
 PCA9555::PortData portsFrom(uint16_t value) {
@@ -518,20 +563,29 @@ void delayMs(uint32_t delay) {
   }
 }
 
-void restoreState(const PCA9555::PortData& outputs, const PCA9555::PortData& polarity,
-                  const PCA9555::PortData& config) {
+PCA9555::Status restoreOutputAndDirection(
+    const PCA9555::PortData& outputs,
+    const PCA9555::PortData& config) {
   PCA9555::Status st = gDev.writeOutputs(outputs);
   printStatus("restore output latches", st);
-  if (!st.ok()) {
-    return;
-  }
-  st = gDev.setPolarity(polarity);
-  printStatus("restore polarity", st);
-  if (!st.ok()) {
-    return;
-  }
+  if (!st.ok()) return st;
   st = gDev.setConfiguration(config);
   printStatus("restore direction", st);
+  return st;
+}
+
+PCA9555::Status restoreState(const PCA9555::PortData& outputs,
+                             const PCA9555::PortData& polarity,
+                             const PCA9555::PortData& config) {
+  PCA9555::Status st = gDev.writeOutputs(outputs);
+  printStatus("restore output latches", st);
+  if (!st.ok()) return st;
+  st = gDev.setPolarity(polarity);
+  printStatus("restore polarity", st);
+  const PCA9555::Status polarityStatus = st;
+  const PCA9555::Status directionStatus = gDev.setConfiguration(config);
+  printStatus("restore direction", directionStatus);
+  return polarityStatus.ok() ? directionStatus : polarityStatus;
 }
 
 void reportCheck(const char* label, bool passed, uint32_t* passCount, uint32_t* failCount) {
@@ -546,7 +600,7 @@ void reportCheck(const char* label, bool passed, uint32_t* passCount, uint32_t* 
 
 void cmdWritePin(const char* args) {
   const char* cursor = args;
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   bool high = false;
   bool confirmed = false;
   if (!parsePinToken(cursor, &pin) || !parseBinaryToken(cursor, &high) ||
@@ -571,7 +625,7 @@ void cmdWritePin(const char* args) {
 
 void cmdTogglePin(const char* args) {
   const char* cursor = args;
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   bool confirmed = false;
   if (!parsePinToken(cursor, &pin) || !parseConfirmSuffix(cursor, &confirmed)) {
     printUsage("toggle <0..15> [confirm]");
@@ -593,7 +647,7 @@ void cmdTogglePin(const char* args) {
 
 void cmdSetDirection(const char* args) {
   const char* cursor = args;
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   bool input = false;
   bool confirmed = false;
   if (!parsePinToken(cursor, &pin) || !parseDirectionToken(cursor, &input) ||
@@ -664,7 +718,7 @@ void cmdSetPortDirection(const char* args) {
 
 void cmdSetPinPolarity(const char* args) {
   const char* cursor = args;
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   bool inverted = false;
   bool confirmed = false;
   if (!parsePinToken(cursor, &pin) || !parseBinaryToken(cursor, &inverted) ||
@@ -986,32 +1040,36 @@ void cmdSweep(const char* args) {
   st = gDev.setConfiguration(portsFrom(PORTS_ALL_LOW));
   printStatus("sweep force outputs", st);
   if (!st.ok()) {
+    (void)restoreOutputAndDirection(savedOut, savedCfg);
     return;
   }
 
   uint32_t pass = 0;
   uint32_t fail = 0;
   puts("=== Sweep Test ===");
-  for (PCA9555::Pin pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
+  for (uint8_t pinIndex = 0; pinIndex < PCA9555::cmd::TOTAL_PINS; ++pinIndex) {
+    const PCA9555::Pin pin = static_cast<PCA9555::Pin>(pinIndex);
     st = gDev.writePin(pin, true);
     if (st.ok()) {
       delayMs(delay);
       PCA9555::PortData readback;
       st = gDev.readOutputs(readback);
-      const uint16_t expected = static_cast<uint16_t>((1U << (pin + 1U)) - 1U);
+      const uint16_t expected =
+          static_cast<uint16_t>((1U << (pinIndex + 1U)) - 1U);
       reportCheck("sweep ON readback", st.ok() && readback.combined() == expected, &pass, &fail);
     } else {
       reportCheck("sweep ON write", false, &pass, &fail);
     }
   }
-  for (PCA9555::Pin pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
+  for (uint8_t pinIndex = 0; pinIndex < PCA9555::cmd::TOTAL_PINS; ++pinIndex) {
+    const PCA9555::Pin pin = static_cast<PCA9555::Pin>(pinIndex);
     st = gDev.writePin(pin, false);
     if (st.ok()) {
       delayMs(delay);
       PCA9555::PortData readback;
       st = gDev.readOutputs(readback);
-      const uint16_t expected = pin < 15U
-                                    ? static_cast<uint16_t>(PORTS_ALL_HIGH << (pin + 1U))
+      const uint16_t expected = pinIndex < 15U
+                                    ? static_cast<uint16_t>(PORTS_ALL_HIGH << (pinIndex + 1U))
                                     : PORTS_ALL_LOW;
       reportCheck("sweep OFF readback", st.ok() && readback.combined() == expected, &pass, &fail);
     } else {
@@ -1019,11 +1077,8 @@ void cmdSweep(const char* args) {
     }
   }
 
-  st = gDev.writeOutputs(savedOut);
-  printStatus("sweep restore output latches", st);
-  if (st.ok()) {
-    printStatus("sweep restore direction", gDev.setConfiguration(savedCfg));
-  }
+  st = restoreOutputAndDirection(savedOut, savedCfg);
+  if (!st.ok()) ++fail;
   printf("Sweep result: pass=%lu fail=%lu\n", static_cast<unsigned long>(pass),
          static_cast<unsigned long>(fail));
 }
@@ -1068,14 +1123,16 @@ void cmdWalk(const char* args) {
   st = gDev.setConfiguration(portsFrom(PORTS_ALL_LOW));
   printStatus("walk force outputs", st);
   if (!st.ok()) {
+    (void)restoreOutputAndDirection(savedOut, savedCfg);
     return;
   }
 
   uint32_t pass = 0;
   uint32_t fail = 0;
   puts("=== Walking-1 Test ===");
-  for (PCA9555::Pin pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
-    const uint16_t pattern = static_cast<uint16_t>(1U << pin);
+  for (uint8_t pinIndex = 0; pinIndex < PCA9555::cmd::TOTAL_PINS; ++pinIndex) {
+    const PCA9555::Pin pin = static_cast<PCA9555::Pin>(pinIndex);
+    const uint16_t pattern = static_cast<uint16_t>(1U << pinIndex);
     st = gDev.writeOutputs(portsFrom(pattern));
     if (st.ok()) {
       delayMs(delay);
@@ -1087,11 +1144,8 @@ void cmdWalk(const char* args) {
     }
   }
 
-  st = gDev.writeOutputs(savedOut);
-  printStatus("walk restore output latches", st);
-  if (st.ok()) {
-    printStatus("walk restore direction", gDev.setConfiguration(savedCfg));
-  }
+  st = restoreOutputAndDirection(savedOut, savedCfg);
+  if (!st.ok()) ++fail;
   printf("Walk result: pass=%lu fail=%lu\n", static_cast<unsigned long>(pass),
          static_cast<unsigned long>(fail));
 }
@@ -1156,6 +1210,14 @@ void cmdSelfTest(const char* args) {
     st = gDev.setConfiguration(portsFrom(PORTS_ALL_LOW));
   }
   reportCheck("force outputs low", st.ok(), &pass, &fail);
+  if (!st.ok()) {
+    const PCA9555::Status restore = restoreState(savedOut, savedPol, savedCfg);
+    reportCheck("restore after setup failure", restore.ok(), &pass, &fail);
+    printf("Selftest result: pass=%lu fail=%lu\n",
+           static_cast<unsigned long>(pass),
+           static_cast<unsigned long>(fail));
+    return;
+  }
 
   st = gDev.setOutputBits(0x0103U);
   if (st.ok()) {
@@ -1175,7 +1237,7 @@ void cmdSelfTest(const char* args) {
   }
   reportCheck("toggleOutputBits readback", st.ok() && data.combined() == 0x0202U, &pass, &fail);
 
-  st = gDev.togglePin(0);
+  st = gDev.togglePin(PCA9555::Pin::P00);
   if (st.ok()) {
     st = gDev.readOutputs(data);
   }
@@ -1211,7 +1273,8 @@ void cmdSelfTest(const char* args) {
   }
   reportCheck("clearInvertBits readback", st.ok() && data.combined() == 0x0100U, &pass, &fail);
 
-  restoreState(savedOut, savedPol, savedCfg);
+  st = restoreState(savedOut, savedPol, savedCfg);
+  reportCheck("restore writable state", st.ok(), &pass, &fail);
   const uint32_t succDelta = gDev.totalSuccess() - succBefore;
   const uint32_t failDelta = gDev.totalFailures() - failBefore;
   printf("Selftest result: pass=%lu fail=%lu\n", static_cast<unsigned long>(pass),
@@ -1324,6 +1387,7 @@ void runStressMix(uint32_t count) {
   }
   printStatus("stress_mix prepare", st);
   if (!st.ok()) {
+    (void)restoreState(savedOut, savedPol, savedCfg);
     return;
   }
 
@@ -1372,7 +1436,8 @@ void runStressMix(uint32_t count) {
     vTaskDelay(pdMS_TO_TICKS(1));
   }
 
-  restoreState(savedOut, savedPol, savedCfg);
+  st = restoreState(savedOut, savedPol, savedCfg);
+  if (!st.ok()) ++totalFail;
   const uint32_t elapsed = nowMs(nullptr) - start;
   puts("=== stress_mix summary ===");
   printf("  Total: ok=%lu fail=%lu duration_ms=%lu\n",
@@ -1417,12 +1482,12 @@ void cmdRecover(const char* args) {
     return;
   }
   if (!requireConfirmation(confirmed,
-                           "attempt manual recovery and reapply cached output, polarity, and direction state",
+                           "apply the explicit example recovery image",
                            CONFIRM_REASON_RECOVER,
                            "recover confirm")) {
     return;
   }
-  printStatus("recover", gDev.recover());
+  printStatus("recover example image", applyExampleRecoveryImage());
   printDrv();
 }
 
@@ -1518,7 +1583,7 @@ void handleCommand(char* line) {
     }
   } else if (strncmp(full, "read pin ", 9) == 0 || strncmp(full, "rpin ", 5) == 0) {
     const char* arg = full[0] == 'r' && full[1] == 'p' ? full + 5 : full + 9;
-    PCA9555::Pin pin = 0;
+    PCA9555::Pin pin = PCA9555::Pin::P00;
     bool state = false;
     PCA9555::Status st = parsePinArg(arg, &pin)
                              ? gDev.readPin(pin, state)
@@ -1529,7 +1594,7 @@ void handleCommand(char* line) {
     }
   } else if (strncmp(full, "read outpin ", 12) == 0 || strncmp(full, "rout ", 5) == 0) {
     const char* arg = full[0] == 'r' && full[1] == 'o' ? full + 5 : full + 12;
-    PCA9555::Pin pin = 0;
+    PCA9555::Pin pin = PCA9555::Pin::P00;
     bool high = false;
     PCA9555::Status st = parsePinArg(arg, &pin)
                              ? gDev.readOutputPin(pin, high)
@@ -1540,7 +1605,7 @@ void handleCommand(char* line) {
     }
   } else if (strncmp(full, "read dirpin ", 12) == 0 || strncmp(full, "rdir ", 5) == 0) {
     const char* arg = full[0] == 'r' && full[1] == 'd' ? full + 5 : full + 12;
-    PCA9555::Pin pin = 0;
+    PCA9555::Pin pin = PCA9555::Pin::P00;
     bool input = false;
     PCA9555::Status st = parsePinArg(arg, &pin)
                              ? gDev.getPinDirection(pin, input)
@@ -1551,7 +1616,7 @@ void handleCommand(char* line) {
     }
   } else if (strncmp(full, "read polpin ", 12) == 0 || strncmp(full, "rpol ", 5) == 0) {
     const char* arg = full[0] == 'r' && full[1] == 'p' ? full + 5 : full + 12;
-    PCA9555::Pin pin = 0;
+    PCA9555::Pin pin = PCA9555::Pin::P00;
     bool inverted = false;
     PCA9555::Status st = parsePinArg(arg, &pin)
                              ? gDev.getPinPolarity(pin, inverted)
@@ -1561,15 +1626,15 @@ void handleCommand(char* line) {
       printf("pin=%u polarity=%s\n", static_cast<unsigned>(pin), inverted ? "inverted" : "normal");
     }
   } else if (strncmp(full, "pininfo ", 8) == 0) {
-    PCA9555::Pin pin = 0;
+    PCA9555::Pin pin = PCA9555::Pin::P00;
     if (parsePinArg(full + 8, &pin)) {
       printPinInfo(pin);
     } else {
       puts("Usage: pininfo <0..15>");
     }
   } else if (strcmp(full, "pins") == 0) {
-    for (PCA9555::Pin pin = 0; pin < 16U; ++pin) {
-      printPinInfo(pin);
+    for (uint8_t pinIndex = 0; pinIndex < 16U; ++pinIndex) {
+      printPinInfo(static_cast<PCA9555::Pin>(pinIndex));
     }
   } else if (strncmp(full, "write pin ", 10) == 0) {
     cmdWritePin(full + 10);
@@ -1695,7 +1760,6 @@ extern "C" void app_main(void) {
     if (fgets(line, sizeof(line), stdin) != nullptr) {
       handleCommand(line);
     }
-    gDev.tick(nowMs(nullptr));
     vTaskDelay(pdMS_TO_TICKS(1));
   }
 }

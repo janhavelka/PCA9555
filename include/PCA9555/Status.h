@@ -1,65 +1,100 @@
 /// @file Status.h
-/// @brief Error codes and status handling for PCA9555 driver
+/// @brief Error and status contracts for the PCA9555 driver.
 #pragma once
 
 #include <cstdint>
 
 namespace PCA9555 {
 
-/// @brief Error codes for all PCA9555 operations.
+/// Error codes returned by fallible driver operations.
 enum class Err : uint8_t {
-  OK = 0,                    ///< Operation successful
-  NOT_INITIALIZED,           ///< begin() not called
-  INVALID_CONFIG,            ///< Invalid configuration parameter
-  I2C_ERROR,                 ///< I2C communication failure
-  TIMEOUT,                   ///< Operation timed out
-  INVALID_PARAM,             ///< Invalid parameter value
-  DEVICE_NOT_FOUND,          ///< Device not responding on I2C bus
-  CONFIG_REG_MISMATCH,       ///< Configuration register != expected default
-  BUSY,                      ///< Device is busy
-  IN_PROGRESS,               ///< Operation/job is in progress; transport IN_PROGRESS remains health-neutral
-
-  // I2C transport details (append-only to preserve existing values)
-  I2C_NACK_ADDR,             ///< I2C address not acknowledged
-  I2C_NACK_DATA,             ///< I2C data byte not acknowledged
-  I2C_TIMEOUT,               ///< I2C transaction timeout
-  I2C_BUS,                   ///< I2C bus error (arbitration lost, etc.)
-  OFFLINE                    ///< Driver is offline; call recover() before normal I/O
+  OK = 0,
+  NOT_INITIALIZED = 1,
+  INVALID_CONFIG = 2,
+  I2C_ERROR = 3,
+  TIMEOUT = 4,       ///< Whole-operation deadline expired.
+  INVALID_PARAM = 5,
+  DEVICE_NOT_FOUND = 6,
+  CONFIG_REG_MISMATCH = 7,
+  BUSY = 8,
+  IN_PROGRESS = 9,
+  I2C_NACK_ADDR = 10,
+  I2C_NACK_DATA = 11,
+  I2C_TIMEOUT = 12,  ///< One transport callback timed out.
+  I2C_BUS = 13,
+  OFFLINE = 14,      ///< Reserved v2 compatibility value; v3 never gates I/O.
+  VERIFY_MISMATCH = 15,
+  NO_RESULT = 16,
+  CANCELLED = 17,
+  STATE_UNCERTAIN = 18,
+  SHADOW_INVALID = 19,
+  UNSUPPORTED = 20
 };
 
-/// @brief Status structure returned by all fallible operations.
+/// Stable static name for diagnostics outside the no-logging core.
+constexpr const char* errorName(Err error) {
+  switch (error) {
+    case Err::OK: return "OK";
+    case Err::NOT_INITIALIZED: return "NOT_INITIALIZED";
+    case Err::INVALID_CONFIG: return "INVALID_CONFIG";
+    case Err::I2C_ERROR: return "I2C_ERROR";
+    case Err::TIMEOUT: return "TIMEOUT";
+    case Err::INVALID_PARAM: return "INVALID_PARAM";
+    case Err::DEVICE_NOT_FOUND: return "DEVICE_NOT_FOUND";
+    case Err::CONFIG_REG_MISMATCH: return "CONFIG_REG_MISMATCH";
+    case Err::BUSY: return "BUSY";
+    case Err::IN_PROGRESS: return "IN_PROGRESS";
+    case Err::I2C_NACK_ADDR: return "I2C_NACK_ADDR";
+    case Err::I2C_NACK_DATA: return "I2C_NACK_DATA";
+    case Err::I2C_TIMEOUT: return "I2C_TIMEOUT";
+    case Err::I2C_BUS: return "I2C_BUS";
+    case Err::OFFLINE: return "OFFLINE_RESERVED";
+    case Err::VERIFY_MISMATCH: return "VERIFY_MISMATCH";
+    case Err::NO_RESULT: return "NO_RESULT";
+    case Err::CANCELLED: return "CANCELLED";
+    case Err::STATE_UNCERTAIN: return "STATE_UNCERTAIN";
+    case Err::SHADOW_INVALID: return "SHADOW_INVALID";
+    case Err::UNSUPPORTED: return "UNSUPPORTED";
+  }
+  return "UNKNOWN";
+}
+
+/// Stable Status::detail values used with Err::BUSY.
+enum class BusyDetail : int32_t {
+  OPERATION_ACTIVE = 1,
+  RESULT_PENDING = 2,
+  REQUEST_ID_MISMATCH = 3
+};
+
+/// Status returned by all fallible public operations.
 struct Status {
-  Err code = Err::OK;        ///< Error code (OK on success)
-  int32_t detail = 0;        ///< Implementation-specific detail (e.g., I2C error code)
-  const char* msg = "";      ///< Static string describing the error
+  /// Stable error classification.
+  Err code = Err::OK;
+  /// Error-specific numeric evidence; interpretation depends on code.
+  int32_t detail = 0;
+  const char* msg = "";  ///< Static storage only.
 
-  /// Default constructor (OK status).
+  /// Construct the default non-error status.
   constexpr Status() = default;
-
-  /// Construct with explicit fields.
-  /// @param c   Error code
-  /// @param d   Detail code
-  /// @param m   Static message string
+  /// Construct a status from explicit static evidence.
   constexpr Status(Err c, int32_t d, const char* m) : code(c), detail(d), msg(m) {}
-  
-  /// @return true if operation succeeded
+
+  /// Return true only when code is Err::OK.
   constexpr bool ok() const { return code == Err::OK; }
-
-  /// @return true if operation is in progress
+  /// Test for one exact error code.
+  constexpr bool is(Err err) const { return code == err; }
+  /// Return true when cooperative work remains active.
   constexpr bool inProgress() const { return code == Err::IN_PROGRESS; }
+  /// Explicit boolean conversion equivalent to ok().
+  constexpr explicit operator bool() const { return ok(); }
 
-  /// Create a success status.
-  /// @return Status with Err::OK
+  /// Construct the canonical success status.
   static constexpr Status Ok() { return Status{Err::OK, 0, "OK"}; }
-  
-  /// Create an error status.
-  /// @param err        Error code
-  /// @param message    Static string describing the error
-  /// @param detailCode Optional implementation-specific detail (default 0)
-  /// @return Status with the given error code
-  static constexpr Status Error(Err err, const char* message, int32_t detailCode = 0) {
+  /// Construct a failure status with a static message and optional detail.
+  static constexpr Status Error(Err err, const char* message,
+                                int32_t detailCode = 0) {
     return Status{err, detailCode, message};
   }
 };
 
-} // namespace PCA9555
+}  // namespace PCA9555

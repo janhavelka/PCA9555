@@ -214,11 +214,11 @@ OPTIONAL_COMMANDS: tuple[CommandSpec, ...] = (
         timeout_s=25.0,
         destructive=True,
         requires_opt_in="--include-output-tests",
-        recovery_command="dirin 0xFFFF confirm",
+        recovery_command="recover confirm",
         classifier="selftest",
         notes=(
-            "The CLI labels this safe, but it changes PCA9555 latches, direction, "
-            "and polarity before restoring. Use only on a known-safe fixture."
+            "This command changes PCA9555 latches, direction, and polarity before "
+            "restoring them. Use only on a known-safe fixture."
         ),
     ),
     CommandSpec(
@@ -237,7 +237,7 @@ OPTIONAL_COMMANDS: tuple[CommandSpec, ...] = (
         timeout_s=180.0,
         destructive=True,
         requires_opt_in="--include-output-tests",
-        recovery_command="dirin 0xFFFF confirm",
+        recovery_command="recover confirm",
         classifier="stress_mix",
         notes="Mixed stress drives outputs and changes configuration; opt-in only.",
     ),
@@ -542,24 +542,26 @@ def recovery_spec_for(spec: CommandSpec) -> CommandSpec | None:
     if dynamic is not None:
         return dataclasses.replace(
             dynamic,
-            purpose=f"Restore-safe-state command after `{spec.command}`.",
+            purpose=f"Apply the configured recovery image after `{spec.command}`.",
             requires_opt_in=spec.requires_opt_in,
             notes=(
-                "Automatic recovery command from HIL metadata. Restores all pins to "
-                "input; output-to-input changes can trigger PCA9555 INT behavior."
+                "Automatic recovery command from HIL metadata. Applies the example "
+                "image (latches high, normal polarity, all pins input); this is a "
+                "fixture default, not a universal product-safe state."
             ),
         )
     return CommandSpec(
         command=spec.recovery_command,
-        purpose=f"Restore-safe-state command after `{spec.command}`.",
+        purpose=f"Apply the configured recovery image after `{spec.command}`.",
         expected=(r"Status:\s+OK",),
         timeout_s=5.0,
         destructive=True,
         requires_opt_in=spec.requires_opt_in,
         classifier="write",
         notes=(
-            "Automatic recovery command from HIL metadata. Restores all pins to "
-            "input; output-to-input changes can trigger PCA9555 INT behavior."
+            "Automatic recovery command from HIL metadata. Applies the example "
+            "image (latches high, normal polarity, all pins input); this is a "
+            "fixture default, not a universal product-safe state."
         ),
     )
 
@@ -782,7 +784,7 @@ def dynamic_cli_command_spec(command: str, default_timeout: float) -> CommandSpe
         )
     if re.fullmatch(r"recover(?:\s+confirm)?", lowered):
         return make(
-            purpose="Run manual driver recovery and reapply cached state.",
+            purpose="Apply the explicit example recovery image.",
             expected=(r"Attempting recovery", r"Status:\s+OK"),
             timeout_s=max(default_timeout, 15.0),
             classifier="recovery",

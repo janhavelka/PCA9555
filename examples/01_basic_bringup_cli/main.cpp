@@ -25,8 +25,10 @@
 
 PCA9555::PCA9555 device;
 bool verboseMode = false;
+uint32_t nextOperationRequestId = 1U;
 const PCA9555::PortData PORTS_ALL_LOW = PCA9555::PortData::fromCombined(0x0000U);
 const PCA9555::PortData PORTS_ALL_HIGH = PCA9555::PortData::fromCombined(0xFFFFU);
+const PCA9555::RegisterImage EXAMPLE_RECOVERY_IMAGE{0xFFFFU, 0x0000U, 0xFFFFU};
 
 // Stress test state (non-blocking)
 struct StressStats {
@@ -55,24 +57,7 @@ uint32_t exampleNowMs(void*) {
 }
 
 const char* errToStr(PCA9555::Err err) {
-  using namespace PCA9555;
-  switch (err) {
-    case Err::OK:                  return "OK";
-    case Err::NOT_INITIALIZED:     return "NOT_INITIALIZED";
-    case Err::INVALID_CONFIG:      return "INVALID_CONFIG";
-    case Err::I2C_ERROR:           return "I2C_ERROR";
-    case Err::TIMEOUT:             return "TIMEOUT";
-    case Err::INVALID_PARAM:       return "INVALID_PARAM";
-    case Err::DEVICE_NOT_FOUND:    return "DEVICE_NOT_FOUND";
-    case Err::CONFIG_REG_MISMATCH: return "CONFIG_REG_MISMATCH";
-    case Err::BUSY:                return "BUSY";
-    case Err::IN_PROGRESS:         return "IN_PROGRESS";
-    case Err::I2C_NACK_ADDR:      return "I2C_NACK_ADDR";
-    case Err::I2C_NACK_DATA:      return "I2C_NACK_DATA";
-    case Err::I2C_TIMEOUT:        return "I2C_TIMEOUT";
-    case Err::I2C_BUS:            return "I2C_BUS";
-    default:                       return "UNKNOWN";
-  }
+  return PCA9555::errorName(err);
 }
 
 const char* stateToStr(PCA9555::DriverState st) {
@@ -81,7 +66,6 @@ const char* stateToStr(PCA9555::DriverState st) {
     case DriverState::UNINIT:   return "UNINIT";
     case DriverState::READY:    return "READY";
     case DriverState::DEGRADED: return "DEGRADED";
-    case DriverState::OFFLINE:  return "OFFLINE";
     default:                    return "UNKNOWN";
   }
 }
@@ -121,11 +105,12 @@ uint32_t stressProgressStep(uint32_t total) {
 }
 
 uint8_t physicalPortForPin(PCA9555::Pin pin) {
-  return (pin < PCA9555::cmd::PINS_PER_PORT) ? 0U : 1U;
+  return (PCA9555::pinIndex(pin) < PCA9555::cmd::PINS_PER_PORT) ? 0U : 1U;
 }
 
 uint8_t physicalBitForPin(PCA9555::Pin pin) {
-  return static_cast<uint8_t>(pin % PCA9555::cmd::PINS_PER_PORT);
+  return static_cast<uint8_t>(PCA9555::pinIndex(pin) %
+                              PCA9555::cmd::PINS_PER_PORT);
 }
 
 void printStressProgress(uint32_t completed, uint32_t total, uint32_t okCount, uint32_t failCount) {
@@ -230,7 +215,7 @@ static constexpr const char* CONFIRM_REASON_RAW =
 static constexpr const char* CONFIRM_REASON_PATTERN =
     "this can force multiple pins to output mode and drive attached loads";
 static constexpr const char* CONFIRM_REASON_RECOVER =
-    "recover can reapply cached output latches, polarity, and direction after a fault";
+    "recover applies the example image: latches high, normal polarity, all pins input";
 static constexpr const char* CONFIRM_REASON_STRESS =
     "mixed stress drives outputs and changes configuration during the run";
 
@@ -355,6 +340,50 @@ void printStatus(const PCA9555::Status& st) {
   Serial.flush();
 }
 
+PCA9555::Status restoreOutputAndDirection(
+    const PCA9555::PortData& outputs,
+    const PCA9555::PortData& directions) {
+  PCA9555::Status status = device.writeOutputs(outputs);
+  if (status.ok()) status = device.setConfiguration(directions);
+  return status;
+}
+
+PCA9555::Status restoreWritableState(
+    const PCA9555::PortData& outputs,
+    const PCA9555::PortData& polarity,
+    const PCA9555::PortData& directions) {
+  PCA9555::Status status = device.writeOutputs(outputs);
+  if (!status.ok()) return status;
+  const PCA9555::Status polarityStatus = device.setPolarity(polarity);
+  const PCA9555::Status directionStatus = device.setConfiguration(directions);
+  if (!polarityStatus.ok() && !directionStatus.ok()) {
+    LOGE("Writable-state direction restore also failed");
+    printStatus(directionStatus);
+  }
+  return polarityStatus.ok() ? directionStatus : polarityStatus;
+}
+
+PCA9555::Status applyExampleRecoveryImage() {
+  uint32_t requestId = nextOperationRequestId++;
+  if (requestId == 0U) {
+    requestId = nextOperationRequestId++;
+  }
+  PCA9555::Status status = device.startApplyImage(
+      requestId, EXAMPLE_RECOVERY_IMAGE, millis(), 250U);
+  if (!status.inProgress()) {
+    return status;
+  }
+  for (uint8_t step = 0;
+       step < PCA9555::MAX_APPLY_IMAGE_TRANSACTIONS && status.inProgress();
+       ++step) {
+    uint8_t transactionsUsed = 0U;
+    status = device.pollOperation(requestId, millis(), 1U, transactionsUsed);
+  }
+  PCA9555::OperationResult result{};
+  const PCA9555::Status taken = device.takeOperationResult(requestId, result);
+  return taken.ok() ? result.status : taken;
+}
+
 void printVerboseState() {
   Serial.printf("  Verbose: %s%s%s\n",
                 onOffColor(verboseMode),
@@ -389,7 +418,7 @@ void printVersionInfo() {
 
 void printSettings() {
   const PCA9555::SettingsSnapshot snapshot = device.getSettings();
-  const PCA9555::Config& cfg = snapshot.config;
+  const PCA9555::Config& cfg = device.getConfig();
 
   Serial.println("=== Settings Snapshot ===");
   Serial.printf("  Initialized: %s%s%s\n",
@@ -405,25 +434,13 @@ void printSettings() {
                 LOG_COLOR_RESET);
   Serial.printf("  I2C address: 0x%02X\n", cfg.i2cAddress);
   Serial.printf("  Timeout: %lu ms\n", static_cast<unsigned long>(cfg.i2cTimeoutMs));
-  Serial.printf("  Offline threshold: %u\n", cfg.offlineThreshold);
-  Serial.printf("  Require POR config defaults: %s%s%s\n",
-                onOffColor(cfg.requireConfigPortDefaults),
-                cfg.requireConfigPortDefaults ? "YES" : "NO",
-                LOG_COLOR_RESET);
-  Serial.printf("  Interrupt errata workaround: %s%s%s\n",
-                onOffColor(cfg.applyInterruptErrata),
-                cfg.applyInterruptErrata ? "ENABLED" : "DISABLED",
-                LOG_COLOR_RESET);
+  Serial.printf("  Interrupt errata workaround: mandatory\n");
   Serial.printf("  nowMs hook: %s%s%s\n",
                 onOffColor(cfg.nowMs != nullptr),
                 (cfg.nowMs != nullptr) ? "SET" : "NONE",
                 LOG_COLOR_RESET);
-  printPortBinary("Desired Out P0", cfg.outputPort0);
-  printPortBinary("Desired Out P1", cfg.outputPort1);
-  printPortBinary("Desired Cfg P0", cfg.configPort0);
-  printPortBinary("Desired Cfg P1", cfg.configPort1);
-  printPortBinary("Desired Pol P0", cfg.polarityPort0);
-  printPortBinary("Desired Pol P1", cfg.polarityPort1);
+  Serial.printf("  Shadow valid pairs: 0x%02X\n", snapshot.shadowValidPairs);
+  Serial.printf("  Uncertain pairs: 0x%02X\n", snapshot.uncertainPairs);
 }
 
 // ============================================================================
@@ -577,7 +594,7 @@ void cmdReadPolarityPort(const String& args) {
 
 void cmdWritePin(const String& args) {
   const char* cursor = args.c_str();
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   bool high = false;
   if (!parsePinToken(cursor, pin) ||
       !parseBinaryToken(cursor, high) ||
@@ -599,7 +616,7 @@ void cmdWritePin(const String& args) {
 
 void cmdReadPin(const String& args) {
   const char* cursor = args.c_str();
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   if (!parsePinToken(cursor, pin) || hasTrailingArgs(cursor)) {
     LOGE("Usage: rpin <pin 0-15>");
     return;
@@ -638,7 +655,7 @@ void cmdReadInputPort(const String& args) {
 
 void cmdReadOutputPin(const String& args) {
   const char* cursor = args.c_str();
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   if (!parsePinToken(cursor, pin) || hasTrailingArgs(cursor)) {
     LOGE("Usage: rout <pin 0-15>");
     return;
@@ -660,7 +677,7 @@ void cmdReadOutputPin(const String& args) {
 
 void cmdReadDirectionPin(const String& args) {
   const char* cursor = args.c_str();
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   if (!parsePinToken(cursor, pin) || hasTrailingArgs(cursor)) {
     LOGE("Usage: rdir <pin 0-15>");
     return;
@@ -682,7 +699,7 @@ void cmdReadDirectionPin(const String& args) {
 
 void cmdReadPolarityPin(const String& args) {
   const char* cursor = args.c_str();
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   if (!parsePinToken(cursor, pin) || hasTrailingArgs(cursor)) {
     LOGE("Usage: rpol <pin 0-15>");
     return;
@@ -704,7 +721,7 @@ void cmdReadPolarityPin(const String& args) {
 
 void cmdPinInfo(const String& args) {
   const char* cursor = args.c_str();
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   if (!parsePinToken(cursor, pin) || hasTrailingArgs(cursor)) {
     LOGE("Usage: pininfo <pin 0-15>");
     return;
@@ -777,9 +794,10 @@ void cmdPins() {
 
   Serial.println("=== Pin Summary ===");
   Serial.println("  Pin  Sense  Latch  Dir  Pol");
-  for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
-    const bool port1 = pin >= PCA9555::cmd::PINS_PER_PORT;
-    const uint8_t shift = static_cast<uint8_t>(pin % PCA9555::cmd::PINS_PER_PORT);
+  for (uint8_t pinIndex = 0; pinIndex < PCA9555::cmd::TOTAL_PINS; ++pinIndex) {
+    const PCA9555::Pin pin = static_cast<PCA9555::Pin>(pinIndex);
+    const bool port1 = pinIndex >= PCA9555::cmd::PINS_PER_PORT;
+    const uint8_t shift = static_cast<uint8_t>(pinIndex % PCA9555::cmd::PINS_PER_PORT);
     const uint8_t inputPort = port1 ? inputs.port1 : inputs.port0;
     const uint8_t outputPort = port1 ? outputs.port1 : outputs.port0;
     const uint8_t configPort = port1 ? config.port1 : config.port0;
@@ -801,7 +819,7 @@ void cmdPins() {
 
 void cmdTogglePin(const String& args) {
   const char* cursor = args.c_str();
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   if (!parsePinToken(cursor, pin) || hasTrailingArgs(cursor)) {
     LOGE("Usage: toggle <pin 0-15>");
     return;
@@ -820,7 +838,7 @@ void cmdTogglePin(const String& args) {
 
 void cmdSetDirection(const String& args) {
   const char* cursor = args.c_str();
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   bool input = true;
   if (!parsePinToken(cursor, pin) ||
       !parseDirectionToken(cursor, input) ||
@@ -896,7 +914,7 @@ void cmdSetPortPolarity(const String& args) {
 
 void cmdSetPinPolarity(const String& args) {
   const char* cursor = args.c_str();
-  PCA9555::Pin pin = 0;
+  PCA9555::Pin pin = PCA9555::Pin::P00;
   bool inverted = false;
   if (!parsePinToken(cursor, pin) ||
       !parseBinaryToken(cursor, inverted) ||
@@ -1183,8 +1201,27 @@ void runSelfTest() {
   auto reportSkip = [&](const char* name, const char* note) {
     report(name, SelftestOutcome::SKIP, note);
   };
+  auto printResult = [&]() {
+    Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
+                  goodIfNonZeroColor(stats.pass),
+                  static_cast<unsigned long>(stats.pass),
+                  LOG_COLOR_RESET,
+                  goodIfZeroColor(stats.fail),
+                  static_cast<unsigned long>(stats.fail),
+                  LOG_COLOR_RESET,
+                  skipCountColor(stats.skip),
+                  static_cast<unsigned long>(stats.skip),
+                  LOG_COLOR_RESET);
+  };
+  auto requireStep = [&](const char* name, const PCA9555::Status& status) {
+    reportCheck(name, status.ok(), status.ok() ? "" : errToStr(status.code));
+    if (!status.ok()) {
+      reportSkip("remaining checks", "selftest aborted after state setup or restore failure");
+    }
+    return status.ok();
+  };
 
-  Serial.println("=== PCA9555 selftest (safe commands) ===");
+  Serial.println("=== PCA9555 selftest (guarded mutating commands) ===");
 
   const uint32_t succBefore = device.totalSuccess();
   const uint32_t failBefore = device.totalFailures();
@@ -1195,10 +1232,7 @@ void runSelfTest() {
   if (st.code == PCA9555::Err::NOT_INITIALIZED) {
     reportSkip("probe responds", "driver not initialized");
     reportSkip("remaining checks", "selftest aborted");
-    Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
-                  goodIfNonZeroColor(stats.pass), static_cast<unsigned long>(stats.pass), LOG_COLOR_RESET,
-                  goodIfZeroColor(stats.fail), static_cast<unsigned long>(stats.fail), LOG_COLOR_RESET,
-                  skipCountColor(stats.skip), static_cast<unsigned long>(stats.skip), LOG_COLOR_RESET);
+    printResult();
     return;
   }
   const bool probeHealthUnchanged =
@@ -1223,7 +1257,7 @@ void runSelfTest() {
   st = device.readOutput(PCA9555::Port::PORT_0, outputPort);
   reportCheck("readOutput(PORT_0)", st.ok(), st.ok() ? "" : errToStr(st.code));
   bool outputPin = false;
-  st = device.readOutputPin(0, outputPin);
+  st = device.readOutputPin(PCA9555::Pin::P00, outputPin);
   reportCheck("readOutputPin(0/P00)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   // --- getConfiguration ---
@@ -1234,7 +1268,7 @@ void runSelfTest() {
   st = device.getPortConfiguration(PCA9555::Port::PORT_0, configPort);
   reportCheck("getPortConfiguration(PORT_0)", st.ok(), st.ok() ? "" : errToStr(st.code));
   bool pinDirection = false;
-  st = device.getPinDirection(0, pinDirection);
+  st = device.getPinDirection(PCA9555::Pin::P00, pinDirection);
   reportCheck("getPinDirection(0/P00)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   // --- getPolarity ---
@@ -1245,7 +1279,7 @@ void runSelfTest() {
   st = device.getPortPolarity(PCA9555::Port::PORT_0, polarityPort);
   reportCheck("getPortPolarity(PORT_0)", st.ok(), st.ok() ? "" : errToStr(st.code));
   bool pinPolarity = false;
-  st = device.getPinPolarity(0, pinPolarity);
+  st = device.getPinPolarity(PCA9555::Pin::P00, pinPolarity);
   reportCheck("getPinPolarity(0/P00)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
   // --- getSettings ---
@@ -1255,66 +1289,85 @@ void runSelfTest() {
               snapshot.state == PCA9555::DriverState::READY,
               "");
 
-  // --- writeOutput + readback ---
+  // Capture the complete writable state and deliberately establish all three
+  // protocol-shadow pairs before exercising cached read-modify-write helpers.
   PCA9555::PortData savedOut;
-  device.readOutputs(savedOut);
+  PCA9555::PortData savedCfg;
+  PCA9555::PortData savedPol;
+  st = device.readOutputs(savedOut);
+  if (!requireStep("capture output latches", st)) { printResult(); return; }
+  st = device.getConfiguration(savedCfg);
+  if (!requireStep("capture direction", st)) { printResult(); return; }
+  st = device.getPolarity(savedPol);
+  if (!requireStep("capture polarity", st)) { printResult(); return; }
+  st = device.writeOutputs(savedOut);
+  if (!requireStep("establish output shadow", st)) { printResult(); return; }
+  st = device.setPolarity(savedPol);
+  if (!requireStep("establish polarity shadow", st)) { printResult(); return; }
+  st = device.setConfiguration(savedCfg);
+  if (!requireStep("establish direction shadow", st)) { printResult(); return; }
+
+  // --- writeOutput + readback ---
   st = device.writeOutput(PCA9555::Port::PORT_0, 0xAA);
   if (st.ok()) {
     PCA9555::PortData readback;
-    device.readOutputs(readback);
-    reportCheck("writeOutput(PORT_0, 0xAA) + readback", readback.port0 == 0xAA, "");
+    st = device.readOutputs(readback);
+    reportCheck("writeOutput(PORT_0, 0xAA) + readback",
+                st.ok() && readback.port0 == 0xAA,
+                st.ok() ? "" : errToStr(st.code));
   } else {
     reportCheck("writeOutput(PORT_0, 0xAA)", false, errToStr(st.code));
   }
   st = device.writeOutput(PCA9555::Port::PORT_1, 0x55);
   if (st.ok()) {
     PCA9555::PortData readback;
-    device.readOutputs(readback);
-    reportCheck("writeOutput(PORT_1, 0x55) + readback", readback.port1 == 0x55, "");
+    st = device.readOutputs(readback);
+    reportCheck("writeOutput(PORT_1, 0x55) + readback",
+                st.ok() && readback.port1 == 0x55,
+                st.ok() ? "" : errToStr(st.code));
   } else {
     reportCheck("writeOutput(PORT_1, 0x55)", false, errToStr(st.code));
   }
-  // Restore outputs
-  device.writeOutput(PCA9555::Port::PORT_0, savedOut.port0);
-  device.writeOutput(PCA9555::Port::PORT_1, savedOut.port1);
+  st = device.writeOutputs(savedOut);
+  if (!requireStep("restore output latches", st)) { printResult(); return; }
 
   // --- setPortConfiguration + readback ---
-  PCA9555::PortData savedCfg;
-  device.getConfiguration(savedCfg);
   st = device.setPortConfiguration(PCA9555::Port::PORT_0, 0x0F);
   if (st.ok()) {
     PCA9555::PortData readback;
-    device.getConfiguration(readback);
-    reportCheck("setPortConfiguration(PORT_0, 0x0F) + readback", readback.port0 == 0x0F, "");
+    st = device.getConfiguration(readback);
+    reportCheck("setPortConfiguration(PORT_0, 0x0F) + readback",
+                st.ok() && readback.port0 == 0x0F,
+                st.ok() ? "" : errToStr(st.code));
   } else {
     reportCheck("setPortConfiguration(PORT_0, 0x0F)", false, errToStr(st.code));
   }
-  // Restore config
-  device.setPortConfiguration(PCA9555::Port::PORT_0, savedCfg.port0);
-  device.setPortConfiguration(PCA9555::Port::PORT_1, savedCfg.port1);
+  st = device.setConfiguration(savedCfg);
+  if (!requireStep("restore direction", st)) { printResult(); return; }
 
   // --- setPortPolarity + readback ---
-  PCA9555::PortData savedPol;
-  device.getPolarity(savedPol);
   st = device.setPortPolarity(PCA9555::Port::PORT_0, 0x0F);
   if (st.ok()) {
     PCA9555::PortData readback;
-    device.getPolarity(readback);
-    reportCheck("setPortPolarity(PORT_0, 0x0F) + readback", readback.port0 == 0x0F, "");
+    st = device.getPolarity(readback);
+    reportCheck("setPortPolarity(PORT_0, 0x0F) + readback",
+                st.ok() && readback.port0 == 0x0F,
+                st.ok() ? "" : errToStr(st.code));
   } else {
     reportCheck("setPortPolarity(PORT_0, 0x0F)", false, errToStr(st.code));
   }
-  st = device.setPinPolarity(8, true);
+  st = device.setPinPolarity(PCA9555::Pin::P10, true);
   if (st.ok()) {
     PCA9555::PortData readback;
-    device.getPolarity(readback);
-    reportCheck("setPinPolarity(8/P10, 1) + readback", (readback.port1 & 0x01U) != 0U, "");
+    st = device.getPolarity(readback);
+    reportCheck("setPinPolarity(8/P10, 1) + readback",
+                st.ok() && (readback.port1 & 0x01U) != 0U,
+                st.ok() ? "" : errToStr(st.code));
   } else {
     reportCheck("setPinPolarity(8/P10, 1)", false, errToStr(st.code));
   }
-  // Restore polarity
-  device.setPortPolarity(PCA9555::Port::PORT_0, savedPol.port0);
-  device.setPortPolarity(PCA9555::Port::PORT_1, savedPol.port1);
+  st = device.setPolarity(savedPol);
+  if (!requireStep("restore polarity", st)) { printResult(); return; }
 
   // --- readRegister all 8 ---
   bool allRegsOk = true;
@@ -1327,8 +1380,6 @@ void runSelfTest() {
   reportCheck("readRegister(0-7) all OK", allRegsOk, "");
 
   // --- bulk register helpers ---
-  PCA9555::PortData savedBulkOut;
-  device.readOutputs(savedBulkOut);
   const uint8_t bulkOut[2] = {0xA5, 0x5A};
   st = device.writeRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, bulkOut, 2);
   if (st.ok()) {
@@ -1339,8 +1390,9 @@ void runSelfTest() {
   } else {
     reportCheck("writeRegisters(OUT, 2)", false, errToStr(st.code));
   }
-  const uint8_t restoreBulkOut[2] = {savedBulkOut.port0, savedBulkOut.port1};
-  device.writeRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, restoreBulkOut, 2);
+  const uint8_t restoreBulkOut[2] = {savedOut.port0, savedOut.port1};
+  st = device.writeRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, restoreBulkOut, 2);
+  if (!requireStep("restore bulk output latches", st)) { printResult(); return; }
 
   uint8_t bulkCfg[2] = {};
   st = device.readRegisters(PCA9555::cmd::REG_CONFIG_PORT_0, bulkCfg, 2);
@@ -1348,29 +1400,26 @@ void runSelfTest() {
 
   // --- writeRegister (writable range 2-7) ---
   uint8_t savedReg2 = 0;
-  device.readRegister(2, savedReg2);
+  st = device.readRegister(2, savedReg2);
+  if (!requireStep("capture output register 0", st)) { printResult(); return; }
   st = device.writeRegister(2, 0xBB);
   if (st.ok()) {
     uint8_t readback = 0;
-    device.readRegister(2, readback);
-    reportCheck("writeRegister(2, 0xBB) + readback", readback == 0xBB, "");
+    st = device.readRegister(2, readback);
+    reportCheck("writeRegister(2, 0xBB) + readback",
+                st.ok() && readback == 0xBB,
+                st.ok() ? "" : errToStr(st.code));
   } else {
     reportCheck("writeRegister(2, 0xBB)", false, errToStr(st.code));
   }
-  device.writeRegister(2, savedReg2); // restore
+  st = device.writeRegister(2, savedReg2);
+  if (!requireStep("restore output register 0", st)) { printResult(); return; }
 
   // --- bit manipulation helpers ---
-  PCA9555::PortData savedBitOut;
-  PCA9555::PortData savedBitCfg;
-  PCA9555::PortData savedBitPol;
-  device.readOutputs(savedBitOut);
-  device.getConfiguration(savedBitCfg);
-  device.getPolarity(savedBitPol);
-
   st = device.writeOutputs(PORTS_ALL_LOW);
-  if (st.ok()) {
-    st = device.setConfiguration(PORTS_ALL_LOW);
-  }
+  if (!requireStep("prepare bit-test output latches", st)) { printResult(); return; }
+  st = device.setConfiguration(PORTS_ALL_LOW);
+  if (!requireStep("prepare bit-test direction", st)) { printResult(); return; }
   if (st.ok()) {
     st = device.setOutputBits(0x0103U);
   }
@@ -1406,7 +1455,7 @@ void runSelfTest() {
     reportCheck("toggleOutputBits(0x0300)", false, errToStr(st.code));
   }
 
-  st = device.togglePin(0);
+  st = device.togglePin(PCA9555::Pin::P00);
   if (st.ok()) {
     PCA9555::PortData readback;
     st = device.readOutputs(readback);
@@ -1467,25 +1516,28 @@ void runSelfTest() {
     reportCheck("clearInvertBits(0x0001)", false, errToStr(st.code));
   }
 
-  device.writeOutputs(savedBitOut);
-  device.setPolarity(savedBitPol);
-  device.setConfiguration(savedBitCfg);
+  st = device.writeOutputs(savedOut);
+  if (!requireStep("restore bit-test output latches", st)) { printResult(); return; }
+  const PCA9555::Status polarityRestore = device.setPolarity(savedPol);
+  reportCheck("restore bit-test polarity", polarityRestore.ok(),
+              polarityRestore.ok() ? "" : errToStr(polarityRestore.code));
+  const PCA9555::Status directionRestore = device.setConfiguration(savedCfg);
+  reportCheck("restore bit-test direction", directionRestore.ok(),
+              directionRestore.ok() ? "" : errToStr(directionRestore.code));
+  if (!polarityRestore.ok() || !directionRestore.ok()) {
+    reportSkip("remaining checks", "selftest aborted after restore failure");
+    printResult();
+    return;
+  }
 
-  // --- recover ---
-  st = device.recover();
-  reportCheck("recover", st.ok(), st.ok() ? "" : errToStr(st.code));
-
-  // --- isOnline ---
-  reportCheck("isOnline", device.isOnline(), "");
+  // --- passive binding state ---
+  reportCheck("isBound", device.isBound(), "");
 
   // --- health delta ---
   const uint32_t succDelta = device.totalSuccess() - succBefore;
   const uint32_t failDelta = device.totalFailures() - failBefore;
 
-  Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
-                goodIfNonZeroColor(stats.pass), static_cast<unsigned long>(stats.pass), LOG_COLOR_RESET,
-                goodIfZeroColor(stats.fail), static_cast<unsigned long>(stats.fail), LOG_COLOR_RESET,
-                skipCountColor(stats.skip), static_cast<unsigned long>(stats.skip), LOG_COLOR_RESET);
+  printResult();
   Serial.printf("  Health delta: %ssuccess +%lu%s, %sfailures +%lu%s\n",
                 goodIfNonZeroColor(succDelta),
                 static_cast<unsigned long>(succDelta),
@@ -1615,11 +1667,23 @@ void runStressMix(int count) {
   st = device.setPolarity(PORTS_ALL_LOW);
   if (!st.ok()) {
     printStatus(st);
+    const PCA9555::Status restore =
+        restoreWritableState(savedOut, savedPol, savedCfg);
+    if (!restore.ok()) {
+      LOGE("stress_mix restore after polarity setup failure failed");
+      printStatus(restore);
+    }
     return;
   }
   st = device.setConfiguration(PORTS_ALL_LOW);
   if (!st.ok()) {
     printStatus(st);
+    const PCA9555::Status restore =
+        restoreWritableState(savedOut, savedPol, savedCfg);
+    if (!restore.ok()) {
+      LOGE("stress_mix restore after direction setup failure failed");
+      printStatus(restore);
+    }
     return;
   }
 
@@ -1665,9 +1729,12 @@ void runStressMix(int count) {
                         totalFail);
   }
 
-  device.writeOutputs(savedOut);
-  device.setPolarity(savedPol);
-  device.setConfiguration(savedCfg);
+  st = restoreWritableState(savedOut, savedPol, savedCfg);
+  if (!st.ok()) {
+    LOGE("stress_mix state restore failed");
+    printStatus(st);
+    totalFail++;
+  }
 
   const uint32_t elapsed = millis() - startMs;
   const float successPct = (count > 0)
@@ -1748,14 +1815,24 @@ void cmdSweep(const String& args) {
   st = device.writeOutputs(PORTS_ALL_LOW);
   if (!st.ok()) { printStatus(st); return; }
   st = device.setConfiguration(PORTS_ALL_LOW);
-  if (!st.ok()) { printStatus(st); return; }
+  if (!st.ok()) {
+    printStatus(st);
+    const PCA9555::Status restore =
+        restoreOutputAndDirection(savedOut, savedCfg);
+    if (!restore.ok()) {
+      LOGE("Sweep restore after setup failure failed");
+      printStatus(restore);
+    }
+    return;
+  }
 
   Serial.printf("=== Sweep Test (delay=%ld ms) ===\n", delayMs);
   int pass = 0, fail = 0;
 
   // Phase 1: turn pins ON one-by-one (accumulating)
   Serial.println("  -- ON sweep --");
-  for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
+  for (uint8_t pinIndex = 0; pinIndex < PCA9555::cmd::TOTAL_PINS; ++pinIndex) {
+    const PCA9555::Pin pin = static_cast<PCA9555::Pin>(pinIndex);
     st = device.writePin(pin, true);
     if (!st.ok()) {
       Serial.printf("  P%u%u: %s[FAIL]%s set high - %s\n",
@@ -1771,7 +1848,7 @@ void cmdSweep(const String& args) {
     // Verify: all pins 0..pin should be HIGH
     PCA9555::PortData readback;
     st = device.readOutputs(readback);
-    const uint16_t expected = static_cast<uint16_t>((1U << (pin + 1)) - 1U);
+    const uint16_t expected = static_cast<uint16_t>((1U << (pinIndex + 1U)) - 1U);
     if (!st.ok() || readback.combined() != expected) {
       Serial.printf("  P%u%u: %s[FAIL]%s ON readback 0x%04X != 0x%04X\n",
                     static_cast<unsigned>(physicalPortForPin(pin)),
@@ -1790,7 +1867,8 @@ void cmdSweep(const String& args) {
 
   // Phase 2: turn pins OFF one-by-one (draining)
   Serial.println("  -- OFF sweep --");
-  for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
+  for (uint8_t pinIndex = 0; pinIndex < PCA9555::cmd::TOTAL_PINS; ++pinIndex) {
+    const PCA9555::Pin pin = static_cast<PCA9555::Pin>(pinIndex);
     st = device.writePin(pin, false);
     if (!st.ok()) {
       Serial.printf("  P%u%u: %s[FAIL]%s set low - %s\n",
@@ -1806,8 +1884,8 @@ void cmdSweep(const String& args) {
     // Verify: pins 0..pin should be LOW, pins (pin+1)..15 should still be HIGH
     PCA9555::PortData readback;
     st = device.readOutputs(readback);
-    const uint16_t expected = (pin < 15)
-        ? static_cast<uint16_t>(0xFFFFU << (pin + 1))
+    const uint16_t expected = (pinIndex < 15U)
+        ? static_cast<uint16_t>(0xFFFFU << (pinIndex + 1U))
         : static_cast<uint16_t>(0x0000U);
     if (!st.ok() || readback.combined() != expected) {
       Serial.printf("  P%u%u: %s[FAIL]%s OFF readback 0x%04X != 0x%04X\n",
@@ -1825,9 +1903,13 @@ void cmdSweep(const String& args) {
     }
   }
 
-  // Restore
-  device.setConfiguration(savedCfg);
-  device.writeOutputs(savedOut);
+  // Restore latches before re-enabling any saved output directions.
+  st = restoreOutputAndDirection(savedOut, savedCfg);
+  if (!st.ok()) {
+    LOGE("Sweep state restore failed");
+    printStatus(st);
+    fail++;
+  }
 
   Serial.println("--- Summary ---");
   Serial.printf("  %s%d passed%s, %s%d failed%s\n",
@@ -1854,16 +1936,28 @@ void cmdWalk(const String& args) {
   st = device.readOutputs(savedOut);
   if (!st.ok()) { printStatus(st); return; }
 
-  // Set all pins to output
-  st = device.setConfiguration(PORTS_ALL_LOW);
+  // Preload a known low latch image before enabling outputs.
+  st = device.writeOutputs(PORTS_ALL_LOW);
   if (!st.ok()) { printStatus(st); return; }
+  st = device.setConfiguration(PORTS_ALL_LOW);
+  if (!st.ok()) {
+    printStatus(st);
+    const PCA9555::Status restore =
+        restoreOutputAndDirection(savedOut, savedCfg);
+    if (!restore.ok()) {
+      LOGE("Walk restore after setup failure failed");
+      printStatus(restore);
+    }
+    return;
+  }
 
   Serial.printf("=== Walking-1 Test (delay=%ld ms) ===\n", delayMs);
   int pass = 0, fail = 0;
 
-  for (uint8_t pin = 0; pin < PCA9555::cmd::TOTAL_PINS; ++pin) {
+  for (uint8_t pinIndex = 0; pinIndex < PCA9555::cmd::TOTAL_PINS; ++pinIndex) {
+    const PCA9555::Pin pin = static_cast<PCA9555::Pin>(pinIndex);
     // Only this pin high, all others low
-    const uint16_t pattern = static_cast<uint16_t>(1U << pin);
+    const uint16_t pattern = static_cast<uint16_t>(1U << pinIndex);
     const PCA9555::PortData out = PCA9555::PortData::fromCombined(pattern);
 
     st = device.writeOutputs(out);
@@ -1890,10 +1984,13 @@ void cmdWalk(const String& args) {
     }
   }
 
-  // All off, then restore
-  device.writeOutputs(PORTS_ALL_LOW);
-  device.setConfiguration(savedCfg);
-  device.writeOutputs(savedOut);
+  // Restore latches before re-enabling any saved output directions.
+  st = restoreOutputAndDirection(savedOut, savedCfg);
+  if (!st.ok()) {
+    LOGE("Walk state restore failed");
+    printStatus(st);
+    fail++;
+  }
 
   Serial.println("--- Summary ---");
   Serial.printf("  %s%d passed%s, %s%d failed%s\n",
@@ -2023,9 +2120,9 @@ void printHelp() {
   cli::printHelpSection("Diagnostics");
   cli::printHelpItem("drv / health", "Show driver state and health");
   cli::printHelpItem("probe", "Probe device (no health tracking)");
-  cli::printHelpItem("recover [confirm]", "Manual recovery attempt");
+  cli::printHelpItem("recover [confirm]", "Apply the explicit example recovery image");
   cli::printHelpItem("verbose [0|1]", "Enable/disable verbose output");
-  cli::printHelpItem("selftest [confirm]", "Run safe API self-test incl. readback, masks, direction, and polarity");
+  cli::printHelpItem("selftest [confirm]", "Run guarded mutating API self-test incl. readback, masks, direction, and polarity");
   cli::printHelpItem("stress [N]", "Run N readInputs cycles (default 10)");
   cli::printHelpItem("stress_mix [N] [confirm]", "Run N mixed read/write/config/polarity/mask cycles (default 50)");
 }
@@ -2390,12 +2487,12 @@ void processCommand(const String& cmdLine) {
     if (!requireExactConfirmation(confirmed,
                                   "recover",
                                   "recover [confirm]",
-                                  "attempt manual recovery and reapply cached state",
+                                  "apply the explicit example recovery image",
                                   CONFIRM_REASON_RECOVER)) {
       return;
     }
-    LOGI("Attempting recovery...");
-    PCA9555::Status st = device.recover();
+    LOGI("Attempting recovery by applying the explicit example image...");
+    PCA9555::Status st = applyExampleRecoveryImage();
     printStatus(st);
     printDriverHealth();
     return;
@@ -2570,32 +2667,24 @@ void setup() {
   cfg.timeUser = nullptr;
   cfg.i2cAddress = 0x20;
   cfg.i2cTimeoutMs = board::I2C_TIMEOUT_MS;
-  cfg.offlineThreshold = 5;
-
-  // All pins input (default POR state)
-  cfg.configPort0 = 0xFF;
-  cfg.configPort1 = 0xFF;
-  cfg.outputPort0 = 0xFF;
-  cfg.outputPort1 = 0xFF;
-  cfg.polarityPort0 = 0x00;
-  cfg.polarityPort1 = 0x00;
-  cfg.applyInterruptErrata = true;
-  cfg.requireConfigPortDefaults = false;  // CLI mutates config regs; chip has no SW reset
-  PCA9555::Status st = device.begin(cfg);
+  PCA9555::Status st = device.bind(cfg);
   if (!st.ok()) {
-    LOGE("Init failed!");
+    LOGE("Bind failed!");
     printStatus(st);
     return;
   }
-  LOGI("PCA9555 initialized at 0x%02X", cfg.i2cAddress);
+  LOGI("PCA9555 callbacks bound at 0x%02X", cfg.i2cAddress);
+  st = device.probe();
+  if (!st.ok()) {
+    LOGW("Address probe failed; CLI remains available for diagnostics");
+    printStatus(st);
+  }
   printDriverHealth();
   printHelp();
   cli::printPrompt();
 }
 
 void loop() {
-  device.tick(millis());
-
   // Non-blocking stress test execution
   if (stressStats.active && stressRemaining > 0) {
     PCA9555::PortData data;

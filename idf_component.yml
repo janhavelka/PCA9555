@@ -1,4 +1,4 @@
-version: "2.0.0"
+version: "3.0.0"
 description: "Production-oriented, framework-neutral PCA9555 16-bit I/O expander driver."
 license: "MIT"
 url: "https://www.thymos.cz"

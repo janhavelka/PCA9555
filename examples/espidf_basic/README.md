@@ -12,15 +12,19 @@ idf.py -C examples/espidf_basic set-target esp32s3 build
 idf.py -C examples/espidf_basic set-target esp32s2 build
 ```
 
-The example owns the I2C bus setup and adapts native ESP-IDF I2C calls to
-`PCA9555::Status`. It is example code, not a production bus manager. Review SDA,
-SCL, address straps, pull-ups, INT wiring, supply voltage, and output loads
-before connecting hardware.
+The example owns the I2C bus setup and maps each native ESP-IDF I2C call to one
+terminal `PCA9555::TransportResult`. It calls passive `bind()` first and then
+performs an explicit `probe()`. It is example code, not a production bus
+manager. Review SDA, SCL, address straps, pull-ups, INT wiring, supply voltage,
+and output loads before connecting hardware.
 
 Commands that write outputs, change direction or polarity, write raw registers,
-run patterns, recover state, self-test, or stress mixed operations require a
-final `confirm` token. Without `confirm`, the CLI prints the pending change and
-the confirmed command form.
+run patterns, apply the example recovery image, self-test, or stress mixed
+operations require a final `confirm` token. Without `confirm`, the CLI prints
+the pending change and the confirmed command form. The `recover` command is
+application policy: it applies high output latches, normal polarity, and all
+pins input through the cooperative apply-image API. It does not recover the I2C
+bus and does not invoke a library-owned retry policy.
 
 This example is not hardware validation. Passing the static contract or
 compiling the example still needs real serial logs, wiring notes, and bench

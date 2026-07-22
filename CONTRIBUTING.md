@@ -1,51 +1,65 @@
 # Contributing
 
-Thank you for considering contributing to this project!
+Keep changes small, explicit, and testable. The core is a passive,
+framework-neutral device driver; board policy and bus ownership stay in the
+application or examples.
 
-## Quick Start
+## Before opening a pull request
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Make your changes
-4. Ensure examples build: `pio run -e esp32s3dev -e esp32s2dev`
-5. Commit with a clear message: `git commit -m "feat: add X"`
-6. Push and open a Pull Request
+1. Create a focused branch.
+2. Follow the existing formatting and naming in the touched file.
+3. Add or update native tests for every behavior change and failure path.
+4. Update public API comments, README, and CHANGELOG when contracts change.
+5. Run the relevant validation gates:
 
-## Guidelines
+```text
+python scripts/generate_version.py check
+python tools/check_core_timing_guard.py
+python tools/check_cli_contract.py
+python tools/check_idf_example_contract.py
+python tools/check_hil_contract.py
+python tools/test_run_i2c_hil_parser.py
+python -m platformio test -e native
+python -m platformio run -e esp32s2dev
+python -m platformio run -e esp32s3dev
+python tools/check_package.py
+doxygen Doxyfile
+```
 
-### Code Style
-- Follow existing code style (see `.clang-format`)
-- Use `constexpr` instead of macros for constants
-- Prefer explicit over implicit
-- No heap allocations in steady-state library code
+`doxygen Doxyfile` is strict: undocumented public symbols and documentation
+errors fail the command. Generated output under `docs/doxygen/` is local and
+ignored; do not add it to a commit or package.
 
-### Commits
-- Use [Conventional Commits](https://www.conventionalcommits.org/) format:
-  - `feat:` new feature
-  - `fix:` bug fix
-  - `docs:` documentation only
-  - `refactor:` code change that neither fixes a bug nor adds a feature
-  - `test:` adding or updating tests
-  - `chore:` maintenance tasks
+6. Review `git status --short`, `git diff --check`, and the final diff for
+   generated artifacts, broken relative documentation links, or unrelated user
+   changes.
 
-### Pull Requests
-- Keep PRs focused (one feature/fix per PR)
-- Update documentation if needed
-- Add changelog entry under `[Unreleased]`
-- Ensure CI passes
+## Engineering rules
 
-### What We Accept
-- Bug fixes
-- Documentation improvements
-- Performance improvements (with benchmarks)
-- New examples (if they demonstrate a common use case)
+- Do not include Arduino, Wire, ESP-IDF, FreeRTOS, or board headers in public
+  headers or `src/`.
+- Do not let the driver own or reconfigure I2C.
+- Transport callbacks represent exactly one terminal attempt. Do not hide
+  retries or bus recovery in a callback or in the driver.
+- Keep bind/detach passive. Presence, diagnostics, apply, and verify are
+  explicit operations.
+- Keep compound work fixed-capacity, deadline-bounded, cooperatively polled, and
+  observable at every terminal path.
+- Preserve latch-before-direction ordering and the input-read pointer-park
+  requirement.
+- Report uncertain write effects; do not guess or silently claim success.
+- Use static error strings, no exceptions, and no steady-state heap allocation.
+- Add a new abstraction only for a concrete current caller or chip requirement.
+- Do not add application queues, policy registries, logging, software PWM, or a
+  speculative rare-operation framework to the chip driver.
 
-### What We Probably Won't Accept
-- Breaking API changes without discussion
-- Heavy dependencies
-- Platform-specific code in the library core
-- Features that add heap allocations in steady state
+## Pull request scope
 
-## Questions?
+Good changes include focused bug fixes, safety tests, clear documentation,
+portability improvements, and examples of common integrations. Discuss a
+breaking public API change before implementation. A breaking release needs a
+major version, migration notes, and synchronized generated metadata.
 
-Open a GitHub Discussion or Issue for questions.
+Hardware claims need attached real-target evidence. Compile and host-test
+results alone do not establish electrical, interrupt, brownout, or field
+behavior.

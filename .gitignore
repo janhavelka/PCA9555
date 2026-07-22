@@ -5,3 +5,6 @@
 .vscode/ipch
 __pycache__/
 hil_logs/
+/docs/doxygen/
+/build_output.txt
+/build_result.txt

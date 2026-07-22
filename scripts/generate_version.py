@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Synchronize Version.h from library.json and expose build metadata via macros.
+"""Synchronize release metadata from library.json and expose build macros.
 
 Default behavior:
-- when run by PlatformIO as an extra script: sync generated headers if needed and
-  inject build metadata defines into the compile environment
-- when run standalone: sync generated headers if needed
+- when run by PlatformIO as an extra script: sync Version.h, ESP-IDF metadata,
+  and Doxygen metadata, then inject build defines into the compile environment
+- when run standalone: synchronize those version outputs if needed
 
 Standalone commands:
   sync
-      Regenerate generated headers only if source metadata changed.
+      Regenerate synchronized version outputs only when metadata changed.
   check
-      Exit with code 1 when generated headers are out of date.
+      Exit with code 1 when any synchronized version output is out of date.
   bump patch|minor|major
-      Update library.json, then regenerate generated headers.
+      Update library.json, then regenerate synchronized version outputs.
   set X.Y.Z
-      Set an explicit semantic version, then regenerate generated headers.
+      Set an explicit semantic version, then regenerate synchronized outputs.
 """
 
 from __future__ import annotations
@@ -251,6 +251,14 @@ static constexpr const char* VERSION_FULL = {prefix}_VERSION_FULL;
 '''
 
 
+def _replace_version_field(path: Path, pattern: str, replacement: str) -> str:
+    current = _read_text(path)
+    updated, count = re.subn(pattern, replacement, current, count=1, flags=re.MULTILINE)
+    if count != 1:
+        raise RuntimeError(f"Unable to find version field in {path}")
+    return updated
+
+
 def _expected_outputs(project_root: Path) -> Dict[Path, str]:
     library_json = project_root / "library.json"
     library_data = _load_library_json(library_json)
@@ -260,6 +268,16 @@ def _expected_outputs(project_root: Path) -> Dict[Path, str]:
 
     outputs = {
         namespace_dir / "Version.h": _render_version_header(namespace, version),
+        project_root / "idf_component.yml": _replace_version_field(
+            project_root / "idf_component.yml",
+            r'^version:\s*"[^"]+"\s*$',
+            f'version: "{version}"',
+        ),
+        project_root / "Doxyfile": _replace_version_field(
+            project_root / "Doxyfile",
+            r'^PROJECT_NUMBER\s*=.*$',
+            f'PROJECT_NUMBER         = "{version}"',
+        ),
     }
 
     return outputs

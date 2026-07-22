@@ -14,7 +14,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-#include "PCA9555/Status.h"
+#include "PCA9555/Config.h"
 
 namespace transport {
 
@@ -67,22 +67,32 @@ class ScopedWireTimeout {
 #endif
 };
 
-inline PCA9555::Status mapWireResult(uint8_t result, const char* context) {
+inline PCA9555::TransportResult mapWireResult(
+    uint8_t result,
+    PCA9555::WriteEffect writeEffect = PCA9555::WriteEffect::NOT_APPLICABLE) {
   switch (result) {
     case 0:
-      return PCA9555::Status::Ok();
+      return PCA9555::TransportResult::Ok(0U, 0U);
     case 1:
-      return PCA9555::Status::Error(PCA9555::Err::INVALID_PARAM, context, result);
+      return PCA9555::TransportResult::Error(
+          PCA9555::TransportCode::IO_ERROR, result,
+          PCA9555::WriteEffect::NOT_ATTEMPTED);
     case 2:
-      return PCA9555::Status::Error(PCA9555::Err::I2C_NACK_ADDR, context, result);
+      return PCA9555::TransportResult::Error(
+          PCA9555::TransportCode::NACK_ADDRESS, result,
+          PCA9555::WriteEffect::NOT_ATTEMPTED);
     case 3:
-      return PCA9555::Status::Error(PCA9555::Err::I2C_NACK_DATA, context, result);
+      return PCA9555::TransportResult::Error(
+          PCA9555::TransportCode::NACK_DATA, result, writeEffect);
     case 4:
-      return PCA9555::Status::Error(PCA9555::Err::I2C_BUS, context, result);
+      return PCA9555::TransportResult::Error(
+          PCA9555::TransportCode::BUS_ERROR, result, writeEffect);
     case 5:
-      return PCA9555::Status::Error(PCA9555::Err::I2C_TIMEOUT, context, result);
+      return PCA9555::TransportResult::Error(
+          PCA9555::TransportCode::TIMEOUT, result, writeEffect);
     default:
-      return PCA9555::Status::Error(PCA9555::Err::I2C_ERROR, context, result);
+      return PCA9555::TransportResult::Error(
+          PCA9555::TransportCode::IO_ERROR, result, writeEffect);
   }
 }
 
@@ -96,36 +106,46 @@ inline PCA9555::Status mapWireResult(uint8_t result, const char* context) {
  * @param addr I2C 7-bit address
  * @param data Data buffer to send
  * @param len Number of bytes
- * @param timeoutMs Timeout requested by the driver (advisory only)
+ * @param timeoutMs Per-attempt timeout requested by the driver
  * @param user Pointer to TwoWire instance
- * @return Status OK on success, I2C error on failure
+ * @return Terminal result for one physical attempt
  */
-inline PCA9555::Status wireWrite(uint8_t addr, const uint8_t* data, size_t len,
-                                 uint32_t timeoutMs, void* user) {
+inline PCA9555::TransportResult wireWrite(uint8_t addr, const uint8_t* data,
+                                          size_t len, uint32_t timeoutMs,
+                                          void* user) {
   TwoWire* wire = static_cast<TwoWire*>(user);
   if (wire == nullptr) {
-    return PCA9555::Status::Error(PCA9555::Err::INVALID_CONFIG, "Wire instance is null");
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, 0,
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
   if (!data || len == 0) {
-    return PCA9555::Status::Error(PCA9555::Err::INVALID_PARAM, "Invalid I2C write params");
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, 0,
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
 
   // Check for oversized writes (ESP32 Wire buffer is 128 bytes)
   if (len > 128) {
-    return PCA9555::Status::Error(PCA9555::Err::INVALID_PARAM, "Write exceeds I2C buffer",
-                                  static_cast<int32_t>(len));
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, static_cast<int32_t>(len),
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
 
   ScopedWireTimeout scopedTimeout(*wire, timeoutMs);
   wire->beginTransmission(addr);
   size_t written = wire->write(data, len);
   if (written != len) {
-    return PCA9555::Status::Error(PCA9555::Err::I2C_ERROR, "I2C write incomplete",
-                                   static_cast<int32_t>(written));
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, static_cast<int32_t>(written),
+        PCA9555::WriteEffect::NOT_ATTEMPTED, 0U, 0U);
   }
 
   uint8_t result = wire->endTransmission(true);  // Send STOP
-  return mapWireResult(result, "I2C write failed");
+  if (result == 0U) {
+    return PCA9555::TransportResult::Ok(len, 0U);
+  }
+  return mapWireResult(result, PCA9555::WriteEffect::MAY_HAVE_COMMITTED);
 }
 
 /**
@@ -140,55 +160,72 @@ inline PCA9555::Status wireWrite(uint8_t addr, const uint8_t* data, size_t len,
  * @param txLen TX length
  * @param rx RX buffer for readback
  * @param rxLen RX length
- * @param timeoutMs Timeout requested by the driver (advisory only)
+ * @param timeoutMs Per-attempt timeout requested by the driver
  * @param user Pointer to TwoWire instance
- * @return Status OK on success, I2C error on failure
+ * @return Terminal result for one physical attempt
  */
-inline PCA9555::Status wireWriteRead(uint8_t addr, const uint8_t* tx, size_t txLen,
-                                     uint8_t* rx, size_t rxLen, uint32_t timeoutMs,
-                                     void* user) {
+inline PCA9555::TransportResult wireWriteRead(uint8_t addr, const uint8_t* tx,
+                                              size_t txLen, uint8_t* rx,
+                                              size_t rxLen, uint32_t timeoutMs,
+                                              void* user) {
   TwoWire* wire = static_cast<TwoWire*>(user);
   if (wire == nullptr) {
-    return PCA9555::Status::Error(PCA9555::Err::INVALID_CONFIG, "Wire instance is null");
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, 0,
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
   if ((txLen > 0 && tx == nullptr) || (rxLen > 0 && rx == nullptr)) {
-    return PCA9555::Status::Error(PCA9555::Err::INVALID_PARAM, "Invalid I2C read params");
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, 0,
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
   if (txLen == 0 || rxLen == 0) {
-    return PCA9555::Status::Error(PCA9555::Err::INVALID_PARAM, "I2C read length invalid");
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, 0,
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
   if (txLen > 128 || rxLen > 128) {
-    return PCA9555::Status::Error(PCA9555::Err::INVALID_PARAM, "I2C read exceeds buffer");
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, 0,
+        PCA9555::WriteEffect::NOT_ATTEMPTED);
   }
 
   ScopedWireTimeout scopedTimeout(*wire, timeoutMs);
   wire->beginTransmission(addr);
   size_t written = wire->write(tx, txLen);
   if (written != txLen) {
-    return PCA9555::Status::Error(PCA9555::Err::I2C_ERROR, "I2C write incomplete",
-                                   static_cast<int32_t>(written));
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, static_cast<int32_t>(written),
+        PCA9555::WriteEffect::NOT_ATTEMPTED, 0U, 0U);
   }
 
   uint8_t result = wire->endTransmission(false);  // Repeated start
   if (result != 0) {
-    return mapWireResult(result, "I2C write phase failed");
+    const PCA9555::WriteEffect commandEffect =
+        (result == 2U || result == 3U)
+            ? PCA9555::WriteEffect::NOT_ATTEMPTED
+            : PCA9555::WriteEffect::MAY_HAVE_COMMITTED;
+    return mapWireResult(result, commandEffect);
   }
 
   size_t read = wire->requestFrom(addr, static_cast<uint8_t>(rxLen));
   if (read != rxLen) {
-    return PCA9555::Status::Error(PCA9555::Err::I2C_ERROR, "I2C read length mismatch",
-                                   static_cast<int32_t>(read));
+    return PCA9555::TransportResult::Error(
+        PCA9555::TransportCode::IO_ERROR, static_cast<int32_t>(read),
+        PCA9555::WriteEffect::COMMITTED, txLen, read);
   }
 
   for (size_t i = 0; i < rxLen; ++i) {
     if (wire->available()) {
       rx[i] = static_cast<uint8_t>(wire->read());
     } else {
-      return PCA9555::Status::Error(PCA9555::Err::I2C_ERROR, "I2C data not available");
+      return PCA9555::TransportResult::Error(
+          PCA9555::TransportCode::IO_ERROR, 0,
+          PCA9555::WriteEffect::COMMITTED, txLen, i);
     }
   }
 
-  return PCA9555::Status::Ok();
+  return PCA9555::TransportResult::Ok(txLen, rxLen);
 }
 
 /**

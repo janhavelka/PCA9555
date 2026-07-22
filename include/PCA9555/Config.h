@@ -1,125 +1,107 @@
 /// @file Config.h
-/// @brief Configuration structure for PCA9555 driver
+/// @brief Injected transport and passive binding configuration.
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
+
 #include "PCA9555/Status.h"
 
 namespace PCA9555 {
 
-/// I2C write callback signature.
-///
-/// Callback contract: complete synchronously, do not retain buffer pointers,
-/// and do not call back into the same PCA9555 instance. If Config::i2cLock is
-/// configured, callbacks invoked by this driver while that lock is held must
-/// not attempt to acquire the same non-recursive lock again.
-/// @param addr     I2C device address (7-bit)
-/// @param data     Pointer to data to write
-/// @param len      Number of bytes to write
-/// @param timeoutMs Maximum time to wait for completion
-/// @param user     User context pointer passed through from Config
-/// @return Status indicating success or failure
-using I2cWriteFn = Status (*)(uint8_t addr, const uint8_t* data, size_t len,
-                              uint32_t timeoutMs, void* user);
+/// Terminal result of exactly one physical I2C attempt.
+enum class TransportCode : uint8_t {
+  OK = 0,
+  NACK_ADDRESS,
+  NACK_DATA,
+  TIMEOUT,
+  BUS_ERROR,
+  IO_ERROR
+};
 
-/// I2C write-then-read callback signature.
-///
-/// Callback contract: complete synchronously, do not retain buffer pointers,
-/// and do not call back into the same PCA9555 instance. If Config::i2cLock is
-/// configured, callbacks invoked by this driver while that lock is held must
-/// not attempt to acquire the same non-recursive lock again.
-/// @param addr     I2C device address (7-bit)
-/// @param txData   Pointer to data to write
-/// @param txLen    Number of bytes to write
-/// @param rxData   Pointer to buffer for read data
-/// @param rxLen    Number of bytes to read
-/// @param timeoutMs Maximum time to wait for completion
-/// @param user     User context pointer passed through from Config
-/// @return Status indicating success or failure
-using I2cWriteReadFn = Status (*)(uint8_t addr, const uint8_t* txData, size_t txLen,
-                                  uint8_t* rxData, size_t rxLen, uint32_t timeoutMs,
-                                  void* user);
+/// Conservative evidence about a callback's device-side transmit phase.
+enum class WriteEffect : uint8_t {
+  NOT_APPLICABLE = 0,
+  NOT_ATTEMPTED,      ///< Transport proves no relevant TX byte was accepted.
+  COMMITTED,          ///< The complete relevant TX phase was accepted.
+  MAY_HAVE_COMMITTED  ///< Some or all relevant TX bytes may have been accepted.
+};
 
-/// Optional transport lock callback.
-///
-/// If configured, the driver calls this before compound input-read plus errata
-/// pointer-park sequences that must not be interleaved by another shared-bus
-/// user. The callback receives Config::i2cTimeoutMs, must complete
-/// synchronously, and must not call back into the same PCA9555 instance.
-/// A lock failure is returned to the caller; no input I/O is attempted, no
-/// unlock callback is called, and dirty state is not changed.
-/// @param user User context pointer passed through from Config
-/// @param timeoutMs Maximum time to wait for the lock
-/// @return Status::Ok() after acquiring the lock, error otherwise
-using LockFn = Status (*)(void* user, uint32_t timeoutMs);
+/// Typed terminal outcome returned by an injected transport callback.
+struct TransportResult {
+  /// Framework-neutral terminal transport classification.
+  TransportCode code = TransportCode::IO_ERROR;
+  /// Adapter-defined static numeric detail for diagnostics.
+  int32_t detail = 0;
+  /// For i2cWrite, describes register-data mutation after the leading command.
+  /// For i2cWriteRead, describes acceptance of the command write phase.
+  WriteEffect writeEffect = WriteEffect::MAY_HAVE_COMMITTED;
+  /// TX bytes known accepted at the device boundary, including the command.
+  size_t completedTxBytes = 0;
+  /// RX bytes known returned by the device.
+  size_t completedRxBytes = 0;
 
-/// Optional transport unlock callback.
-///
-/// Called exactly once for each successful LockFn call, including error return
-/// paths after the lock was acquired.
-/// @param user User context pointer passed through from Config
-using UnlockFn = void (*)(void* user);
+  /// Return true only for a complete successful transport attempt.
+  constexpr bool ok() const { return code == TransportCode::OK; }
 
-/// Millisecond timestamp callback.
-///
-/// Optional diagnostic timebase. If absent, health timestamps remain 0.
-/// The timebase must be monotonic uint32_t milliseconds; wrap is allowed.
-/// Use the same clock domain as tick(nowMs).
-/// @param user User context pointer passed through from Config
-/// @return Current monotonic milliseconds
+  /// Construct a successful result with exact completed byte counts.
+  static constexpr TransportResult Ok(size_t txBytes, size_t rxBytes) {
+    return TransportResult{
+        TransportCode::OK, 0,
+        txBytes == 0U ? WriteEffect::NOT_APPLICABLE : WriteEffect::COMMITTED,
+        txBytes, rxBytes};
+  }
+
+  /// Construct a failed result with conservative transfer evidence.
+  static constexpr TransportResult Error(
+      TransportCode error, int32_t detailCode = 0,
+      WriteEffect effect = WriteEffect::MAY_HAVE_COMMITTED,
+      size_t txBytes = 0, size_t rxBytes = 0) {
+    return TransportResult{error, detailCode, effect, txBytes, rxBytes};
+  }
+};
+
+/// One terminal, synchronous I2C write attempt. The callback must not retry,
+/// recover the bus, retain pointers, or call the same driver recursively.
+using I2cWriteFn = TransportResult (*)(uint8_t addr, const uint8_t* data,
+                                       size_t len, uint32_t timeoutMs,
+                                       void* user);
+
+/// One terminal, synchronous write-then-read attempt using a repeated START.
+/// writeEffect describes whether the device accepted the command write phase.
+using I2cWriteReadFn = TransportResult (*)(
+    uint8_t addr, const uint8_t* txData, size_t txLen, uint8_t* rxData,
+    size_t rxLen, uint32_t timeoutMs, void* user);
+
+/// Optional monotonic uint32_t millisecond source for synchronous health stamps.
 using NowMsFn = uint32_t (*)(void* user);
 
-/// @brief Port identifier.
-enum class Port : uint8_t {
-  PORT_0 = 0,  ///< Port 0 (P00-P07)
-  PORT_1 = 1   ///< Port 1 (P10-P17)
-};
+/// Minimum accepted per-callback timeout.
+static constexpr uint32_t MIN_I2C_TIMEOUT_MS = 1UL;
+/// Maximum accepted per-callback timeout.
+static constexpr uint32_t MAX_I2C_TIMEOUT_MS = 1000UL;
+/// Default per-callback timeout used by Config.
+static constexpr uint32_t DEFAULT_I2C_TIMEOUT_MS = 50UL;
 
-/// @brief Pin direction.
-enum class Direction : uint8_t {
-  INPUT_MODE = 0,   ///< Input; output driver high-Z, internal pull-up present
-  OUTPUT_MODE = 1   ///< Push-pull output driven by the output latch
-};
-
-/// Pin number (0-15 across both ports)
-/// Pins 0-7 = Port 0, Pins 8-15 = Port 1
-using Pin = uint8_t;
-
-/// @brief Configuration for PCA9555 driver.
+/// Passive driver binding. Context pointers and callbacks must remain valid
+/// until detach()/end() or a later successful bind().
 struct Config {
-  // === I2C Transport (required) ===
-  I2cWriteFn i2cWrite = nullptr;         ///< I2C write function pointer
-  I2cWriteReadFn i2cWriteRead = nullptr; ///< I2C write-read function pointer
-  void* i2cUser = nullptr;               ///< User context for callbacks
+  /// Required one-attempt write callback.
+  I2cWriteFn i2cWrite = nullptr;
+  /// Required one-attempt repeated-start write-read callback.
+  I2cWriteReadFn i2cWriteRead = nullptr;
+  /// Opaque context forwarded to both I2C callbacks.
+  void* i2cUser = nullptr;
 
-  // === Timing Hooks (optional) ===
-  NowMsFn nowMs = nullptr;               ///< Optional monotonic uint32_t millisecond source for diagnostic health timestamps
-  void* timeUser = nullptr;              ///< User context for timing hook
+  /// Optional monotonic time callback used only for health timestamps.
+  NowMsFn nowMs = nullptr;
+  /// Opaque context forwarded to nowMs.
+  void* timeUser = nullptr;
 
-  // === Device Settings ===
-  uint8_t i2cAddress = 0x20;             ///< 0x20-0x27 (A2:A1:A0 pin state)
-  uint32_t i2cTimeoutMs = 50;            ///< I2C transaction timeout in ms
-
-  // === Initial Pin Configuration ===
-  uint8_t configPort0 = 0xFF;            ///< Pin direction Port 0 (1=input, 0=output). Default: all inputs
-  uint8_t configPort1 = 0xFF;            ///< Pin direction Port 1 (1=input, 0=output). Default: all inputs
-  uint8_t outputPort0 = 0xFF;            ///< Initial output latch Port 0. Default: all latch bits high
-  uint8_t outputPort1 = 0xFF;            ///< Initial output latch Port 1. Default: all latch bits high
-  uint8_t polarityPort0 = 0x00;          ///< Polarity inversion Port 0. Default: no inversion
-  uint8_t polarityPort1 = 0x00;          ///< Polarity inversion Port 1. Default: no inversion
-  bool requireConfigPortDefaults = true; ///< Require Configuration Port 0/1 = 0xFF at begin()
-
-  // === Interrupt Errata Workaround ===
-  bool applyInterruptErrata = true;      ///< Write safe cmd byte after input reads (recommended)
-
-  // === Health Tracking ===
-  uint8_t offlineThreshold = 5;          ///< Consecutive failures before OFFLINE state (1-255)
-
-  // === Optional Shared-Bus Compound Sequence Lock ===
-  LockFn i2cLock = nullptr;              ///< Optional lock for input-read + errata-write sequences
-  UnlockFn i2cUnlock = nullptr;          ///< Optional unlock; must be set when i2cLock is set
-  void* lockUser = nullptr;              ///< User context for lock callbacks
+  /// PCA9555 7-bit address in the inclusive range 0x20 through 0x27.
+  uint8_t i2cAddress = 0x20;
+  /// Per-callback timeout in milliseconds.
+  uint32_t i2cTimeoutMs = DEFAULT_I2C_TIMEOUT_MS;
 };
 
-} // namespace PCA9555
+}  // namespace PCA9555

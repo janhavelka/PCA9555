@@ -1,6 +1,8 @@
 # HIL Validation Summary - 2026-06-25
 
-Status: pre-production candidate. Continuous HIL remains blocked.
+Scope: historical `v2.0.0`-era bench evidence. This is not v3 validation.
+
+Status at the time: pre-production candidate; continuous HIL was blocked.
 
 The durable result from the June 2026 COM5 hardware runs is that the PCA9555
 driver and I2C transactions did not show a confirmed chip-level failure, but
@@ -16,19 +18,21 @@ Key evidence:
 - Segmented 4-hour run: `PASS=13694`, failures `0`, duration `14400.015 s`,
   serial reopens `119`. This proves many short prompt-gated sessions, not one
   continuous firmware uptime window, because reopening COM5 reset the target.
-- Post-segment restore passed: `dirin 0xFFFF confirm`, final health `READY`,
-  `consecutiveFailures=0`, `totalFailures=0`.
+- Post-segment direction-only cleanup passed: `dirin 0xFFFF confirm`, final
+  health `READY`, `consecutiveFailures=0`, `totalFailures=0`. That command did
+  not restore or verify output latches and polarity, so it is not evidence of a
+  complete writable-state restore.
 - Direct reset probe: after `read` and `outputs`, health success count reached
   `3`; closing and reopening COM5 returned health success count to `0`.
 
-Definitive culprit:
+Recorded validation-channel blocker:
 
 The blocker was the ESP32-S3 native USB CDC / COM5 command channel. Opening the
 serial port with the recorded line settings reset or restarted the firmware, and
 long no-reopen sessions still timed out on the command channel. The segmented
 pass is therefore not valid continuous HIL evidence.
 
-Release implication:
+Current implication:
 
 - Do not claim production-grade, field-validated, or fully hardware-validated
   status from these runs.

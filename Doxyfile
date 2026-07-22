@@ -33,12 +33,13 @@ STRIP_CODE_COMMENTS    = NO
 
 # Keep the generated reference focused on public headers and durable guides.
 # Runnable examples are linked from README and validated by their build gates.
+# Keep docs/README.md out of INPUT: Doxygen 1.9.8 otherwise treats both README
+# files as main-page blocks and fails the strict warning gate.
 INPUT                  = README.md \
                          CHANGELOG.md \
                          CONTRIBUTING.md \
                          SECURITY.md \
                          include \
-                         docs/README.md \
                          docs/chip_notes.md \
                          docs/espidf.md \
                          docs/hardware_validation.md \

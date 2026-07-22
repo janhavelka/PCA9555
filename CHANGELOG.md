@@ -7,24 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- Completed per-symbol Doxygen descriptions for the public transport, status,
-  state, lifecycle, cooperative-operation, register, and health contracts.
-- Narrowed generated API documentation to public headers and durable project
-  guides; undocumented public symbols and documentation errors now fail the
-  Doxygen gate instead of being hidden by `EXTRACT_ALL`.
-- Added a concrete status/error guide, input-data-versus-pointer-cleanup rule,
-  generated-documentation workflow, and clearer document ownership to README
-  and the documentation index.
-- Updated contribution and release guidance so Doxygen must complete without
-  warnings and generated HTML remains an ignored local artifact.
-- Removed the superseded v2 refactor plan from the live TunnelMonitor
-  suitability record, clarified that the retained June HIL summary is
-  historical v2 evidence, and changed generic board-review checkboxes so they
-  are not mistaken for unfinished library work.
-
-## [3.0.0] - 2026-07-19
+## [3.0.0] - 2026-07-22
 
 ### Added
 
@@ -75,6 +58,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   owned recovery images.
 - `library.json` is the version source of truth for generated `Version.h`,
   `idf_component.yml`, and Doxygen `PROJECT_NUMBER`.
+- Completed per-symbol Doxygen descriptions for the public transport, status,
+  state, lifecycle, cooperative-operation, register, and health contracts.
+- Narrowed generated API documentation to public headers and durable project
+  guides; undocumented public symbols and documentation errors now fail the
+  Doxygen gate instead of being hidden by `EXTRACT_ALL`.
+- Kept the root README as the single Doxygen main page. The documentation index
+  remains in the repository and package but is excluded from Doxygen input for
+  compatibility with the Ubuntu Doxygen 1.9.8 CI runner.
+- Added a concrete status/error guide, input-data-versus-pointer-cleanup rule,
+  generated-documentation workflow, and clearer document ownership to README
+  and the documentation index.
+- Updated contribution and release guidance so Doxygen must complete without
+  warnings and generated HTML remains an ignored local artifact.
+- Removed the superseded v2 refactor plan from the live TunnelMonitor
+  suitability record, clarified that the retained June HIL summary is
+  historical v2 evidence, and changed generic board-review checkboxes so they
+  are not mistaken for unfinished library work.
 
 ### Removed
 
@@ -92,16 +92,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The broad v2 `hardwareStateDirty()` and `hardwareStateDirtyError` spellings.
   Use `uncertainPairs()` for ambiguous write effects and `shadowValidPairs()`
   for the separate read-modify-write validity fence.
-
-### Release status
-
-- This is a breaking API release and therefore a major version bump.
-- Release metadata is prepared for `3.0.0`; this source change does not create
-  or publish the `v3.0.0` tag.
-- Native, package, documentation, Arduino, and static contract gates are part
-  of the release checklist. Hardware validation remains a separate requirement.
-- Continuous target HIL evidence remains incomplete; do not infer field
-  validation from host tests or compile results.
 
 ## [2.0.0] - 2026-06-25
 

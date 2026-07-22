@@ -4,7 +4,7 @@
 - Baseline PCA9555 revision: `46b441e44e6d43ebfaccb255a3b582122463fe94` (`v2.0.0`)
 - Audited v3 implementation: `47b6f90d181c32b9ec6fe09093f7d735dfff34bf`
 - TunnelMonitor-node revision: `b708f511964db6c51e949e99c67820476f00f9c7`
-- Release target: PCA9555 `3.0.0`; not yet tagged or published
+- Release target: PCA9555 `3.0.0`
 
 The original audit was read-only across both repositories. TunnelMonitor-node
 was not changed. This file now records the current disposition only. The
@@ -35,9 +35,9 @@ enables, and on/off mux control. It is not a PWM device, cannot guarantee an
 electrical safe state during reset, cannot make cross-port changes atomic, and
 does not define TunnelMonitor product channels or policy.
 
-No library-contract blocker remains from this audit. Adoption is still blocked
-by the external product, integration, release, and hardware evidence listed
-below. This is not a hardware or field-readiness claim.
+No library-contract blocker remains from this audit. Adoption still requires
+the external product, integration, and hardware evidence listed below. This is
+not a hardware or field-readiness claim.
 
 ## Disposition matrix
 
@@ -127,5 +127,4 @@ Evidence limits remain explicit:
 - `idf.py` was unavailable locally; CI jobs are configured, but this audit did
   not retrieve a current CI result;
 - no physical HIL, logic-analyzer capture, brownout test, or shared-bus soak was
-  performed;
-- `v3.0.0` was not tagged or published by this work.
+  performed.

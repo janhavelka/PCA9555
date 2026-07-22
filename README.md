@@ -55,9 +55,7 @@ See [chip notes](docs/chip_notes.md), the
 ## Installation
 
 Production users should pin an audited release tag or immutable commit. Do not
-track a moving branch. The tag below is the intended reference after the
-3.0.0 release is reviewed and published; this working-tree update does not
-create or publish the tag.
+track a moving branch. Version 3.0.0 can be pinned as:
 
 ```ini
 lib_deps =

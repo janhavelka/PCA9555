@@ -65,7 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Doxygen gate instead of being hidden by `EXTRACT_ALL`.
 - Kept the root README as the single Doxygen main page. The documentation index
   remains in the repository and package but is excluded from Doxygen input for
-  compatibility with the Ubuntu Doxygen 1.9.8 CI runner.
+  compatibility with the Ubuntu Doxygen 1.9.8 CI runner. Graphviz output is
+  explicitly disabled so host-specific Doxygen defaults cannot change the
+  documentation build or require an undeclared tool.
 - Added a concrete status/error guide, input-data-versus-pointer-cleanup rule,
   generated-documentation workflow, and clearer document ownership to README
   and the documentation index.

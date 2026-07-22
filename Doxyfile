@@ -30,6 +30,9 @@ SOURCE_BROWSER         = YES
 REFERENCED_BY_RELATION = YES
 REFERENCES_RELATION    = YES
 STRIP_CODE_COMMENTS    = NO
+# Graphviz diagrams are not part of the documentation contract. Pin this value
+# because Doxygen defaults differ across supported host packages.
+HAVE_DOT               = NO
 
 # Keep the generated reference focused on public headers and durable guides.
 # Runnable examples are linked from README and validated by their build gates.

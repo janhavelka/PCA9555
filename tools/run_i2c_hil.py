@@ -86,6 +86,10 @@ class AggregateStats:
     effective_hz: float
     stop_reason: str
     serial_reopens: int = 0
+    first_anomaly_command: str | None = None
+    first_anomaly_result: str | None = None
+    first_anomaly_reason: str | None = None
+    first_anomaly_evidence: list[str] = dataclasses.field(default_factory=list)
 
 
 DEFAULT_SAFE_COMMANDS: tuple[CommandSpec, ...] = (
@@ -345,7 +349,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         dest="timeout",
         type=float,
         default=None,
-        help="Override command timeout in seconds; custom command files use 5s when omitted.",
+        help=(
+            "Minimum command timeout in seconds. Known command-specific bounds "
+            "are never shortened; custom command files use 5s when omitted."
+        ),
     )
     parser.add_argument("--dry-run", action="store_true", help="Plan only; do not open serial.")
     parser.add_argument("--parser-self-test", action="store_true", help="Run parser/classifier self-test and exit.")
@@ -586,6 +593,11 @@ def default_required_opt_in(command: str, *, unsafe: bool, destructive: bool) ->
 def custom_command_spec(command: str, default_timeout: float) -> CommandSpec:
     unsafe = command_is_unsafe(command)
     requires_opt_in = default_required_opt_in(command, unsafe=unsafe, destructive=unsafe)
+    recovery_command = (
+        "recover confirm"
+        if unsafe and not re.fullmatch(r"\s*recover(?:\s+confirm)?\s*", command, re.IGNORECASE)
+        else None
+    )
     return CommandSpec(
         command=command,
         purpose="Custom operator-provided command.",
@@ -593,6 +605,7 @@ def custom_command_spec(command: str, default_timeout: float) -> CommandSpec:
         classifier="custom",
         destructive=unsafe,
         requires_opt_in=requires_opt_in,
+        recovery_command=recovery_command,
         notes=(
             "Custom command matched the unsafe CLI allowlist and requires opt-in."
             if unsafe
@@ -625,6 +638,11 @@ def dynamic_cli_command_spec(command: str, default_timeout: float) -> CommandSpe
             completion_tokens=completion_tokens,
             destructive=destructive,
             requires_opt_in=requires_opt_in,
+            recovery_command=(
+                "recover confirm"
+                if destructive and not re.fullmatch(r"recover(?:\s+confirm)?", lowered)
+                else None
+            ),
             classifier=classifier,
             notes=(
                 "Dynamic CLI command matched the unsafe output-control allowlist and requires opt-in."
@@ -633,6 +651,12 @@ def dynamic_cli_command_spec(command: str, default_timeout: float) -> CommandSpe
             ),
         )
 
+    if re.fullmatch(r"stress(?:\s+[1-9]\d*)?", lowered):
+        return make(
+            purpose="Run bounded read-only input and pointer-park stress.",
+            expected=(r"=== Stress Results ===", r"fail=0"),
+            classifier="stress",
+        )
     if re.fullmatch(r"allhigh(?:\s+confirm)?", lowered):
         return make(
             purpose="Drive all PCA9555 pins high as outputs.",
@@ -813,13 +837,11 @@ def build_command_sequence(args: argparse.Namespace) -> list[CommandSpec]:
     if args.commands:
         custom_specs: list[CommandSpec] = []
         for spec in load_command_file(pathlib.Path(args.commands), custom_timeout):
-            if args.timeout is not None:
-                spec = dataclasses.replace(spec, timeout_s=args.timeout)
+            spec = apply_timeout_override(spec, args)
             custom_specs.append(spec)
             recovery = recovery_spec_for(spec)
             if recovery is not None:
-                if args.timeout is not None:
-                    recovery = dataclasses.replace(recovery, timeout_s=args.timeout)
+                recovery = apply_timeout_override(recovery, args)
                 custom_specs.append(recovery)
         return custom_specs
     address_token = address_table_token(args.address)
@@ -830,18 +852,15 @@ def build_command_sequence(args: argparse.Namespace) -> list[CommandSpec]:
                 spec,
                 expected=(r"Scan complete", rf"(?m)^[0-7][0-9A-F]:\s+.*\b{re.escape(address_token)}\b"),
             )
-        if args.timeout is not None:
-            spec = dataclasses.replace(spec, timeout_s=args.timeout)
+        spec = apply_timeout_override(spec, args)
         default_specs.append(spec)
     all_specs: list[CommandSpec] = [*default_specs]
     for spec in OPTIONAL_COMMANDS:
-        if args.timeout is not None:
-            spec = dataclasses.replace(spec, timeout_s=args.timeout)
+        spec = apply_timeout_override(spec, args)
         all_specs.append(spec)
         recovery = recovery_spec_for(spec)
         if recovery is not None:
-            if args.timeout is not None:
-                recovery = dataclasses.replace(recovery, timeout_s=args.timeout)
+            recovery = apply_timeout_override(recovery, args)
             all_specs.append(recovery)
     return all_specs
 
@@ -864,7 +883,7 @@ def parse_command_mix(text: str, default_timeout: float) -> list[CommandSpec]:
 def apply_timeout_override(spec: CommandSpec, args: argparse.Namespace) -> CommandSpec:
     if args.timeout is None:
         return spec
-    return dataclasses.replace(spec, timeout_s=args.timeout)
+    return dataclasses.replace(spec, timeout_s=max(spec.timeout_s, args.timeout))
 
 
 def extract_evidence(text: str, patterns: Iterable[str]) -> list[str]:
@@ -992,11 +1011,13 @@ def read_until(
     idle_gap_s: float,
     allow_idle_completion: bool = False,
     completion_tokens: tuple[str, ...] = (),
+    expected_patterns: tuple[str, ...] = (),
 ) -> tuple[str, str]:
     deadline = time.monotonic() + timeout_s
     chunks: list[bytes] = []
     last_rx = time.monotonic()
     saw_output = False
+    evidence_complete = False
 
     while time.monotonic() < deadline:
         waiting = getattr(ser, "in_waiting", 0)
@@ -1007,25 +1028,26 @@ def read_until(
             last_rx = time.monotonic()
             saw_output = True
             decoded = b"".join(chunks).decode("utf-8", errors="replace")
-            if decoded_ends_with_prompt(decoded, prompt):
+            normalized = strip_ansi(decoded)
+            patterns_complete = bool(expected_patterns) and all(
+                re.search(pattern, normalized, flags=re.IGNORECASE)
+                for pattern in expected_patterns
+            )
+            tokens_complete = any(
+                token and token in decoded for token in completion_tokens
+            )
+            evidence_complete = patterns_complete or tokens_complete
+            failure_seen = has_failure_context(normalized)
+            framing_required = bool(expected_patterns or completion_tokens)
+            if decoded_ends_with_prompt(decoded, prompt) and (
+                evidence_complete or failure_seen or not framing_required
+            ):
                 return decoded, "prompt"
-            for token in completion_tokens:
-                if token and token in decoded:
-                    # Most CLI commands print the prompt after the token. Wait briefly for it.
-                    prompt_deadline = min(deadline, time.monotonic() + idle_gap_s)
-                    while time.monotonic() < prompt_deadline:
-                        waiting_after = getattr(ser, "in_waiting", 0)
-                        read_after = waiting_after if waiting_after and waiting_after > 0 else 1
-                        more = ser.read(read_after)
-                        if more:
-                            chunks.append(more)
-                            decoded = b"".join(chunks).decode("utf-8", errors="replace")
-                            if decoded_ends_with_prompt(decoded, prompt):
-                                return decoded, "prompt"
-                        time.sleep(0.02)
-                    return decoded, "completion_token"
-        elif allow_idle_completion and saw_output and (time.monotonic() - last_rx) >= idle_gap_s:
-            return b"".join(chunks).decode("utf-8", errors="replace"), "idle"
+        elif saw_output and (time.monotonic() - last_rx) >= idle_gap_s and (
+            evidence_complete or allow_idle_completion
+        ):
+            reason = "expected_evidence" if evidence_complete else "idle"
+            return b"".join(chunks).decode("utf-8", errors="replace"), reason
         else:
             time.sleep(0.02)
 
@@ -1050,6 +1072,7 @@ def run_serial_command(
         idle_gap_s=idle_gap_s,
         allow_idle_completion=allow_idle_completion,
         completion_tokens=spec.completion_tokens,
+        expected_patterns=spec.expected,
     )
     elapsed = time.monotonic() - start
     normalized = strip_ansi(raw)
@@ -1111,6 +1134,7 @@ def run_aggregate_commands(
     consecutive_failures = 0
     stop_reason = "limit_reached"
     serial_reopens = 0
+    first_anomaly: CommandResult | None = None
     last_reopen_mono = started_mono
     reopen_interval_s = args.serial_reopen_interval_s if args is not None else 0.0
 
@@ -1178,7 +1202,42 @@ def run_aggregate_commands(
         if verbose:
             print(f"{label}: {result.command} -> {result.serial_result} ({result.elapsed_s:.3f}s)")
 
-        if command_result_is_serial_anomaly(result):
+        step_has_anomaly = command_result_is_serial_anomaly(result)
+        if step_has_anomaly and first_anomaly is None:
+            first_anomaly = result
+        recovery = recovery_spec_for(spec)
+        if recovery is not None:
+            if args is not None:
+                recovery = apply_timeout_override(recovery, args)
+            if hasattr(ser, "reset_input_buffer"):
+                ser.reset_input_buffer()
+            recovery_result, _ = run_serial_command(
+                ser,
+                recovery,
+                prompt=prompt,
+                idle_gap_s=idle_gap_s,
+                allow_idle_completion=allow_idle_completion,
+            )
+            results.append(recovery_result)
+            latencies.append(recovery_result.elapsed_s)
+            command_counts[recovery_result.command] = (
+                command_counts.get(recovery_result.command, 0) + 1
+            )
+            result_counts[recovery_result.serial_result] = (
+                result_counts.get(recovery_result.serial_result, 0) + 1
+            )
+            step_has_anomaly = step_has_anomaly or command_result_is_serial_anomaly(
+                recovery_result
+            )
+            if command_result_is_serial_anomaly(recovery_result) and first_anomaly is None:
+                first_anomaly = recovery_result
+            if verbose:
+                print(
+                    f"{label}: {recovery_result.command} -> "
+                    f"{recovery_result.serial_result} ({recovery_result.elapsed_s:.3f}s)"
+                )
+
+        if step_has_anomaly:
             consecutive_failures += 1
             if consecutive_failures >= failure_limit:
                 stop_reason = "failure_limit"
@@ -1210,6 +1269,10 @@ def run_aggregate_commands(
         effective_hz=(len(results) / elapsed) if elapsed > 0 else 0.0,
         stop_reason=stop_reason,
         serial_reopens=serial_reopens,
+        first_anomaly_command=(first_anomaly.command if first_anomaly else None),
+        first_anomaly_result=(first_anomaly.serial_result if first_anomaly else None),
+        first_anomaly_reason=(first_anomaly.completion_reason if first_anomaly else None),
+        first_anomaly_evidence=(first_anomaly.evidence[:4] if first_anomaly else []),
     )
     return stats, results, ser
 
@@ -1233,10 +1296,21 @@ def aggregate_result(stats: AggregateStats) -> CommandResult:
     evidence = [
         f"completed={stats.completed}",
         f"failures={stats.failures}",
-        f"result_counts={json.dumps(stats.result_counts, sort_keys=True)}",
-        f"effective_hz={stats.effective_hz:.3f}",
-        f"stop_reason={stats.stop_reason}",
     ]
+    if stats.first_anomaly_command is not None:
+        evidence.append(
+            "first_anomaly="
+            f"{stats.first_anomaly_command}/{stats.first_anomaly_result}/"
+            f"{stats.first_anomaly_reason}"
+        )
+        evidence.extend(stats.first_anomaly_evidence[:2])
+    evidence.extend(
+        [
+            f"result_counts={json.dumps(stats.result_counts, sort_keys=True)}",
+            f"effective_hz={stats.effective_hz:.3f}",
+            f"stop_reason={stats.stop_reason}",
+        ]
+    )
     return CommandResult(
         command=f"{stats.label}:aggregate",
         purpose=f"Aggregate statistics for {stats.label}.",
@@ -1334,7 +1408,7 @@ def write_summary_files(
         "serial_dtr": args.serial_dtr,
         "serial_rts": args.serial_rts,
         "i2c_address": args.address,
-        "timeout_override_s": args.timeout,
+        "timeout_minimum_s": args.timeout,
         "startup_timeout_s": args.startup_timeout,
         "idle_timeout_s": args.idle_gap,
         "allow_idle_completion": args.allow_idle_completion,
@@ -1384,7 +1458,7 @@ def write_summary_files(
         f"- Revision: `{branch}` at `{commit}` ({status_short if status_short else 'clean'})",
         f"- Target: `{args.port or 'N/A'}` at `{args.baud}` baud, PCA9555 `{args.address}`",
         f"- Serial lines: DTR `{args.serial_dtr}`, RTS `{args.serial_rts}`; reopen interval `{args.serial_reopen_interval_s}s`",
-        f"- Timing: startup `{args.startup_timeout}s`, idle `{args.idle_gap}s`, command override `{args.timeout}`",
+        f"- Timing: startup `{args.startup_timeout}s`, idle `{args.idle_gap}s`, command minimum `{args.timeout}`",
         f"- Dry run: `{args.dry_run}`",
         f"- Final verdict: `{verdict}`",
         "",

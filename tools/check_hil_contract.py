@@ -128,7 +128,7 @@ def main() -> int:
     }.items():
         for phrase in (
             "OPERATOR_CHECK_REQUIRED",
-            "No physical HIL validation was performed",
+            "shared-bus evidence",
             "tools/run_i2c_hil.py",
             "hil_logs/",
         ):

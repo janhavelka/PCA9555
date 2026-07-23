@@ -139,10 +139,17 @@ def test_destructive_command_gating() -> None:
         )
         assert_true(not runner.opt_in_enabled(spec, safe_args), f"{command} must be gated by default")
         assert_true(runner.opt_in_enabled(spec, opt_in_args), f"{command} must run after explicit opt-in")
+        expected_recovery = None if command == "recover" else "recover confirm"
+        assert_equal(
+            spec.recovery_command,
+            expected_recovery,
+            f"{command} recovery metadata should be safe and nonrecursive",
+        )
 
 
 def test_dynamic_full_function_commands_have_expected_pass_patterns() -> None:
     cases = (
+        ("stress 100", "=== Stress Results ===\nTotal: ok=100 fail=0", "stress"),
         ("allhigh confirm", "All 16 pins set to OUTPUT HIGH", "output_pattern"),
         ("alllow confirm", "All 16 pins set to OUTPUT LOW", "output_pattern"),
         ("pattern 0xAAAA confirm", "Pattern applied: value=0xAAAA", "output_pattern"),
@@ -176,6 +183,8 @@ def test_dynamic_full_function_commands_have_expected_pass_patterns() -> None:
         if spec.destructive:
             assert_equal(spec.requires_opt_in, "--include-output-tests", f"{command} should be opt-in gated")
             assert_true(runner.opt_in_enabled(spec, opt_in_args), f"{command} should run after opt-in")
+            expected_recovery = None if command == "recover confirm" else "recover confirm"
+            assert_equal(spec.recovery_command, expected_recovery, f"{command} recovery metadata")
         result, evidence = runner.classify(spec, transcript, "prompt")
         assert_equal(result, "PASS", f"{command} expected transcript should pass")
         assert_true(evidence, f"{command} PASS should include evidence")
@@ -298,8 +307,13 @@ def test_timeout_aliases_and_override() -> None:
     specs = runner.build_command_sequence(args)
     runnable = [spec for spec in specs if spec.command in ("version", "scan", "stress 10")]
     assert_true(runnable, "default sequence should contain checked commands")
+    original_timeouts = {spec.command: spec.timeout_s for spec in runner.DEFAULT_SAFE_COMMANDS}
     for spec in runnable:
-        assert_equal(spec.timeout_s, 7.0, f"{spec.command} timeout should be overridden")
+        assert_equal(
+            spec.timeout_s,
+            max(7.0, original_timeouts[spec.command]),
+            f"{spec.command} timeout override must not shorten its safe bound",
+        )
 
 
 def test_parser_self_test_entrypoint() -> None:
@@ -342,6 +356,61 @@ def test_aggregate_result_flags_review_counts() -> None:
 def test_aggregate_result_flags_fail_counts() -> None:
     result = runner.aggregate_result(make_aggregate_stats({"PASS": 1, "TIMEOUT": 1}, failures=1))
     assert_equal(result.serial_result, "FAIL", "aggregate must fail when command failures exist")
+
+
+def test_aggregate_destructive_failure_runs_recovery_before_stopping() -> None:
+    calls: list[str] = []
+    original = runner.run_serial_command
+
+    def fake_run_serial_command(_ser, spec, **_kwargs):
+        calls.append(spec.command)
+        failed = spec.command == "allhigh confirm"
+        return (
+            runner.CommandResult(
+                command=spec.command,
+                purpose=spec.purpose,
+                classifier=spec.classifier,
+                serial_result="FAIL" if failed else "PASS",
+                operator_result="N/A",
+                completion_reason="prompt",
+                elapsed_s=0.001,
+                notes=spec.notes,
+                evidence=[],
+            ),
+            "",
+        )
+
+    class FakeSerial:
+        def reset_input_buffer(self) -> None:
+            pass
+
+    runner.run_serial_command = fake_run_serial_command
+    try:
+        spec = runner.dynamic_cli_command_spec("allhigh confirm", 5.0)
+        assert_true(spec is not None, "allhigh dynamic spec must exist")
+        stats, results, _ = runner.run_aggregate_commands(
+            FakeSerial(),
+            [spec],
+            label="soak",
+            max_commands=1,
+            deadline_s=None,
+            prompt=runner.PROMPT_TOKEN,
+            idle_gap_s=0.1,
+            allow_idle_completion=False,
+            interval_s=0.0,
+            failure_limit=1,
+            verbose=False,
+        )
+    finally:
+        runner.run_serial_command = original
+
+    assert_equal(calls, ["allhigh confirm", "recover confirm"], "recovery must run before stop")
+    assert_equal(len(results), 2, "destructive step and recovery must both be retained")
+    assert_equal(stats.completed, 2, "aggregate stats must count the recovery attempt")
+    assert_equal(stats.failures, 1, "the primary destructive failure must remain visible")
+    assert_equal(stats.stop_reason, "failure_limit", "failure limit should apply after recovery")
+    assert_equal(stats.first_anomaly_command, "allhigh confirm", "first anomaly command")
+    assert_equal(stats.first_anomaly_result, "FAIL", "first anomaly result")
 
 
 def test_fail_verdict_maps_to_nonzero_exit() -> None:
@@ -406,7 +475,7 @@ def test_dry_run_artifacts_include_classifier_and_timing_options() -> None:
         log_dirs = list(pathlib.Path(tmp).glob("i2c_*"))
         assert_equal(len(log_dirs), 1, "dry-run should create one log directory")
         summary = json.loads((log_dirs[0] / "summary.json").read_text(encoding="utf-8"))
-        assert_equal(summary["timeout_override_s"], 6.0, "summary should record timeout override")
+        assert_equal(summary["timeout_minimum_s"], 6.0, "summary should record timeout minimum")
         assert_equal(summary["idle_timeout_s"], 0.3, "summary should record idle timeout")
         assert_equal(summary["boot_settle_s"], 0.1, "summary should record boot settle")
         assert_equal(summary["serial_reopen_interval_s"], 0.0, "summary should record serial reopen interval")
@@ -455,6 +524,43 @@ def test_read_until_does_not_depend_on_in_waiting() -> None:
     assert_true("Status: OK" in text, "read_until should capture data returned by bounded reads")
 
 
+def test_read_until_ignores_stale_prompt_until_current_evidence() -> None:
+    ser = ZeroWaitingSerial((
+        b"delayed tail\n> ",
+        b"=== PCA9555 selftest ===\n",
+        b"Selftest result: pass=50 fail=0 skip=0\n",
+    ))
+    text, reason = runner.read_until(
+        ser,
+        prompt="> ",
+        timeout_s=1.0,
+        idle_gap_s=0.05,
+        expected_patterns=(r"Selftest result:", r"fail=0"),
+    )
+    assert_equal(
+        reason,
+        "expected_evidence",
+        "conclusive current-command evidence should tolerate a delayed prompt tail",
+    )
+    assert_true("pass=50" in text, "the stale prompt must not terminate the current response")
+
+
+def test_failure_text_does_not_end_an_active_command_without_prompt() -> None:
+    ser = ZeroWaitingSerial((b"[FAIL] step 1\n",))
+    _text, reason = runner.read_until(
+        ser,
+        prompt="> ",
+        timeout_s=0.1,
+        idle_gap_s=0.02,
+        expected_patterns=(r"32 passed", r"0 failed"),
+    )
+    assert_equal(
+        reason,
+        "timeout",
+        "failure text alone must not end a command that may still be mutating hardware",
+    )
+
+
 def main() -> int:
     tests: tuple[Callable[[], None], ...] = (
         test_default_safe_command_sequence,
@@ -472,10 +578,13 @@ def main() -> int:
         test_parser_self_test_entrypoint,
         test_aggregate_result_flags_review_counts,
         test_aggregate_result_flags_fail_counts,
+        test_aggregate_destructive_failure_runs_recovery_before_stopping,
         test_fail_verdict_maps_to_nonzero_exit,
         test_serial_anomaly_maps_to_nonzero_exit_without_failing_manual_rows,
         test_dry_run_artifacts_include_classifier_and_timing_options,
         test_read_until_does_not_depend_on_in_waiting,
+        test_read_until_ignores_stale_prompt_until_current_evidence,
+        test_failure_text_does_not_end_an_active_command_without_prompt,
     )
     for test in tests:
         test()

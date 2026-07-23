@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Recorded the concise COM7 qualification summary, including a 73-minute,
+  15,000,000-operation input/pointer-park stress with zero failures, while
+  keeping the remaining physical/analyzer gates explicitly open.
+- Condensed normal-mode CLI self-test and stress output to totals plus
+  failure/skip detail; verbose mode retains per-check and per-operation detail.
+- Expanded the clean-package consumer to exercise a TunnelMonitor-style owner:
+  5 ms terminal callbacks, one callback per cooperative poll, exactly-once
+  results, complete-image reconciliation, and no hidden retry after a NACK.
+
+### Fixed
+
+- HIL aggregate commands now run their declared complete-image recovery before
+  a failure limit can stop the session.
+- `--timeout-s` is now a minimum and cannot shorten safer command-specific
+  bounds.
+- Known-command serial responses require their own expected or failure evidence
+  before a prompt can terminate them, preventing a delayed USB CDC prompt from
+  being attributed to the next command.
+- Normal-mode self-test and stress result tails are plain text so ANSI escape
+  fragments cannot split machine evidence at a USB packet boundary.
+
 ## [3.0.0] - 2026-07-22
 
 ### Added

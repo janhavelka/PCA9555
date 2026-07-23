@@ -138,10 +138,6 @@ const char* onOffColor(bool on) {
   return on ? LOG_COLOR_GREEN : LOG_COLOR_RESET;
 }
 
-const char* skipCountColor(uint32_t value) {
-  return (value > 0U) ? LOG_COLOR_YELLOW : LOG_COLOR_RESET;
-}
-
 const char* skipWhitespace(const char* text) {
   while (*text != '\0' && std::isspace(static_cast<unsigned char>(*text)) != 0) {
     ++text;
@@ -1180,13 +1176,15 @@ void runSelfTest() {
   auto report = [&](const char* name, SelftestOutcome outcome, const char* note) {
     const bool passed = (outcome == SelftestOutcome::PASS);
     const bool skipped = (outcome == SelftestOutcome::SKIP);
-    const char* color = skipped ? LOG_COLOR_YELLOW : LOG_COLOR_RESULT(passed);
-    const char* tag = skipped ? "SKIP" : (passed ? "PASS" : "FAIL");
-    Serial.printf("  [%s%s%s] %s", color, tag, LOG_COLOR_RESET, name);
-    if (note && note[0]) {
-      Serial.printf(" - %s", note);
+    if (!passed || verboseMode) {
+      const char* color = skipped ? LOG_COLOR_YELLOW : LOG_COLOR_RESULT(passed);
+      const char* tag = skipped ? "SKIP" : (passed ? "PASS" : "FAIL");
+      Serial.printf("  [%s%s%s] %s", color, tag, LOG_COLOR_RESET, name);
+      if (note && note[0]) {
+        Serial.printf(" - %s", note);
+      }
+      Serial.println();
     }
-    Serial.println();
     if (skipped) {
       stats.skip++;
     } else if (passed) {
@@ -1202,16 +1200,10 @@ void runSelfTest() {
     report(name, SelftestOutcome::SKIP, note);
   };
   auto printResult = [&]() {
-    Serial.printf("Selftest result: pass=%s%lu%s fail=%s%lu%s skip=%s%lu%s\n",
-                  goodIfNonZeroColor(stats.pass),
+    Serial.printf("Selftest result: pass=%lu fail=%lu skip=%lu\n",
                   static_cast<unsigned long>(stats.pass),
-                  LOG_COLOR_RESET,
-                  goodIfZeroColor(stats.fail),
                   static_cast<unsigned long>(stats.fail),
-                  LOG_COLOR_RESET,
-                  skipCountColor(stats.skip),
-                  static_cast<unsigned long>(stats.skip),
-                  LOG_COLOR_RESET);
+                  static_cast<unsigned long>(stats.skip));
   };
   auto requireStep = [&](const char* name, const PCA9555::Status& status) {
     reportCheck(name, status.ok(), status.ok() ? "" : errToStr(status.code));
@@ -1538,13 +1530,9 @@ void runSelfTest() {
   const uint32_t failDelta = device.totalFailures() - failBefore;
 
   printResult();
-  Serial.printf("  Health delta: %ssuccess +%lu%s, %sfailures +%lu%s\n",
-                goodIfNonZeroColor(succDelta),
+  Serial.printf("  Health delta: success +%lu, failures +%lu\n",
                 static_cast<unsigned long>(succDelta),
-                LOG_COLOR_RESET,
-                goodIfZeroColor(failDelta),
-                static_cast<unsigned long>(failDelta),
-                LOG_COLOR_RESET);
+                static_cast<unsigned long>(failDelta));
 }
 
 // ============================================================================
@@ -1574,16 +1562,10 @@ void finishStressStats() {
                                : 0.0f;
 
   Serial.println("=== Stress Results ===");
-  Serial.printf("  Total: %sok=%lu%s %sfail=%lu%s (%s%.2f%%%s)\n",
-                goodIfNonZeroColor(static_cast<uint32_t>(stressStats.okCount)),
+  Serial.printf("  Total: ok=%lu fail=%lu (%.2f%%)\n",
                 static_cast<unsigned long>(stressStats.okCount),
-                LOG_COLOR_RESET,
-                goodIfZeroColor(static_cast<uint32_t>(stressStats.failCount)),
                 static_cast<unsigned long>(stressStats.failCount),
-                LOG_COLOR_RESET,
-                successRateColor(successPct),
-                successPct,
-                LOG_COLOR_RESET);
+                successPct);
   Serial.printf("  Duration: %lu ms\n", static_cast<unsigned long>(elapsed));
   if (elapsed > 0) {
     Serial.printf("  Rate: %.2f ops/s\n",
@@ -1591,13 +1573,9 @@ void finishStressStats() {
   }
   const uint32_t succDelta = device.totalSuccess() - stressStats.succBefore;
   const uint32_t failDelta = device.totalFailures() - stressStats.failBefore;
-  Serial.printf("  Health delta: %ssuccess +%lu%s, %sfailures +%lu%s\n",
-                goodIfNonZeroColor(succDelta),
+  Serial.printf("  Health delta: success +%lu, failures +%lu\n",
                 static_cast<unsigned long>(succDelta),
-                LOG_COLOR_RESET,
-                goodIfZeroColor(failDelta),
-                static_cast<unsigned long>(failDelta),
-                LOG_COLOR_RESET);
+                static_cast<unsigned long>(failDelta));
   if (stressStats.hasFailure) {
     Serial.println("  First failure:");
     printStatus(stressStats.firstFailure);
@@ -1723,10 +1701,12 @@ void runStressMix(int count) {
       LOGV(verboseMode, "  cycle %d op=%s: %s", i, ops[op].name, errToStr(st.code));
     }
 
-    printStressProgress(static_cast<uint32_t>(i + 1),
-                        static_cast<uint32_t>(count),
-                        totalOk,
-                        totalFail);
+    if (verboseMode) {
+      printStressProgress(static_cast<uint32_t>(i + 1),
+                          static_cast<uint32_t>(count),
+                          totalOk,
+                          totalFail);
+    }
   }
 
   st = restoreWritableState(savedOut, savedPol, savedCfg);
@@ -1742,23 +1722,22 @@ void runStressMix(int count) {
                                   static_cast<float>(count))
                                : 0.0f;
   Serial.println("=== stress_mix summary ===");
-  Serial.printf("  Total: %sok=%lu%s %sfail=%lu%s (%s%.2f%%%s)\n",
-                goodIfNonZeroColor(totalOk),
+  Serial.printf("  Total: ok=%lu fail=%lu (%.2f%%)\n",
                 static_cast<unsigned long>(totalOk),
-                LOG_COLOR_RESET,
-                goodIfZeroColor(totalFail),
                 static_cast<unsigned long>(totalFail),
-                LOG_COLOR_RESET,
-                successRateColor(successPct),
-                successPct,
-                LOG_COLOR_RESET);
+                successPct);
   Serial.printf("  Duration: %lu ms\n", static_cast<unsigned long>(elapsed));
   if (elapsed > 0) {
     Serial.printf("  Rate: %.2f ops/s\n",
                   (1000.0f * static_cast<float>(count)) / static_cast<float>(elapsed));
   }
-  Serial.println("  Per-operation breakdown:");
+  if (verboseMode || totalFail > 0U) {
+    Serial.println("  Per-operation breakdown:");
+  }
   for (int i = 0; i < OP_COUNT; ++i) {
+    if (!verboseMode && ops[i].fail == 0U) {
+      continue;
+    }
     const uint32_t opTotal = ops[i].ok + ops[i].fail;
     const float opPct = (opTotal > 0U)
                             ? (100.0f * static_cast<float>(ops[i].ok) /
@@ -1779,13 +1758,9 @@ void runStressMix(int count) {
 
   const uint32_t succDelta = device.totalSuccess() - succBefore;
   const uint32_t failDelta = device.totalFailures() - failBefore;
-  Serial.printf("  Health delta: %ssuccess +%lu%s, %sfailures +%lu%s\n",
-                goodIfNonZeroColor(succDelta),
+  Serial.printf("  Health delta: success +%lu, failures +%lu\n",
                 static_cast<unsigned long>(succDelta),
-                LOG_COLOR_RESET,
-                goodIfZeroColor(failDelta),
-                static_cast<unsigned long>(failDelta),
-                LOG_COLOR_RESET);
+                static_cast<unsigned long>(failDelta));
 }
 
 // ============================================================================
@@ -2703,10 +2678,12 @@ void loop() {
     stressRemaining--;
     const uint32_t completed =
         static_cast<uint32_t>(stressStats.okCount + stressStats.failCount);
-    printStressProgress(completed,
-                        static_cast<uint32_t>(stressStats.total),
-                        static_cast<uint32_t>(stressStats.okCount),
-                        static_cast<uint32_t>(stressStats.failCount));
+    if (verboseMode) {
+      printStressProgress(completed,
+                          static_cast<uint32_t>(stressStats.total),
+                          static_cast<uint32_t>(stressStats.okCount),
+                          static_cast<uint32_t>(stressStats.failCount));
+    }
     if (stressRemaining == 0) {
       finishStressStats();
       cli::printPrompt();

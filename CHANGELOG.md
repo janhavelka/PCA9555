@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Exact-pinned the Arduino example and HIL builds to pioarduino
+  `platform-espressif32` `55.03.311` (Arduino-ESP32 `3.3.11`, ESP-IDF `5.5.5`)
+  and added the runtime framework versions to the CLI `version` output.
 - Recorded the concise COM7 qualification summary, including a 73-minute,
   15,000,000-operation input/pointer-park stress with zero failures, while
   keeping the remaining physical/analyzer gates explicitly open.
@@ -20,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Arduino `Wire` write-read adapter now treats a zero-byte combined
+  transfer failure as an ambiguous command phase and reports no proven device-
+  side TX bytes; a partial receive still proves the command was accepted.
+- Example I2C initialization now propagates a failed `Wire.begin()` instead of
+  reporting unconditional success.
+- HIL serial setup now applies DTR/RTS before opening native USB and actively
+  frames each new session with a read-only `health` command, avoiding an
+  initial asserted-line glitch and passive-prompt startup timeouts.
 - HIL aggregate commands now run their declared complete-image recovery before
   a failure limit can stop the session.
 - `--timeout-s` is now a minimum and cannot shorten safer command-specific
@@ -29,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   being attributed to the next command.
 - Normal-mode self-test and stress result tails are plain text so ANSI escape
   fragments cannot split machine evidence at a USB packet boundary.
+
+### Validation
+
+- Arduino ESP32-S3 and ESP32-S2 builds pass on pioarduino `55.03.311`; 65
+  native tests, package-consumer validation, static contracts, HIL parser tests,
+  and Doxygen validation pass.
+- ESP32-S3 COM4 upgrade HIL passed 19/19 built-in commands and 72/72 extended
+  commands. The self-test reported 50/0/0, read stress 1,000/1,000, mixed stress
+  100/100, and final health READY with 2,644 successes and zero failures. The
+  operator/analyzer gates remain open and are recorded in the reviewed report.
 
 ## [3.0.0] - 2026-07-22
 

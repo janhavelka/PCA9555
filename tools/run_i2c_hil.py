@@ -96,7 +96,12 @@ DEFAULT_SAFE_COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(
         command="version",
         purpose="Print firmware and library version information.",
-        expected=(r"=== Version Info ===", r"PCA9555 library version"),
+        expected=(
+            r"=== Version Info ===",
+            r"Arduino-ESP32:\s+3\.3\.11",
+            r"ESP-IDF:\s+v?5\.5\.5",
+            r"PCA9555 library version",
+        ),
         timeout_s=3.0,
         classifier="section",
     ),
@@ -991,8 +996,16 @@ def open_serial_with_retries(serial_mod, args: argparse.Namespace):
     last_exc: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
-            ser = serial_mod.Serial(args.port, args.baud, timeout=0.05)
+            # Configure modem-control lines before opening. Constructing Serial
+            # with a port opens it immediately with pyserial's default asserted
+            # states, which can reset or glitch a native-USB target before the
+            # requested DTR/RTS policy is applied.
+            ser = serial_mod.Serial()
+            ser.port = args.port
+            ser.baudrate = args.baud
+            ser.timeout = 0.05
             apply_serial_line_state(ser, args)
+            ser.open()
             return ser
         except Exception as exc:  # pragma: no cover - hardware path
             last_exc = exc
@@ -1001,6 +1014,27 @@ def open_serial_with_retries(serial_mod, args: argparse.Namespace):
             if attempt < attempts:
                 time.sleep(args.reconnect_delay_s)
     raise RuntimeError(f"failed to open serial port {args.port}: {last_exc}")
+
+
+def synchronize_cli(
+    ser,
+    *,
+    prompt: str,
+    timeout_s: float,
+    idle_gap_s: float,
+) -> tuple[str, str]:
+    # The leading newline terminates any stale partial input left by an earlier
+    # host. Health is local/read-only driver state, so it gives startup framing
+    # evidence without touching I2C or changing PCA9555 state.
+    ser.write(b"\nhealth\n")
+    ser.flush()
+    return read_until(
+        ser,
+        prompt=prompt,
+        timeout_s=timeout_s,
+        idle_gap_s=idle_gap_s,
+        expected_patterns=(r"=== Driver Health ===",),
+    )
 
 
 def read_until(
@@ -1560,25 +1594,24 @@ def run(argv: list[str]) -> int:
             if args.boot_settle_s > 0:
                 time.sleep(args.boot_settle_s)
             startup_start = time.monotonic()
-            _, startup_reason = read_until(
+            _, startup_reason = synchronize_cli(
                 ser,
                 prompt=args.prompt,
                 timeout_s=args.startup_timeout,
                 idle_gap_s=args.idle_gap,
-                allow_idle_completion=args.allow_idle_completion,
             )
             startup_elapsed = time.monotonic() - startup_start
             if startup_reason == "timeout":
                 results.append(
                     CommandResult(
                         command="startup",
-                        purpose="Wait for CLI startup prompt.",
+                        purpose="Synchronize with the CLI using read-only driver health.",
                         classifier="startup",
                         serial_result="TIMEOUT",
                         operator_result="N/A",
                         completion_reason="timeout",
                         elapsed_s=startup_elapsed,
-                        notes="No CLI prompt observed before startup timeout.",
+                        notes="No framed driver-health response and CLI prompt observed before startup timeout.",
                         evidence=[],
                     )
                 )

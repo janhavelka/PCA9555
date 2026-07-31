@@ -2303,6 +2303,15 @@ void test_wire_read_adapter_reports_command_phase_evidence() {
       static_cast<uint8_t>(result.writeEffect));
 
   wire._clearEndTransmissionResult();
+  wire._setRequestFromResult(0U);  // Combined transfer failed without read evidence.
+  result = transport::wireWriteRead(
+      cmd::BASE_ADDRESS, &command, 1U, data, 2U, 10U, &wire);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(WriteEffect::MAY_HAVE_COMMITTED),
+      static_cast<uint8_t>(result.writeEffect));
+  TEST_ASSERT_EQUAL_UINT32(0U, result.completedTxBytes);
+  TEST_ASSERT_EQUAL_UINT32(0U, result.completedRxBytes);
+
   wire._setRequestFromResult(1U);  // Accepted command, short receive.
   result = transport::wireWriteRead(
       cmd::BASE_ADDRESS, &command, 1U, data, 2U, 10U, &wire);
@@ -2310,6 +2319,13 @@ void test_wire_read_adapter_reports_command_phase_evidence() {
                           static_cast<uint8_t>(result.writeEffect));
   TEST_ASSERT_EQUAL_UINT32(1U, result.completedTxBytes);
   TEST_ASSERT_EQUAL_UINT32(1U, result.completedRxBytes);
+}
+
+void test_wire_init_reports_begin_failure() {
+  Wire._setBeginResult(false);
+  TEST_ASSERT_FALSE(transport::initWire(8, 9, 400000U, 50U));
+  Wire._setBeginResult(true);
+  TEST_ASSERT_TRUE(transport::initWire(8, 9, 400000U, 50U));
 }
 
 int main() {
@@ -2379,6 +2395,7 @@ int main() {
   RUN_TEST(test_rebind_is_rejected_while_operation_or_result_is_pending);
   RUN_TEST(test_detach_refuses_to_abandon_required_pointer_cleanup);
   RUN_TEST(test_wire_read_adapter_reports_command_phase_evidence);
+  RUN_TEST(test_wire_init_reports_begin_failure);
 
   return UNITY_END();
 }

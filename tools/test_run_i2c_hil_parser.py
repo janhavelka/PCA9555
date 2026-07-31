@@ -511,6 +511,89 @@ class ZeroWaitingSerial:
         return self._chunks.pop(0)
 
 
+class DeferredOpenSerial:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, object]] = []
+        self.port = None
+        self.baudrate = None
+        self.timeout = None
+        self._dtr = True
+        self._rts = True
+
+    @property
+    def dtr(self) -> bool:
+        return self._dtr
+
+    @dtr.setter
+    def dtr(self, value: bool) -> None:
+        self._dtr = value
+        self.events.append(("dtr", value))
+
+    @property
+    def rts(self) -> bool:
+        return self._rts
+
+    @rts.setter
+    def rts(self, value: bool) -> None:
+        self._rts = value
+        self.events.append(("rts", value))
+
+    def open(self) -> None:
+        self.events.append(("open", None))
+
+
+class DeferredSerialModule:
+    def __init__(self) -> None:
+        self.instance = DeferredOpenSerial()
+
+    def Serial(self, *args, **kwargs):
+        assert_equal(args, (), "serial port must not be opened by the constructor")
+        assert_equal(kwargs, {}, "serial port must be configured before explicit open")
+        return self.instance
+
+
+def test_serial_lines_are_configured_before_open() -> None:
+    serial_mod = DeferredSerialModule()
+    args = runner.parse_args(["--port", "COM4", "--baud", "230400"])
+    ser = runner.open_serial_with_retries(serial_mod, args)
+    assert_equal(ser.port, "COM4", "serial port should be assigned before open")
+    assert_equal(ser.baudrate, 230400, "serial baud should be assigned before open")
+    assert_equal(ser.timeout, 0.05, "serial read timeout should be bounded")
+    assert_equal(
+        ser.events,
+        [("dtr", False), ("rts", False), ("open", None)],
+        "DTR and RTS must be deasserted before opening native USB",
+    )
+
+
+class StartupSyncSerial(ZeroWaitingSerial):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        super().__init__(chunks)
+        self.written = b""
+        self.flushed = False
+
+    def write(self, data: bytes) -> int:
+        self.written += data
+        return len(data)
+
+    def flush(self) -> None:
+        self.flushed = True
+
+
+def test_startup_sync_uses_read_only_health_framing() -> None:
+    ser = StartupSyncSerial((b"stale tail\n> ", b"=== Driver Health ===\n", b"State: READY\n> "))
+    text, reason = runner.synchronize_cli(
+        ser,
+        prompt="> ",
+        timeout_s=1.0,
+        idle_gap_s=0.1,
+    )
+    assert_equal(ser.written, b"\nhealth\n", "startup sync should terminate stale input and request health")
+    assert_true(ser.flushed, "startup sync command should be flushed")
+    assert_equal(reason, "prompt", "startup sync should require health evidence followed by the prompt")
+    assert_true("=== Driver Health ===" in text, "startup sync should capture its read-only marker")
+
+
 def test_read_until_does_not_depend_on_in_waiting() -> None:
     ser = ZeroWaitingSerial((b"help token <P> ", b"continued\n", b"Status: OK\n", b"> "))
     text, reason = runner.read_until(
@@ -582,6 +665,8 @@ def main() -> int:
         test_fail_verdict_maps_to_nonzero_exit,
         test_serial_anomaly_maps_to_nonzero_exit_without_failing_manual_rows,
         test_dry_run_artifacts_include_classifier_and_timing_options,
+        test_serial_lines_are_configured_before_open,
+        test_startup_sync_uses_read_only_health_framing,
         test_read_until_does_not_depend_on_in_waiting,
         test_read_until_ignores_stale_prompt_until_current_evidence,
         test_failure_text_does_not_end_an_active_command_without_prompt,

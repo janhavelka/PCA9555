@@ -210,9 +210,16 @@ inline PCA9555::TransportResult wireWriteRead(uint8_t addr, const uint8_t* tx,
 
   size_t read = wire->requestFrom(addr, static_cast<uint8_t>(rxLen));
   if (read != rxLen) {
+    // On Arduino-ESP32, endTransmission(false) only stages the command and
+    // requestFrom() performs the combined write-read transfer. Receiving at
+    // least one byte proves the command was accepted; a zero-byte result does
+    // not distinguish command NACK, read failure, timeout, or bus error.
+    const bool commandAccepted = read > 0U;
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::IO_ERROR, static_cast<int32_t>(read),
-        PCA9555::WriteEffect::COMMITTED, txLen, read);
+        commandAccepted ? PCA9555::WriteEffect::COMMITTED
+                        : PCA9555::WriteEffect::MAY_HAVE_COMMITTED,
+        commandAccepted ? txLen : 0U, read);
   }
 
   for (size_t i = 0; i < rxLen; ++i) {
@@ -258,8 +265,9 @@ inline bool initWire(int sda, int scl, uint32_t freq = 400000, uint16_t timeoutM
   delayMicroseconds(5);
 #endif
 
-  Wire.begin(sda, scl);
-  Wire.setClock(freq);
+  if (!Wire.begin(sda, scl, freq)) {
+    return false;
+  }
   Wire.setTimeOut(timeoutMs);
   return true;
 }

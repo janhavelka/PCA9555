@@ -406,6 +406,8 @@ void printPortBinary(const char* label, uint8_t value) {
 void printVersionInfo() {
   Serial.println("=== Version Info ===");
   Serial.printf("  Example firmware build: %s %s\n", __DATE__, __TIME__);
+  Serial.printf("  Arduino-ESP32: %s\n", ESP.getCoreVersion());
+  Serial.printf("  ESP-IDF: %s\n", ESP.getSdkVersion());
   Serial.printf("  PCA9555 library version: %s\n", PCA9555::VERSION);
   Serial.printf("  PCA9555 library full: %s\n", PCA9555::VERSION_FULL);
   Serial.printf("  PCA9555 library build: %s\n", PCA9555::BUILD_TIMESTAMP);

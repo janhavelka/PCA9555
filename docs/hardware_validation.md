@@ -1,10 +1,14 @@
 # Hardware Validation
 
-Automated ESP32-S3/PCA9555 HIL was performed on COM7 on 2026-07-22. The reviewed
-summary at `docs/reports/hil-validation-COM7-1h-read-stress-20260722.md` records
-a 73-minute device-side input-read/pointer-park stress with 15,000,000
-operations and zero failures, plus full-function and external-owner supporting
-coverage.
+Automated ESP32-S3/PCA9555 upgrade HIL was performed on COM4 on 2026-07-31 with
+pioarduino `55.03.311`. The reviewed summary at
+`docs/reports/hil-validation-COM4-pioarduino-55.03.311-20260731.md` records
+19/19 built-in and 72/72 extended commands passing, final READY health, 2,644
+tracked successes, and zero failures while retaining the physical gates below.
+Earlier COM7 HIL on 2026-07-22 is recorded at
+`docs/reports/hil-validation-COM7-1h-read-stress-20260722.md`: a 73-minute
+device-side input-read/pointer-park stress with 15,000,000 operations and zero
+failures, plus full-function and external-owner supporting coverage.
 It is not electrical, analyzer, reset, or shared-bus evidence. An I2C ACK proves
 address response only; the PCA9555 has no documented chip-ID register.
 
@@ -21,6 +25,9 @@ the strongest uptime evidence. The runner keeps one serial session open by
 default and correlates each known response with command-specific evidence so a
 delayed prompt cannot be mistaken for the next command. Opening the native USB
 CDC port can still reset some boards; do not reopen it during an uptime claim.
+The runner configures DTR/RTS before opening the port, then sends a leading
+newline and the read-only `health` command to establish fresh CLI framing
+without touching I2C or changing PCA9555 state.
 
 ## Run A Target
 
@@ -89,13 +96,13 @@ evidence.
 | Gate | Required evidence | Status |
 | --- | --- | --- |
 | Address, POR, and pin map | Intended addresses `0x20`-`0x27`; true-POR writable defaults; released/high and pulled-low observations for all 16 inputs | PARTIAL — `0x20` ACK/read evidence only |
-| Output safety | Current-limited all-pin output observations, masked writes, and logic-analyzer proof that latches are preloaded before direction changes | PARTIAL — API/readback only |
+| Output safety | Current-limited all-pin output observations, masked writes, and logic-analyzer proof that latches are preloaded before direction changes | PARTIAL — API/readback and sweep/walk only |
 | Polarity and INT | Polarity observations; Port 0, Port 1, and both-port INT assertion/clear captures; application re-read/debounce behavior | PARTIAL — register/read stress only |
 | Errata cleanup | I2C decode proving the nonzero pointer park follows input reads without another target transaction interleaving | PARTIAL — 15M successful cleanups, no analyzer capture |
 | Fault and reconciliation | Wrong address, disconnect/reconnect, cancellation/timeout cleanup, ambiguous write, PCA9555-only brownout, and caller-owned complete-image apply/verify | PARTIAL — native injection and HIL recovery only |
 | Bus speeds and sharing | 100 kHz and 400 kHz runs plus a long soak with another active target through the real bus owner | NOT RUN |
 | Framework targets | Arduino ESP32-S2, Arduino ESP32-S3, and native ESP-IDF hardware runs, or a reviewed exclusion for an unsupported target | PARTIAL — S3 HIL; S2/IDF compile gates only |
-| Review package | Setup record, wiring evidence, concise runner summary, analyzer captures, reset/uptime telemetry, and reviewer sign-off | PARTIAL — concise runner summary only |
+| Review package | Setup record, wiring evidence, concise runner summary, analyzer captures, reset/uptime telemetry, and reviewer sign-off | PARTIAL — concise runner summaries only |
 
 Do not claim production-grade, field-proven, or fully hardware-validated status
 until every applicable row is complete and reviewed.

@@ -16,6 +16,35 @@ HARDWARE_DOC = ROOT / "docs" / "hardware_validation.md"
 README = ROOT / "README.md"
 GITIGNORE = ROOT / ".gitignore"
 
+EXPECTED_FAULT_GUARD_COMMANDS = [
+    "health",
+    "settings",
+    "rpin 16",
+    "rin 2",
+    "rreg 8",
+    "rregs 0 3",
+    "wreg 6 0xFF confirm",
+    "wregs 7 0xFF 0xFF confirm",
+    "stress 0",
+    "verbose 2",
+    "__hil_unknown__",
+    "wpin 16 2",
+    "dir 16 sideways",
+    "wport 2 0x100",
+    "dport 2 0x100",
+    "pol 16 2",
+    "setbits 0x10000",
+    "wreg 8 0x100",
+    "pattern 0x10000",
+    "sweep 10001",
+    "allhigh unexpected",
+    "selftest unexpected",
+    "stress_mix 0",
+    "recover unexpected",
+    "settings",
+    "health",
+]
+
 
 def fail(message: str) -> None:
     print(f"check_hil_contract: {message}", file=sys.stderr)
@@ -59,6 +88,7 @@ def main() -> int:
         "--allow-idle-completion",
         "--boot-settle-s",
         "--reconnect-attempts",
+        "--include-fault-tests",
         "--benchmark-command",
         "--soak-duration-s",
         "--report",
@@ -82,6 +112,34 @@ def main() -> int:
             fail(f"destructive optional command must include confirm: {spec.command}")
         if spec.recovery_command is not None and not spec.recovery_command.endswith(" confirm"):
             fail(f"destructive recovery command must include confirm: {spec.recovery_command}")
+    fault_commands = list(module.FAULT_GUARD_COMMANDS)
+    if [spec.command for spec in fault_commands] != EXPECTED_FAULT_GUARD_COMMANDS:
+        fail("fault guard command plan differs from reviewed bus-silent allowlist")
+    for spec in fault_commands:
+        if spec.requires_opt_in != "--include-fault-tests":
+            fail(f"fault guard command is not fault-opt-in gated: {spec.command}")
+        if spec.destructive or spec.recovery_command is not None:
+            fail(f"fault guard command must not intend I2C or recovery: {spec.command}")
+        if spec.command.endswith(" confirm") and spec.command not in {
+            "wreg 6 0xFF confirm",
+            "wregs 7 0xFF 0xFF confirm",
+        }:
+            fail(f"only reviewed Configuration-boundary guards may carry confirm: {spec.command}")
+    rejection_commands = fault_commands[2:-2]
+    if not rejection_commands:
+        fail("fault guard plan must contain rejection cases between its snapshots")
+    for spec in rejection_commands:
+        if not spec.expected_rejection or not spec.expected or spec.operator_check:
+            fail(f"fault guard middle command lacks exact rejection evidence: {spec.command}")
+
+    for start in ("2", "3", "4", "5", "0x02", "0x05"):
+        spec = module.dynamic_cli_command_spec(f"wreg {start} 0xAA confirm", 5.0)
+        if spec is None or spec.classifier != "register_write":
+            fail(f"valid raw write start is not classified: {start}")
+    for start in ("6", "7", "0x06", "0x07"):
+        spec = module.dynamic_cli_command_spec(f"wreg {start} 0xFF confirm", 5.0)
+        if spec is not None and spec.classifier == "register_write":
+            fail(f"Configuration raw write is classified as successful: {start}")
 
     documented = []
     in_block = False
@@ -131,6 +189,7 @@ def main() -> int:
             "shared-bus evidence",
             "tools/run_i2c_hil.py",
             "hil_logs/",
+            "bus-silent CLI guard",
         ):
             if phrase not in docs_text:
                 fail(f"{docs_name} missing required phrase: {phrase}")
@@ -148,8 +207,8 @@ def main() -> int:
     for claim in forbidden_claims:
         if claim in combined_docs.lower():
             fail(f"unsupported hardware validation claim found: {claim}")
-    if "NOT RUN" not in hardware_text:
-        fail("hardware validation matrix must still mark unrun rows honestly")
+    if "PARTIAL" not in hardware_text:
+        fail("hardware validation matrix must retain incomplete gate status honestly")
 
     print("check_hil_contract: PASS")
     return 0

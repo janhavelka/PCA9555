@@ -1756,7 +1756,11 @@ void test_raw_configuration_writes_are_rejected_without_io() {
   const uint8_t data[2] = {0U, 0U};
   TEST_ASSERT_TRUE(device.writeRegister(cmd::REG_CONFIG_PORT_0, 0U)
                        .is(Err::UNSUPPORTED));
+  TEST_ASSERT_TRUE(device.writeRegister(cmd::REG_CONFIG_PORT_1, 0U)
+                       .is(Err::UNSUPPORTED));
   TEST_ASSERT_TRUE(device.writeRegisters(cmd::REG_CONFIG_PORT_0, data, 2U)
+                       .is(Err::UNSUPPORTED));
+  TEST_ASSERT_TRUE(device.writeRegisters(cmd::REG_CONFIG_PORT_1, data, 2U)
                        .is(Err::UNSUPPORTED));
   TEST_ASSERT_EQUAL_UINT(0U, bus.transactionCount);
 }

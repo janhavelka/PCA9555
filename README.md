@@ -334,6 +334,11 @@ Version 3.0.0 is a breaking release:
 - `examples/common` is example-only glue, not library API or a production bus
   manager.
 
+The CLI raw-write commands `wreg` and `wregs` accept only Output and Polarity
+register starts `2` through `5`. Configuration registers `6` and `7` are
+intentionally rejected; use the named direction commands so output latches are
+preloaded safely before pins become outputs.
+
 The `recover` CLI spelling is retained for operator familiarity, but it now
 means: apply the example's explicit image of high output latches, normal
 polarity, and all pins input. It is application policy, not a library bus

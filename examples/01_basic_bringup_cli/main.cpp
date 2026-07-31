@@ -1070,10 +1070,10 @@ void cmdRegWrite(const String& args) {
   long reg = 0;
   uint8_t value = 0;
   if (!parseLongToken(cursor, reg) ||
-      reg < 2 || reg > 7 ||
+      reg < 2 || reg > 5 ||
       !parseByteToken(cursor, value) ||
       hasTrailingArgs(cursor)) {
-    LOGE("Usage: wreg <2-7> <0x00-0xFF>");
+    LOGE("Usage: wreg <2-5> <0x00-0xFF>");
     return;
   }
   PCA9555::Status st = device.writeRegister(static_cast<uint8_t>(reg), value);
@@ -1129,9 +1129,9 @@ void cmdRegsWrite(const String& args) {
   long reg = 0;
   uint8_t values[2] = {};
   if (!parseLongToken(cursor, reg) ||
-      reg < 2 || reg > 7 ||
+      reg < 2 || reg > 5 ||
       !parseByteToken(cursor, values[0])) {
-    LOGE("Usage: wregs <2-7> <0x00-0xFF> [0x00-0xFF]");
+    LOGE("Usage: wregs <2-5> <0x00-0xFF> [0x00-0xFF]");
     return;
   }
 
@@ -1140,7 +1140,7 @@ void cmdRegsWrite(const String& args) {
   if (*afterFirst != '\0') {
     cursor = afterFirst;
     if (!parseByteToken(cursor, values[1]) || hasTrailingArgs(cursor)) {
-      LOGE("Usage: wregs <2-7> <0x00-0xFF> [0x00-0xFF]");
+      LOGE("Usage: wregs <2-5> <0x00-0xFF> [0x00-0xFF]");
       return;
     }
     len = 2;
@@ -1392,7 +1392,7 @@ void runSelfTest() {
   st = device.readRegisters(PCA9555::cmd::REG_CONFIG_PORT_0, bulkCfg, 2);
   reportCheck("readRegisters(CFG, 2)", st.ok(), st.ok() ? "" : errToStr(st.code));
 
-  // --- writeRegister (writable range 2-7) ---
+  // --- writeRegister (raw-writable Output/Polarity range 2-5) ---
   uint8_t savedReg2 = 0;
   st = device.readRegister(2, savedReg2);
   if (!requireStep("capture output register 0", st)) { printResult(); return; }
@@ -2083,9 +2083,9 @@ void printHelp() {
   cli::printHelpSection("Raw Register");
   cli::printHelpItem("read reg <R> / rreg <R>", "Read register R (0-7)");
   cli::printHelpItem("read regs <R> <N> / rregs <R> <N>", "Read 1-2 regs in one pair; odd starts wrap to pair mate");
-  cli::printHelpItem("write reg <R> <V> / wreg <R> <V> [confirm]", "Write register R (2-7) to V");
-  cli::printHelpItem("write regs <R> <V0> [V1] / wregs <R> <V0> [V1] [confirm]",
-           "Write 1-2 regs in one pair; odd starts wrap to pair mate");
+  cli::printHelpItem("write reg <2-5> <V> / wreg <2-5> <V> [confirm]", "Write one Output/Polarity register");
+  cli::printHelpItem("write regs <2-5> <V0> [V1] / wregs <2-5> <V0> [V1] [confirm]",
+           "Write 1-2 Output/Polarity regs; odd starts wrap to pair mate");
 
   cli::printHelpSection("Testing");
   cli::printHelpItem("pattern <VALUE> / pat <VALUE> [confirm]", "Drive exact 16-bit output pattern and force all pins OUTPUT");

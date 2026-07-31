@@ -3,8 +3,12 @@
 Automated ESP32-S3/PCA9555 upgrade HIL was performed on COM4 on 2026-07-31 with
 pioarduino `55.03.311`. The reviewed summary at
 `docs/reports/hil-validation-COM4-pioarduino-55.03.311-20260731.md` records
-19/19 built-in and 72/72 extended commands passing, final READY health, 2,644
-tracked successes, and zero failures while retaining the physical gates below.
+46/46 post-fix full/fault results and 72/72 extended commands passing, final
+READY health, 7,094 tracked successes, and zero failures while retaining the
+physical gates below.
+Hardware qualification for this release is scoped to Arduino ESP32-S3.
+ESP32-S2 and native ESP-IDF remain build/contract targets and are not hardware
+gates; the S3 evidence does not validate native ESP-IDF runtime behavior.
 Earlier COM7 HIL on 2026-07-22 is recorded at
 `docs/reports/hil-validation-COM7-1h-read-stress-20260722.md`: a 73-minute
 device-side input-read/pointer-park stress with 15,000,000 operations and zero
@@ -42,6 +46,7 @@ Build and flash the appropriate example, then install the runner dependency:
 ```text
 python -m platformio run -e esp32s2dev
 python -m platformio run -e esp32s3dev
+python -m platformio run -e esp32s3dev -t upload
 python -m pip install pyserial
 ```
 
@@ -54,6 +59,10 @@ python tools/run_i2c_hil.py --port <PORT> --baud 115200 --address 0x20
 Use `--dry-run` to inspect the plan and `--parser-self-test` to test the host
 classifier. Opt in deliberately with `--include-output-tests`, `--include-soak`,
 or `--include-fault-tests`; mutating CLI commands still require `confirm`.
+`--include-fault-tests` runs bus-silent CLI guard checks for invalid arguments,
+unknown commands, and missing confirmations, then proves the bracketing health
+and all reported settings fields are unchanged. It does not inject I2C, wiring,
+power, timeout, or brownout faults; those remain physical operator tests.
 `--timeout-s` sets a minimum only and never shortens a command's reviewed
 bound. During aggregate runs, every destructive command with recovery metadata
 is followed immediately by `recover confirm`, even when the primary command
@@ -99,9 +108,8 @@ evidence.
 | Output safety | Current-limited all-pin output observations, masked writes, and logic-analyzer proof that latches are preloaded before direction changes | PARTIAL — API/readback and sweep/walk only |
 | Polarity and INT | Polarity observations; Port 0, Port 1, and both-port INT assertion/clear captures; application re-read/debounce behavior | PARTIAL — register/read stress only |
 | Errata cleanup | I2C decode proving the nonzero pointer park follows input reads without another target transaction interleaving | PARTIAL — 15M successful cleanups, no analyzer capture |
-| Fault and reconciliation | Wrong address, disconnect/reconnect, cancellation/timeout cleanup, ambiguous write, PCA9555-only brownout, and caller-owned complete-image apply/verify | PARTIAL — native injection and HIL recovery only |
-| Bus speeds and sharing | 100 kHz and 400 kHz runs plus a long soak with another active target through the real bus owner | NOT RUN |
-| Framework targets | Arduino ESP32-S2, Arduino ESP32-S3, and native ESP-IDF hardware runs, or a reviewed exclusion for an unsupported target | PARTIAL — S3 HIL; S2/IDF compile gates only |
+| Fault and reconciliation | Wrong address, disconnect/reconnect, cancellation/timeout cleanup, ambiguous write, PCA9555-only brownout, and caller-owned complete-image apply/verify | PARTIAL — native transport injection, S3 fail-closed CLI guards, and HIL complete-image recovery only |
+| Bus speeds and sharing | 100 kHz and 400 kHz runs plus a long soak with another active target through the real bus owner | PARTIAL — 400 kHz single-target S3 command/stress evidence only |
 | Review package | Setup record, wiring evidence, concise runner summary, analyzer captures, reset/uptime telemetry, and reviewer sign-off | PARTIAL — concise runner summaries only |
 
 Do not claim production-grade, field-proven, or fully hardware-validated status

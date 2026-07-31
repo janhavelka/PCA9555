@@ -54,6 +54,7 @@ class CommandSpec:
     recovery_command: str | None = None
     notes: str = ""
     classifier: str = "generic"
+    expected_rejection: bool = False
 
 @dataclasses.dataclass
 class CommandResult:
@@ -207,7 +208,7 @@ DEFAULT_SAFE_COMMANDS: tuple[CommandSpec, ...] = (
 )
 
 
-OPTIONAL_COMMANDS: tuple[CommandSpec, ...] = (
+OUTPUT_AND_SOAK_COMMANDS: tuple[CommandSpec, ...] = (
     CommandSpec(
         command="selftest confirm",
         purpose="Run CLI API self-test that mutates output, direction, and polarity state.",
@@ -245,6 +246,128 @@ OPTIONAL_COMMANDS: tuple[CommandSpec, ...] = (
 )
 
 
+def rejection_spec(command: str, purpose: str, *expected: str) -> CommandSpec:
+    """Build one bus-silent, explicitly opted-in CLI rejection check."""
+
+    return CommandSpec(
+        command=command,
+        purpose=purpose,
+        expected=expected,
+        timeout_s=5.0,
+        requires_opt_in="--include-fault-tests",
+        notes="Expected fail-closed CLI rejection; no I2C transfer is intended.",
+        classifier="expected_rejection",
+        expected_rejection=True,
+    )
+
+
+def confirmation_rejection_spec(command: str, purpose: str) -> CommandSpec:
+    """Build a no-confirm check whose arguments are also invalid."""
+
+    return rejection_spec(
+        command,
+        purpose,
+        r"Confirmation required\.",
+        rf"Confirmed command:\s+{re.escape(command)} confirm",
+    )
+
+
+FAULT_GUARD_COMMANDS: tuple[CommandSpec, ...] = (
+    CommandSpec(
+        command="health",
+        purpose="Capture driver health before bus-silent CLI fault-guard checks.",
+        expected=(
+            r"=== Driver Health ===",
+            r"State:\s+READY\s+Bound:\s+YES\s+Consecutive failures:\s+\d+\s+"
+            r"Total success:\s+\d+\s+Total failures:\s+\d+\s+Last error:\s+\S+",
+        ),
+        requires_opt_in="--include-fault-tests",
+        classifier="fault_health_before",
+    ),
+    CommandSpec(
+        command="settings",
+        purpose="Capture reported settings before bus-silent CLI fault-guard checks.",
+        expected=(
+            r"=== Settings Snapshot ===",
+            r"Initialized:\s+YES",
+            r"State:\s+READY",
+            r"I2C address:\s+0x[0-9A-F]{2}",
+            r"Timeout:\s+\d+ ms",
+            r"Interrupt errata workaround:\s+mandatory",
+            r"nowMs hook:\s+SET",
+            r"Shadow valid pairs:\s+0x[0-9A-F]{2}",
+            r"Uncertain pairs:\s+0x[0-9A-F]{2}",
+        ),
+        requires_opt_in="--include-fault-tests",
+        classifier="fault_settings_before",
+    ),
+    rejection_spec("rpin 16", "Reject an out-of-range pin read.", r"Usage:\s+rpin <pin 0-15>"),
+    rejection_spec("rin 2", "Reject an out-of-range port read.", r"Usage:\s+rin <port 0\|1>"),
+    rejection_spec("rreg 8", "Reject an out-of-range raw register read.", r"Usage:\s+rreg <0-7>"),
+    rejection_spec("rregs 0 3", "Reject an oversized paired-register read.", r"Usage:\s+rregs <0-7> <1-2>"),
+    rejection_spec(
+        "wreg 6 0xFF confirm",
+        "Reject a raw Configuration Port 0 write at the CLI boundary.",
+        r"Usage:\s+wreg <2-5> <0x00-0xFF>",
+    ),
+    rejection_spec(
+        "wregs 7 0xFF 0xFF confirm",
+        "Reject an odd-start raw Configuration pair write at the CLI boundary.",
+        r"Usage:\s+wregs <2-5> <0x00-0xFF> \[0x00-0xFF\]",
+    ),
+    rejection_spec("stress 0", "Reject a zero-length stress request.", r"Usage:\s+stress <positive count>"),
+    rejection_spec("verbose 2", "Reject an invalid verbose-mode value.", r"Usage:\s+verbose <0\|1>"),
+    rejection_spec("__hil_unknown__", "Reject an unknown CLI command.", r"Unknown command:\s+'__hil_unknown__'"),
+    confirmation_rejection_spec("wpin 16 2", "Require confirmation before parsing an invalid pin write."),
+    confirmation_rejection_spec("dir 16 sideways", "Require confirmation before parsing an invalid direction change."),
+    confirmation_rejection_spec("wport 2 0x100", "Require confirmation before parsing an invalid port write."),
+    confirmation_rejection_spec("dport 2 0x100", "Require confirmation before parsing an invalid port direction."),
+    confirmation_rejection_spec("pol 16 2", "Require confirmation before parsing an invalid polarity change."),
+    confirmation_rejection_spec("setbits 0x10000", "Require confirmation before parsing an oversized output mask."),
+    confirmation_rejection_spec("wreg 8 0x100", "Require confirmation before parsing an invalid raw register write."),
+    confirmation_rejection_spec("pattern 0x10000", "Require confirmation before parsing an oversized output pattern."),
+    confirmation_rejection_spec("sweep 10001", "Require confirmation before parsing an excessive sweep delay."),
+    confirmation_rejection_spec("allhigh unexpected", "Reject a non-exact all-high command."),
+    confirmation_rejection_spec("selftest unexpected", "Reject a non-exact self-test command."),
+    confirmation_rejection_spec("stress_mix 0", "Require confirmation before parsing a zero-length mixed stress request."),
+    confirmation_rejection_spec("recover unexpected", "Reject a non-exact recovery command."),
+    CommandSpec(
+        command="settings",
+        purpose="Capture reported settings after bus-silent CLI fault-guard checks.",
+        expected=(
+            r"=== Settings Snapshot ===",
+            r"Initialized:\s+YES",
+            r"State:\s+READY",
+            r"I2C address:\s+0x[0-9A-F]{2}",
+            r"Timeout:\s+\d+ ms",
+            r"Interrupt errata workaround:\s+mandatory",
+            r"nowMs hook:\s+SET",
+            r"Shadow valid pairs:\s+0x[0-9A-F]{2}",
+            r"Uncertain pairs:\s+0x[0-9A-F]{2}",
+        ),
+        requires_opt_in="--include-fault-tests",
+        classifier="fault_settings_after",
+    ),
+    CommandSpec(
+        command="health",
+        purpose="Capture driver health after bus-silent CLI fault-guard checks.",
+        expected=(
+            r"=== Driver Health ===",
+            r"State:\s+READY\s+Bound:\s+YES\s+Consecutive failures:\s+\d+\s+"
+            r"Total success:\s+\d+\s+Total failures:\s+\d+\s+Last error:\s+\S+",
+        ),
+        requires_opt_in="--include-fault-tests",
+        classifier="fault_health_after",
+    ),
+)
+
+
+OPTIONAL_COMMANDS: tuple[CommandSpec, ...] = (
+    *OUTPUT_AND_SOAK_COMMANDS,
+    *FAULT_GUARD_COMMANDS,
+)
+
+
 MANUAL_CHECKS: tuple[CommandSpec, ...] = (
     CommandSpec(
         command="operator: wiring-photo",
@@ -277,7 +400,7 @@ MANUAL_CHECKS: tuple[CommandSpec, ...] = (
         notes="Requires logic analyzer capture of the shared bus transaction sequence.",
     ),
     CommandSpec(
-        command="operator: fault-recovery",
+        command="operator: physical-fault-recovery",
         purpose="Run unplug, wrong-address, brownout, and recovery checks only with safe handling.",
         operator_check=True,
         notes="Fault injection is never run by this script automatically.",
@@ -285,14 +408,19 @@ MANUAL_CHECKS: tuple[CommandSpec, ...] = (
 )
 
 
-FAIL_CONTEXT_PATTERNS: tuple[str, ...] = (
+HARD_FAILURE_PATTERNS: tuple[str, ...] = (
     r"Status:\s+(?!OK\b)[A-Z_]+",
     r"\[FAIL\]",
     r"(?<!0\s)\bFAILED\b",
     r"\bfail=(?!0\b)\d+",
     r"\bfailed=(?!0\b)\d+",
+)
+
+
+FAIL_CONTEXT_PATTERNS: tuple[str, ...] = (
+    *HARD_FAILURE_PATTERNS,
     r"\[W\]\s+Unknown command",
-    r"\[E\]\s+Usage:",
+    r"\[[EW]\]\s+Usage:",
 )
 
 
@@ -407,7 +535,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--verbose", action="store_true", help="Print command progress.")
     parser.add_argument("--include-output-tests", action="store_true")
     parser.add_argument("--include-soak", action="store_true")
-    parser.add_argument("--include-fault-tests", action="store_true")
+    parser.add_argument(
+        "--include-fault-tests",
+        action="store_true",
+        help="Run bus-silent CLI guard checks only; does not inject I2C, power, or wiring faults.",
+    )
     parser.add_argument("--benchmark-command", help="Optional command to repeat for sample-rate benchmarking.")
     parser.add_argument("--benchmark-count", type=int, default=0, help="Bounded benchmark sample count.")
     parser.add_argument("--benchmark-warmup", type=int, default=3, help="Bounded benchmark warmup count.")
@@ -790,16 +922,24 @@ def dynamic_cli_command_spec(command: str, default_timeout: float) -> CommandSpe
             expected=(r"Regs\s+0x0?[0-7]=0x[0-9A-F]{2}",),
             classifier="register_read",
         )
-    if re.fullmatch(r"(?:write\s+reg|wreg)\s+[2-7]\s+0x[0-9a-f]{1,2}(?:\s+confirm)?", lowered):
+    if re.fullmatch(
+        r"(?:write\s+reg|wreg)\s+(?:[2-5]|0x0?[2-5])\s+"
+        r"0x[0-9a-f]{1,2}(?:\s+confirm)?",
+        lowered,
+    ):
         return make(
             purpose="Write one writable PCA9555 register.",
-            expected=(r"Reg\s+0x0?[2-7]\s+set to 0x[0-9A-F]{2}",),
+            expected=(r"Reg\s+0x0?[2-5]\s+set to 0x[0-9A-F]{2}",),
             classifier="register_write",
         )
-    if re.fullmatch(r"(?:write\s+regs|wregs)\s+[2-7]\s+0x[0-9a-f]{1,2}(?:\s+0x[0-9a-f]{1,2})?(?:\s+confirm)?", lowered):
+    if re.fullmatch(
+        r"(?:write\s+regs|wregs)\s+(?:[2-5]|0x0?[2-5])\s+"
+        r"0x[0-9a-f]{1,2}(?:\s+0x[0-9a-f]{1,2})?(?:\s+confirm)?",
+        lowered,
+    ):
         return make(
             purpose="Write one or two writable PCA9555 registers with pair wrapping.",
-            expected=(r"Regs?\s+0x0?[2-7].*0x[0-9A-F]{2}",),
+            expected=(r"Regs?\s+0x0?[2-5].*0x[0-9A-F]{2}",),
             classifier="register_write",
         )
     if re.fullmatch(r"recover(?:\s+confirm)?", lowered):
@@ -900,7 +1040,7 @@ def extract_evidence(text: str, patterns: Iterable[str]) -> list[str]:
             if regex.search(line):
                 evidence.append(line.strip())
                 break
-    return evidence[:6]
+    return evidence[:10]
 
 
 def has_failure_context(text: str) -> bool:
@@ -910,11 +1050,43 @@ def has_failure_context(text: str) -> bool:
     return False
 
 
+def has_hard_failure_context(text: str) -> bool:
+    return any(
+        re.search(pattern, text, flags=re.IGNORECASE)
+        for pattern in HARD_FAILURE_PATTERNS
+    )
+
+
 def classify(spec: CommandSpec, normalized: str, completion_reason: str) -> tuple[str, list[str]]:
     if completion_reason == "timeout":
         return "TIMEOUT", extract_evidence(normalized, spec.expected or FAIL_CONTEXT_PATTERNS)
     if spec.operator_check:
         return "OPERATOR_CHECK_REQUIRED", []
+    if spec.expected_rejection:
+        if has_hard_failure_context(normalized):
+            return "FAIL", extract_evidence(normalized, HARD_FAILURE_PATTERNS)
+        unexpected_failure_lines = [
+            line.strip()
+            for line in normalized.splitlines()
+            if has_failure_context(line)
+            and not any(
+                re.search(pattern, line, flags=re.IGNORECASE)
+                for pattern in spec.expected
+            )
+        ]
+        if unexpected_failure_lines:
+            return "FAIL", unexpected_failure_lines[:6]
+        expected_ok = bool(spec.expected) and all(
+            re.search(pattern, normalized, flags=re.IGNORECASE)
+            for pattern in spec.expected
+        )
+        if expected_ok:
+            return "PASS", extract_evidence(normalized, spec.expected)
+        if has_failure_context(normalized):
+            return "FAIL", extract_evidence(normalized, FAIL_CONTEXT_PATTERNS)
+        if normalized.strip():
+            return "SERIAL_OK_OR_REVIEW", normalized.strip().splitlines()[-4:]
+        return "REVIEW_REQUIRED", []
     if has_failure_context(normalized):
         return "FAIL", extract_evidence(normalized, FAIL_CONTEXT_PATTERNS)
 
@@ -1373,6 +1545,87 @@ def skipped_result(spec: CommandSpec, result: str, reason: str) -> CommandResult
     )
 
 
+def _single_result(results: list[CommandResult], classifier: str) -> CommandResult | None:
+    matches = [result for result in results if result.classifier == classifier]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _health_snapshot(result: CommandResult | None) -> tuple[str, str, int, int, int, str] | None:
+    if result is None or result.serial_result != "PASS":
+        return None
+    match = re.search(
+        r"State:\s+(\w+)\s+Bound:\s+(YES|NO)\s+Consecutive failures:\s+(\d+)\s+"
+        r"Total success:\s+(\d+)\s+Total failures:\s+(\d+)\s+Last error:\s+(\S+)",
+        "\n".join(result.evidence),
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return (
+        match.group(1).upper(),
+        match.group(2).upper(),
+        int(match.group(3), 10),
+        int(match.group(4), 10),
+        int(match.group(5), 10),
+        match.group(6).upper(),
+    )
+
+
+def _settings_snapshot(result: CommandResult | None) -> tuple[str, ...] | None:
+    if result is None or result.serial_result != "PASS":
+        return None
+    text = "\n".join(result.evidence)
+    patterns = (
+        r"Initialized:\s+(YES|NO)",
+        r"State:\s+(\w+)",
+        r"I2C address:\s+(0x[0-9A-F]{2})",
+        r"Timeout:\s+(\d+ ms)",
+        r"Interrupt errata workaround:\s+(mandatory)",
+        r"nowMs hook:\s+(SET|NONE)",
+        r"Shadow valid pairs:\s+(0x[0-9A-F]{2})",
+        r"Uncertain pairs:\s+(0x[0-9A-F]{2})",
+    )
+    matches = [re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns]
+    if any(match is None for match in matches):
+        return None
+    return tuple(match.group(1).upper() for match in matches if match is not None)  # type: ignore[return-value]
+
+
+def fault_guard_invariant_result(results: list[CommandResult]) -> CommandResult:
+    """Compare before/after local snapshots for the bus-silent guard block."""
+
+    health_before = _health_snapshot(_single_result(results, "fault_health_before"))
+    health_after = _health_snapshot(_single_result(results, "fault_health_after"))
+    settings_before = _settings_snapshot(_single_result(results, "fault_settings_before"))
+    settings_after = _settings_snapshot(_single_result(results, "fault_settings_after"))
+    snapshots_present = all(
+        snapshot is not None
+        for snapshot in (health_before, health_after, settings_before, settings_after)
+    )
+    unchanged = (
+        snapshots_present
+        and health_before == health_after
+        and settings_before == settings_after
+    )
+    evidence = [
+        f"health_before={health_before}",
+        f"health_after={health_after}",
+        f"settings_before={settings_before}",
+        f"settings_after={settings_after}",
+    ]
+    return CommandResult(
+        command="fault-guard-invariant",
+        purpose="Prove CLI rejection cases changed no reported health or settings fields.",
+        classifier="fault_guard_invariant",
+        serial_result="PASS" if unchanged else "FAIL",
+        operator_result="N/A",
+        completion_reason="snapshot_compare",
+        elapsed_s=0.0,
+        notes="Exact comparison of local snapshots bracketing the automated guard checks.",
+        evidence=evidence,
+    )
+
+
 def final_verdict(results: list[CommandResult], dry_run: bool) -> str:
     if dry_run:
         return "INCOMPLETE"
@@ -1725,6 +1978,9 @@ def run(argv: list[str]) -> int:
                 ser.close()
             except Exception:
                 pass
+
+    if args.include_fault_tests and not args.dry_run and not args.commands:
+        results.append(fault_guard_invariant_result(results))
 
     write_summary_files(log_dir, args, results, skipped, aggregate_stats)
 

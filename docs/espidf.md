@@ -47,7 +47,8 @@ The ESP-IDF CLI requires a final `confirm` suffix before any command that:
 - drives outputs
 - changes direction
 - changes polarity
-- writes raw registers
+- writes raw Output or Polarity registers (`0x02` through `0x05`); raw
+  Configuration writes remain intentionally unsupported
 - runs output patterns, sweep, walk, self-test, example-image recovery, or
   stress flows
 
@@ -65,6 +66,8 @@ usable for bring-up without silently mutating hardware.
 - command-surface parity with the Arduino CLI
 - confirmation guard wording and command coverage
 
-The check proves static contract coverage only. ESP-IDF hardware validation is
-pending until target PCA9555 hardware is tested and recorded in
-[hardware_validation.md](hardware_validation.md).
+The check proves static contract coverage only. Native ESP-IDF remains a
+build/contract target, while native-IDF hardware qualification is outside the
+current release scope and was not performed. The applicable Arduino ESP32-S3
+evidence in [hardware_validation.md](hardware_validation.md) does not validate
+native-IDF runtime behavior.

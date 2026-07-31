@@ -12,8 +12,8 @@ Runtime and upload evidence:
 - PlatformIO Core `6.1.19`, GCC `14.2.0+20260121`, and esptool `5.3.0`;
 - esptool identified the target, auto-detected 4 MB flash, wrote the combined
   firmware image, and verified its hash;
-- library `3.0.0`, source revision `fb54fcf` plus the documented dirty upgrade
-  changes under test.
+- library `3.0.0`, source revision `2bd9c82` plus the documented raw-write CLI
+  and fault-runner changes under test.
 
 ## Automated Results
 
@@ -25,20 +25,33 @@ Runtime and upload evidence:
   50 pass / 0 fail / 0 skip. Read stress completed 1,000/1,000, mixed
   read/write/configuration/polarity/mask stress completed 100/100, and both
   destructive phases were followed by successful complete-image recovery.
-- Extended command plan: 72/72 commands passed, including 24 successful
-  complete-image recoveries. Coverage included Port 1 and pin 15 boundary
+- Post-fix full and fault plan: 46/46 automated results passed (45 serial
+  commands plus one derived invariant). This reran the framework/version,
+  read, self-test, 1,000-cycle read stress, 100-cycle mixed stress, and recovery
+  coverage on the newly flashed CLI. The fault option then passed 22 exact
+  rejection cases plus before/after health and settings snapshots. In
+  particular, confirmed raw Configuration starts `6` and `7` produced the
+  corrected `wreg`/`wregs <2-5>` usage rejection on target.
+- Extended command plan was rerun on the newly flashed post-fix firmware:
+  72/72 commands passed, including 24 successful complete-image recoveries.
+  Coverage included Port 1 and pin 15 boundary
   accessors, all eight scalar register reads, all four odd-start paired-register
   wrap cases, pin/port/direction/polarity/mask operations, raw output/polarity
   register writes, exact output patterns, all-high/all-low, a 32/32 accumulating
   sweep, and a 16/16 walking-one test.
-- Final health was READY and bound, with zero consecutive failures, 2,644 total
+- Final health was READY and bound, with zero consecutive failures, 7,094 total
   tracked successes, zero total failures, and no last error. The final explicit
   recovery applied and verified high output latches, normal polarity, and all
-  pins configured as inputs.
+  pins configured as inputs. The fault block left every reported health and
+  settings field—including address `0x20`, 50 ms timeout, shadow-valid mask
+  `0x0E`, and uncertain mask `0x00`—exactly unchanged at 7,094 tracked
+  successes and zero failures.
 
 The ignored machine summaries are under `hil_logs/i2c_20260731_155046/`,
 `hil_logs/i2c_20260731_155507/`, `hil_logs/i2c_20260731_155524/`, and
-`hil_logs/i2c_20260731_155647/`. They retain bounded classifier evidence, not
+`hil_logs/i2c_20260731_155647/`. The post-fix fault run is under
+`hil_logs/i2c_20260731_170308/`, and the post-fix extended rerun is under
+`hil_logs/i2c_20260731_165925/`. They retain bounded classifier evidence, not
 raw serial transcripts.
 
 ## Scope And Open Physical Checks
@@ -54,9 +67,9 @@ not close the following operator or instrumentation gates:
 - logic-analyzer proof of latch-before-direction ordering and the mandatory
   nonzero pointer park after input reads;
 - a true PCA9555 power cycle for POR-default checking;
-- wrong-address, disconnect/reconnect, ambiguous transfer, brownout, and bus
-  recovery tests;
-- 100 kHz, shared-bus, ESP32-S2 hardware, and native ESP-IDF hardware runs.
+- wrong-address, disconnect/reconnect, stuck-bus, real timeout/cancellation
+  cleanup, ambiguous transfer, brownout, and bus-recovery tests;
+- 100 kHz and shared-bus runs.
 
 An ACK at `0x20` is address-response evidence only. The PCA9555 has no
 documented identity register, so this run does not claim chip identity.

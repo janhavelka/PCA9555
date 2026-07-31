@@ -40,16 +40,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   being attributed to the next command.
 - Normal-mode self-test and stress result tails are plain text so ANSI escape
   fragments cannot split machine evidence at a USB packet boundary.
+- Arduino and native ESP-IDF CLI raw-write parsing/help now matches the driver:
+  `wreg`/`wregs` accept only Output/Polarity starts `2` through `5`, while raw
+  Configuration writes remain intentionally rejected.
+- `--include-fault-tests` now runs an on-target, bus-silent CLI rejection suite
+  and fails unless before/after reported health and settings fields are identical.
 
 ### Validation
 
 - Arduino ESP32-S3 and ESP32-S2 builds pass on pioarduino `55.03.311`; 65
   native tests, package-consumer validation, static contracts, HIL parser tests,
   and Doxygen validation pass.
-- ESP32-S3 COM4 upgrade HIL passed 19/19 built-in commands and 72/72 extended
-  commands. The self-test reported 50/0/0, read stress 1,000/1,000, mixed stress
-  100/100, and final health READY with 2,644 successes and zero failures. The
-  operator/analyzer gates remain open and are recorded in the reviewed report.
+- ESP32-S3 COM4 upgrade HIL passed 46/46 post-fix full/fault results and 72/72
+  extended commands. The self-test reported 50/0/0, read stress 1,000/1,000,
+  mixed stress 100/100, raw Configuration starts 6/7 were rejected, and the
+  final fault block left every reported health/settings field unchanged at
+  7,094 successes and zero failures. Physical operator/analyzer gates remain
+  open in the report.
 
 ## [3.0.0] - 2026-07-22
 

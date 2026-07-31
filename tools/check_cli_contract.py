@@ -105,8 +105,8 @@ CONFIRM_HELP_SNIPPETS = [
     "dirout <M> [confirm]",
     "invertset <M> [confirm]",
     "invertclr <M> [confirm]",
-    "wreg <R> <V> [confirm]",
-    "wregs <R> <V0> [V1] [confirm]",
+    "wreg <2-5> <V> [confirm]",
+    "wregs <2-5> <V0> [V1] [confirm]",
     "pattern <VALUE> / pat <VALUE> [confirm]",
     "sweep [delay_ms] [confirm]",
     "walk [delay_ms] [confirm]",
@@ -174,6 +174,9 @@ def require_confirmation_contract(text: str) -> None:
     for snippet in CONFIRM_HELP_SNIPPETS:
         if snippet not in text:
             fail(f"Arduino CLI mutating help is missing confirm suffix: {snippet}")
+    for stale in ("wreg <2-7>", "wregs <2-7>", "Write register R (2-7)"):
+        if stale in text:
+            fail(f"Arduino CLI advertises unsupported raw Configuration writes: {stale}")
     if text.count("requireConfirmation(") < 20:
         fail("Arduino CLI mutating dispatch must route through requireConfirmation()")
 

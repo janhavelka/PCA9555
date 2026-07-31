@@ -57,7 +57,7 @@ static constexpr const char* CONFIRM_REASON_DIRECTION =
 static constexpr const char* CONFIRM_REASON_POLARITY =
     "polarity changes alter reported input sense and can hide wiring faults during validation";
 static constexpr const char* CONFIRM_REASON_RAW =
-    "raw register writes can change output latches, polarity, or direction";
+    "raw register writes bypass the safer named Output/Polarity command intent";
 static constexpr const char* CONFIRM_REASON_PATTERN =
     "this drives a full 16-bit pattern and forces every pin to output mode";
 static constexpr const char* CONFIRM_REASON_STRESS =
@@ -411,8 +411,8 @@ void printHelp() {
   puts("  setbits <M> / sb <M> | clearbits <M> / cb <M> | togglebits <M> / tb <M> [confirm]");
   puts("  dirin <M> | dirout <M> | invertset <M> | invertclr <M> [confirm]");
   puts("  read reg <R> / rreg <R> | read regs <R> <N> / rregs <R> <N>");
-  puts("  write reg <R> <V> / wreg <R> <V> [confirm]");
-  puts("  write regs <R> <V0> [V1] / wregs <R> <V0> [V1] [confirm]");
+  puts("  write reg <2-5> <V> / wreg <2-5> <V> [confirm] (Output/Polarity only)");
+  puts("  write regs <2-5> <V0> [V1] / wregs <2-5> <V0> [V1] [confirm]");
   puts("  pattern <VALUE> / pat <VALUE> [confirm] | sweep [delay_ms] [confirm] | walk [delay_ms] [confirm]");
   puts("  allhigh [confirm] | alllow [confirm] | drv / health | probe | recover [confirm] | verbose [0|1]");
   puts("  selftest [confirm] | stress [N] [confirm] | stress_mix [N] [confirm]");
@@ -866,9 +866,9 @@ void cmdWriteReg(const char* args) {
   uint8_t value = 0;
   bool confirmed = false;
   if (!parseU32Token(cursor, &reg) || reg < PCA9555::cmd::REG_OUTPUT_PORT_0 ||
-      reg >= PCA9555::cmd::NUM_REGISTERS || !parseU8Token(cursor, &value) ||
+      reg > PCA9555::cmd::REG_POLARITY_INV_1 || !parseU8Token(cursor, &value) ||
       !parseConfirmSuffix(cursor, &confirmed)) {
-    printUsage("write reg <0x02..0x07> <0x00..0xFF> [confirm]");
+    printUsage("write reg <0x02..0x05> <0x00..0xFF> [confirm]");
     return;
   }
 
@@ -892,8 +892,8 @@ void cmdWriteRegs(const char* args) {
   bool confirmed = false;
 
   if (!parseU32Token(cursor, &reg) || reg < PCA9555::cmd::REG_OUTPUT_PORT_0 ||
-      reg >= PCA9555::cmd::NUM_REGISTERS || !parseU8Token(cursor, &values[0])) {
-    printUsage("write regs <0x02..0x07> <0x00..0xFF> [0x00..0xFF] [confirm]");
+      reg > PCA9555::cmd::REG_POLARITY_INV_1 || !parseU8Token(cursor, &values[0])) {
+    printUsage("write regs <0x02..0x05> <0x00..0xFF> [0x00..0xFF] [confirm]");
     return;
   }
 
@@ -901,12 +901,12 @@ void cmdWriteRegs(const char* args) {
   if (*cursor != '\0') {
     char token[24] = {};
     if (!readToken(cursor, token, sizeof(token))) {
-      printUsage("write regs <0x02..0x07> <0x00..0xFF> [0x00..0xFF] [confirm]");
+      printUsage("write regs <0x02..0x05> <0x00..0xFF> [0x00..0xFF] [confirm]");
       return;
     }
     if (strcmp(token, "confirm") == 0) {
       if (hasTrailingArgs(cursor)) {
-        printUsage("write regs <0x02..0x07> <0x00..0xFF> [0x00..0xFF] [confirm]");
+        printUsage("write regs <0x02..0x05> <0x00..0xFF> [0x00..0xFF] [confirm]");
         return;
       }
       confirmed = true;
@@ -914,7 +914,7 @@ void cmdWriteRegs(const char* args) {
       uint32_t value1 = 0;
       if (!parseU32TokenText(token, &value1) || value1 > 0xFFU ||
           !parseConfirmSuffix(cursor, &confirmed)) {
-        printUsage("write regs <0x02..0x07> <0x00..0xFF> [0x00..0xFF] [confirm]");
+          printUsage("write regs <0x02..0x05> <0x00..0xFF> [0x00..0xFF] [confirm]");
         return;
       }
       values[1] = static_cast<uint8_t>(value1);

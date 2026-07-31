@@ -190,6 +190,166 @@ def test_dynamic_full_function_commands_have_expected_pass_patterns() -> None:
         assert_true(evidence, f"{command} PASS should include evidence")
 
 
+def test_raw_write_dynamic_specs_match_driver_range() -> None:
+    for start in ("2", "3", "4", "5", "0x02", "0x05"):
+        for command in (
+            f"wreg {start} 0xAA confirm",
+            f"wregs {start} 0xAA 0x55 confirm",
+        ):
+            spec = runner.dynamic_cli_command_spec(command, 5.0)
+            assert_true(spec is not None, f"{command} should have a dynamic spec")
+            assert_equal(spec.classifier, "register_write", f"{command} classifier")
+            assert_true(spec.destructive, f"{command} must remain output-test gated")
+
+    for start in ("6", "7", "0x06", "0x07"):
+        for command in (
+            f"wreg {start} 0xFF confirm",
+            f"wregs {start} 0xFF 0xFF confirm",
+        ):
+            spec = runner.dynamic_cli_command_spec(command, 5.0)
+            assert_true(
+                spec is None or spec.classifier != "register_write",
+                f"{command} must not be classified as a successful raw write",
+            )
+
+
+def test_fault_guard_plan_is_explicit_and_opt_in() -> None:
+    safe_args = runner.parse_args(["--dry-run"])
+    fault_args = runner.parse_args(["--dry-run", "--include-fault-tests"])
+    specs = list(runner.FAULT_GUARD_COMMANDS)
+
+    assert_true(specs, "fault flag must have a nonempty command plan")
+    assert_equal(specs[0].classifier, "fault_health_before", "fault plan health baseline")
+    assert_equal(specs[1].classifier, "fault_settings_before", "fault plan settings baseline")
+    assert_equal(specs[-2].classifier, "fault_settings_after", "fault plan settings final")
+    assert_equal(specs[-1].classifier, "fault_health_after", "fault plan health final")
+    for spec in specs:
+        assert_equal(spec.requires_opt_in, "--include-fault-tests", f"{spec.command} fault opt-in")
+        assert_true(not spec.destructive, f"{spec.command} fault guard must intend no mutation")
+        assert_equal(spec.recovery_command, None, f"{spec.command} must not trigger recovery I2C")
+        assert_true(not runner.opt_in_enabled(spec, safe_args), f"{spec.command} must be gated")
+        assert_true(runner.opt_in_enabled(spec, fault_args), f"{spec.command} must run after opt-in")
+
+    rejection_specs = specs[2:-2]
+    assert_true(rejection_specs, "fault plan must contain expected rejection cases")
+    for spec in rejection_specs:
+        assert_true(spec.expected_rejection, f"{spec.command} must be an exact rejection")
+        assert_true(spec.expected, f"{spec.command} must require exact evidence")
+        if spec.command.endswith(" confirm"):
+            assert_true(
+                spec.command in {
+                    "wreg 6 0xFF confirm",
+                    "wregs 7 0xFF 0xFF confirm",
+                },
+                f"{spec.command} is not a reviewed double-guarded Configuration rejection",
+            )
+
+
+def test_expected_rejection_classification_is_fail_closed() -> None:
+    spec = next(
+        item for item in runner.FAULT_GUARD_COMMANDS
+        if item.command == "rpin 16"
+    )
+    transcript = "[E] Usage: rpin <pin 0-15>\n"
+    result, evidence = runner.classify(spec, transcript, "prompt")
+    assert_equal(result, "PASS", "the exact reviewed rejection should pass")
+    assert_true(evidence, "expected rejection PASS should retain evidence")
+
+    result, _ = runner.classify(spec, "[E] Usage: another command\n", "prompt")
+    assert_true(result != "PASS", "a different rejection must not pass")
+    result, _ = runner.classify(spec, transcript + "Status: I2C_NACK_ADDR\n", "prompt")
+    assert_equal(result, "FAIL", "a transport error must dominate expected rejection")
+    result, _ = runner.classify(spec, transcript + "[FAIL] unexpected I2C\n", "prompt")
+    assert_equal(result, "FAIL", "a hard failure must dominate expected rejection")
+    result, _ = runner.classify(
+        spec,
+        transcript + "[W] Unknown command: 'unrelated'\n",
+        "prompt",
+    )
+    assert_equal(result, "FAIL", "an unrelated soft failure must not be hidden")
+    result, _ = runner.classify(
+        spec,
+        transcript + "[E] Usage: another command\n",
+        "prompt",
+    )
+    assert_equal(result, "FAIL", "an additional Usage failure must not be hidden")
+    result, _ = runner.classify(spec, transcript, "timeout")
+    assert_equal(result, "TIMEOUT", "timeout must dominate expected rejection")
+
+
+def make_fault_snapshot_results(
+    *, total_success_after: int = 42, timeout_after_ms: int = 50,
+    uncertain_after: str = "0x00"
+) -> list:
+    def result(classifier: str, evidence: list[str]):
+        return runner.CommandResult(
+            command="health" if "health" in classifier else "settings",
+            purpose="fault snapshot",
+            classifier=classifier,
+            serial_result="PASS",
+            operator_result="N/A",
+            completion_reason="prompt",
+            elapsed_s=0.0,
+            notes="",
+            evidence=evidence,
+        )
+
+    health_before = [
+        "=== Driver Health ===",
+        "State: READY Bound: YES Consecutive failures: 0 Total success: 42 Total failures: 0 Last error: never",
+    ]
+    health_after = [
+        "=== Driver Health ===",
+        f"State: READY Bound: YES Consecutive failures: 0 Total success: {total_success_after} Total failures: 0 Last error: never",
+    ]
+    settings_before = [
+        "=== Settings Snapshot ===",
+        "Initialized: YES",
+        "State: READY",
+        "I2C address: 0x20",
+        "Timeout: 50 ms",
+        "Interrupt errata workaround: mandatory",
+        "nowMs hook: SET",
+        "Shadow valid pairs: 0x07",
+        "Uncertain pairs: 0x00",
+    ]
+    settings_after = [
+        *settings_before[:4],
+        f"Timeout: {timeout_after_ms} ms",
+        *settings_before[5:-1],
+        f"Uncertain pairs: {uncertain_after}",
+    ]
+    return [
+        result("fault_health_before", health_before),
+        result("fault_settings_before", settings_before),
+        result("fault_settings_after", settings_after),
+        result("fault_health_after", health_after),
+    ]
+
+
+def test_fault_guard_snapshot_invariant() -> None:
+    unchanged = runner.fault_guard_invariant_result(make_fault_snapshot_results())
+    assert_equal(unchanged.serial_result, "PASS", "unchanged fault snapshots must pass")
+
+    counter_changed = runner.fault_guard_invariant_result(
+        make_fault_snapshot_results(total_success_after=43)
+    )
+    assert_equal(counter_changed.serial_result, "FAIL", "tracked I2C must fail the invariant")
+
+    shadow_changed = runner.fault_guard_invariant_result(
+        make_fault_snapshot_results(uncertain_after="0x01")
+    )
+    assert_equal(shadow_changed.serial_result, "FAIL", "shadow changes must fail the invariant")
+
+    settings_changed = runner.fault_guard_invariant_result(
+        make_fault_snapshot_results(timeout_after_ms=51)
+    )
+    assert_equal(settings_changed.serial_result, "FAIL", "settings changes must fail the invariant")
+
+    missing = runner.fault_guard_invariant_result(make_fault_snapshot_results()[:-1])
+    assert_equal(missing.serial_result, "FAIL", "missing snapshots must fail the invariant")
+
+
 def test_text_command_file_uses_dynamic_specs() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         path = pathlib.Path(tmp) / "commands.txt"
@@ -499,6 +659,22 @@ def test_dry_run_artifacts_include_classifier_and_timing_options() -> None:
         )
 
 
+def test_fault_flag_adds_real_commands_to_dry_run() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        rc = runner.run([
+            "--dry-run",
+            "--include-fault-tests",
+            "--out",
+            tmp,
+        ])
+        assert_equal(rc, 0, "fault-plan dry-run should exit successfully")
+        log_dir = next(pathlib.Path(tmp).glob("i2c_*"))
+        summary = json.loads((log_dir / "summary.json").read_text(encoding="utf-8"))
+        commands = [item["command"] for item in summary["commands"]]
+        for spec in runner.FAULT_GUARD_COMMANDS:
+            assert_true(spec.command in commands, f"fault dry-run missing {spec.command}")
+
+
 class ZeroWaitingSerial:
     in_waiting = 0
 
@@ -652,6 +828,10 @@ def main() -> int:
         test_failure_token_classification,
         test_destructive_command_gating,
         test_dynamic_full_function_commands_have_expected_pass_patterns,
+        test_raw_write_dynamic_specs_match_driver_range,
+        test_fault_guard_plan_is_explicit_and_opt_in,
+        test_expected_rejection_classification_is_fail_closed,
+        test_fault_guard_snapshot_invariant,
         test_text_command_file_uses_dynamic_specs,
         test_recovery_spec_uses_dynamic_expected_patterns,
         test_json_destructive_command_requires_opt_in,
@@ -665,6 +845,7 @@ def main() -> int:
         test_fail_verdict_maps_to_nonzero_exit,
         test_serial_anomaly_maps_to_nonzero_exit_without_failing_manual_rows,
         test_dry_run_artifacts_include_classifier_and_timing_options,
+        test_fault_flag_adds_real_commands_to_dry_run,
         test_serial_lines_are_configured_before_open,
         test_startup_sync_uses_read_only_health_framing,
         test_read_until_does_not_depend_on_in_waiting,

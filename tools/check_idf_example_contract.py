@@ -102,7 +102,8 @@ REQUIRED_CONFIRMED_HELP_TEXT = [
     "dir port <P> <V> / dport <P> <V> [confirm]",
     "polarity pin <N> <0|1> / pol <N> <0|1> [confirm]",
     "polarity port <P> <V> / wpol <P> <V> [confirm]",
-    "write reg <R> <V> / wreg <R> <V> [confirm]",
+    "write reg <2-5> <V> / wreg <2-5> <V> [confirm]",
+    "write regs <2-5> <V0> [V1] / wregs <2-5> <V0> [V1] [confirm]",
     "pattern <VALUE> / pat <VALUE> [confirm]",
     "recover [confirm]",
     "selftest [confirm] | stress [N] [confirm] | stress_mix [N] [confirm]",
@@ -181,6 +182,15 @@ def main() -> int:
     for token in REQUIRED_CONFIRMED_HELP_TEXT:
         if token not in main_cpp:
             fail(violations, f"confirmed command help text missing: {token}")
+    for token in (
+        "write reg <0x02..0x05> <0x00..0xFF> [confirm]",
+        "write regs <0x02..0x05> <0x00..0xFF> [0x00..0xFF] [confirm]",
+    ):
+        if token not in main_cpp:
+            fail(violations, f"raw write range token missing: {token}")
+    for stale in ("0x02..0x07", "<2-7>"):
+        if stale in main_cpp:
+            fail(violations, f"native IDF CLI advertises unsupported raw Configuration writes: {stale}")
 
     ns = runpy.run_path(str(ROOT / "tools" / "check_cli_contract.py"))
     for cmd in ns.get("MANDATORY_COMMANDS", []):

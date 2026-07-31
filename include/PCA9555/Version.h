@@ -12,7 +12,7 @@
 #include <stdint.h>
 
 #ifndef PCA9555_VERSION_STRING
-#define PCA9555_VERSION_STRING "3.0.0"
+#define PCA9555_VERSION_STRING "3.0.1"
 #endif
 
 #ifndef PCA9555_BUILD_DATE
@@ -48,16 +48,16 @@ static constexpr uint16_t VERSION_MAJOR = 3;
 static constexpr uint16_t VERSION_MINOR = 0;
 
 /// @brief Patch version (backward-compatible fixes).
-static constexpr uint16_t VERSION_PATCH = 0;
+static constexpr uint16_t VERSION_PATCH = 1;
 
 /// @brief Full semantic version string.
 static constexpr const char* VERSION = PCA9555_VERSION_STRING;
 
 /// @brief Encoded version for numeric comparison: MAJOR*10000 + MINOR*100 + PATCH.
-static constexpr uint32_t VERSION_CODE = 30000;
+static constexpr uint32_t VERSION_CODE = 30001;
 
 /// @brief Backward-compatible alias used by older repositories.
-static constexpr int VERSION_INT = 30000;
+static constexpr int VERSION_INT = 30001;
 
 /// @brief Build date string.
 static constexpr const char* BUILD_DATE = PCA9555_BUILD_DATE;

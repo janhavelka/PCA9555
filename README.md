@@ -5,7 +5,7 @@ library owns the chip register protocol. The application owns the I2C bus,
 serialization, scheduling, retry policy, bus recovery, and device health
 policy.
 
-Version 3.0.0 is a pre-production candidate. Native tests and compile checks are
+Version 3.0.1 is a pre-production candidate. Native tests and compile checks are
 necessary, but real-board electrical, interrupt, brownout, and shared-bus
 validation are still required before a field-readiness claim.
 
@@ -55,11 +55,11 @@ See [chip notes](docs/chip_notes.md), the
 ## Installation
 
 Production users should pin an audited release tag or immutable commit. Do not
-track a moving branch. Version 3.0.0 can be pinned as:
+track a moving branch. Version 3.0.1 can be pinned as:
 
 ```ini
 lib_deps =
-  https://github.com/janhavelka/PCA9555.git#v3.0.0
+  https://github.com/janhavelka/PCA9555.git#v3.0.1
 ```
 
 For a manual install, copy `include/PCA9555/` and `src/`. The repository is also

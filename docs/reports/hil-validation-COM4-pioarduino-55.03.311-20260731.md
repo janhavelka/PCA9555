@@ -12,8 +12,8 @@ Runtime and upload evidence:
 - PlatformIO Core `6.1.19`, GCC `14.2.0+20260121`, and esptool `5.3.0`;
 - esptool identified the target, auto-detected 4 MB flash, wrote the combined
   firmware image, and verified its hash;
-- library `3.0.0`, source revision `2bd9c82` plus the documented raw-write CLI
-  and fault-runner changes under test.
+- library `3.0.1`, release candidate based on source revision `e618f5c` plus the
+  synchronized `v3.0.1` release metadata under test.
 
 ## Automated Results
 
@@ -25,33 +25,34 @@ Runtime and upload evidence:
   50 pass / 0 fail / 0 skip. Read stress completed 1,000/1,000, mixed
   read/write/configuration/polarity/mask stress completed 100/100, and both
   destructive phases were followed by successful complete-image recovery.
-- Post-fix full and fault plan: 46/46 automated results passed (45 serial
+- Release-candidate full and fault plan: 46/46 automated results passed (45 serial
   commands plus one derived invariant). This reran the framework/version,
   read, self-test, 1,000-cycle read stress, 100-cycle mixed stress, and recovery
   coverage on the newly flashed CLI. The fault option then passed 22 exact
   rejection cases plus before/after health and settings snapshots. In
   particular, confirmed raw Configuration starts `6` and `7` produced the
   corrected `wreg`/`wregs <2-5>` usage rejection on target.
-- Extended command plan was rerun on the newly flashed post-fix firmware:
+- Extended command plan was rerun on the newly flashed release-candidate firmware:
   72/72 commands passed, including 24 successful complete-image recoveries.
   Coverage included Port 1 and pin 15 boundary
   accessors, all eight scalar register reads, all four odd-start paired-register
   wrap cases, pin/port/direction/polarity/mask operations, raw output/polarity
   register writes, exact output patterns, all-high/all-low, a 32/32 accumulating
   sweep, and a 16/16 walking-one test.
-- Final health was READY and bound, with zero consecutive failures, 7,094 total
+- Final health was READY and bound, with zero consecutive failures, 2,604 total
   tracked successes, zero total failures, and no last error. The final explicit
-  recovery applied and verified high output latches, normal polarity, and all
+  recovery successfully applied high output latches, normal polarity, and all
   pins configured as inputs. The fault block left every reported health and
   settings field—including address `0x20`, 50 ms timeout, shadow-valid mask
-  `0x0E`, and uncertain mask `0x00`—exactly unchanged at 7,094 tracked
-  successes and zero failures.
+  `0x0E`, and uncertain mask `0x00`—exactly unchanged at 2,245 tracked
+  successes and zero failures; the subsequent extended plan raised the final
+  success count to 2,604.
 
 The ignored machine summaries are under `hil_logs/i2c_20260731_155046/`,
 `hil_logs/i2c_20260731_155507/`, `hil_logs/i2c_20260731_155524/`, and
-`hil_logs/i2c_20260731_155647/`. The post-fix fault run is under
-`hil_logs/i2c_20260731_170308/`, and the post-fix extended rerun is under
-`hil_logs/i2c_20260731_165925/`. They retain bounded classifier evidence, not
+`hil_logs/i2c_20260731_155647/`. The exact `3.0.1` full/fault run is under
+`hil_logs/i2c_20260731_174214/`, and its extended rerun is under
+`hil_logs/i2c_20260731_174225/`. They retain bounded classifier evidence, not
 raw serial transcripts.
 
 ## Scope And Open Physical Checks

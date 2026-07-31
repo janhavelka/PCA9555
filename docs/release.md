@@ -1,8 +1,8 @@
 # Release Status
 
-Version 3.0.0 is tagged. Its source, package, build, native-test, and Doxygen
-gates were completed before release; those results belong in CI and Git history,
-not in a live to-do list.
+Version 3.0.1 is the current release. Its source, package, build, native-test,
+and Doxygen gates were completed before release; those results belong in CI
+and Git history, not in a live to-do list.
 
 Hardware qualification is scoped to the in-scope Arduino ESP32-S3 target.
 ESP32-S2 and native ESP-IDF remain build/contract targets; separate hardware

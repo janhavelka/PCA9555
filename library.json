@@ -1,6 +1,6 @@
 {
   "name": "PCA9555",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Framework-neutral PCA9555 16-bit I/O expander driver.",
   "keywords": [
     "pca9555",

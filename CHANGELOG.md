@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-07-31
+
 ### Changed
 
 - Exact-pinned the Arduino example and HIL builds to pioarduino
@@ -55,7 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extended commands. The self-test reported 50/0/0, read stress 1,000/1,000,
   mixed stress 100/100, raw Configuration starts 6/7 were rejected, and the
   final fault block left every reported health/settings field unchanged at
-  7,094 successes and zero failures. Physical operator/analyzer gates remain
+  2,245 successes and zero failures. The subsequent extended plan ended READY
+  at 2,604 successes and zero failures. Physical operator/analyzer gates remain
   open in the report.
 
 ## [3.0.0] - 2026-07-22
@@ -281,7 +284,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Overlong CLI input lines are discarded instead of executing truncated commands.
 - Example helper parsers reject malformed numeric input and zero-length destination buffers instead of coercing invalid values.
 
-[Unreleased]: https://github.com/janhavelka/PCA9555/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/janhavelka/PCA9555/compare/v3.0.1...HEAD
+[3.0.1]: https://github.com/janhavelka/PCA9555/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/janhavelka/PCA9555/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/janhavelka/PCA9555/compare/v1.1.0...v2.0.0
 [1.1.0]: https://github.com/janhavelka/PCA9555/compare/v1.0.0...v1.1.0

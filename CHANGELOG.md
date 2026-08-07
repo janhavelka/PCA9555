@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-08-07
+
 ### Changed
 
 - Added the repository-local Windows PlatformIO wrapper and safe branch-sync
@@ -307,7 +309,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Overlong CLI input lines are discarded instead of executing truncated commands.
 - Example helper parsers reject malformed numeric input and zero-length destination buffers instead of coercing invalid values.
 
-[Unreleased]: https://github.com/janhavelka/PCA9555/compare/v3.0.1...HEAD
+[Unreleased]: https://github.com/janhavelka/PCA9555/compare/v3.0.2...HEAD
+[3.0.2]: https://github.com/janhavelka/PCA9555/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/janhavelka/PCA9555/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/janhavelka/PCA9555/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/janhavelka/PCA9555/compare/v1.1.0...v2.0.0

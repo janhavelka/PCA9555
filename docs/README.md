@@ -14,9 +14,10 @@ and API contracts live in Doxygen comments under `include/PCA9555/`.
   and layout facts extracted from the source chip documentation.
 - [Hardware validation](hardware_validation.md): HIL runner usage, target run
   command contract, known serial-channel constraint, and open hardware gates.
+- [v3.0.1 ESP32-S3 HIL summary](reports/hil-validation-COM4-pioarduino-55.03.311-20260731.md):
+  reviewed automated target evidence and explicitly open physical checks.
 - [ESP-IDF notes](espidf.md): native ESP-IDF component/example boundary,
   transport ownership, and static contract checks.
-- [Release status](release.md): remaining real-target work and allowed claims.
 - [Datasheet extraction](datasheet_extraction.md):
   comprehensive datasheet extraction retained as AI-coder and implementation
   review context. The TI datasheet remains authoritative.
@@ -29,9 +30,9 @@ and API contracts live in Doxygen comments under `include/PCA9555/`.
 
 Run `doxygen Doxyfile` from the repository root, then open
 `docs/doxygen/html/index.html`. The generated tree is ignored by Git and is not
-part of the public package. Doxygen reads public headers and the durable guides
-listed above. It deliberately excludes example implementation internals and
-the integration audit so the API reference stays focused.
+part of the public package. Doxygen reads public headers and selected durable
+guides. It deliberately excludes example implementation internals and HIL
+reports so the API reference stays focused.
 
 Missing public-symbol documentation and Doxygen documentation errors fail the
 generation command. Parameter names and types remain visible in each generated

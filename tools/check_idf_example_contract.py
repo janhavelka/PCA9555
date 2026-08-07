@@ -42,6 +42,15 @@ REQUIRED_NATIVE_TOKENS = [
     "i2c_new_master_bus",
 ]
 
+REQUIRED_COMPONENTS = [
+    "PCA9555",
+    "esp_driver_i2c",
+    "esp_driver_gpio",
+    "esp_timer",
+    "freertos",
+    "vfs",
+]
+
 FORBIDDEN_PLACEHOLDER_TEXT = [
     "Command is present in the native IDF contract; use help for arguments.",
     "Command is intentionally blocked in this native IDF example",
@@ -159,10 +168,9 @@ def main() -> int:
 
     if "EXTRA_COMPONENT_DIRS" not in example_cmake:
         fail(violations, "IDF example must consume the repository as an external component")
-    if "PCA9555" not in main_cmake:
-        fail(violations, "IDF example main component must require the PCA9555 component")
-    if "esp_driver_i2c" not in main_cmake:
-        fail(violations, "IDF example must require the native ESP-IDF I2C driver component")
+    for component in REQUIRED_COMPONENTS:
+        if re.search(rf"\b{re.escape(component)}\b", main_cmake) is None:
+            fail(violations, f"ESP-IDF CMake file missing component '{component}'")
 
     for token in FORBIDDEN_TOKENS:
         if token in main_cpp:
@@ -199,10 +207,6 @@ def main() -> int:
                 fail(violations, "mandatory command '?' missing from IDF example")
         elif re.search(rf"\b{re.escape(cmd)}\b", main_cpp) is None:
             fail(violations, f"mandatory command '{cmd}' missing from IDF example")
-    for component in ns.get("IDF_REQUIRED_COMPONENTS", []):
-        if re.search(rf"\b{re.escape(component)}\b", main_cmake) is None:
-            fail(violations, f"ESP-IDF CMake file missing component '{component}'")
-
     lower_readme = readme.lower()
     for required in ("confirm", "not hardware validation", "arduino", "wire", "idf.py"):
         if required not in lower_readme:

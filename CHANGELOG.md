@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Added the repository-local Windows PlatformIO wrapper and safe branch-sync
+  guidance for contributors and automation agents.
+- Consolidated release-status guidance into the README and hardware-validation
+  runbook, and kept the generated Doxygen reference focused on current public
+  documentation.
+- Separated the Arduino and native ESP-IDF contract checkers so each validates
+  its own framework surface without circular execution.
+- Reduced retained HIL material to the reviewed v3.0.1 summary and durable
+  aggregate evidence; transient machine-output locations and the superseded
+  COM7 detail report remain available in Git history.
+
+### Removed
+
+- Removed unused example-only `CommandHandler.h`, `TransportAdapter.h`, and
+  `HealthView.h` helpers plus the redundant `BusDiag.h` scanner pass-through.
+
+### Fixed
+
+- Corrected the hardware-validation overview to match the v3.0.1 report's final
+  2,604 tracked successes and zero failures.
+
 ## [3.0.1] - 2026-07-31
 
 ### Changed

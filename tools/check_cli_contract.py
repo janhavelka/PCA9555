@@ -3,25 +3,9 @@ from __future__ import annotations
 
 import pathlib
 import re
-import runpy
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-
-REQUIRED_COMMON = [
-    "BoardConfig.h",
-    "BuildConfig.h",
-    "Log.h",
-    "I2cTransport.h",
-    "I2cScanner.h",
-    "CommandHandler.h",
-    "TransportAdapter.h",
-    "BusDiag.h",
-    "CliShell.h",
-    "CliStyle.h",
-    "HealthView.h",
-    "HealthDiag.h",
-]
 
 MANDATORY_COMMANDS = [
     "help",
@@ -79,15 +63,6 @@ MANDATORY_COMMANDS = [
     "pat",
     "stress_mix",
     "stress",
-]
-
-IDF_REQUIRED_COMPONENTS = [
-    "PCA9555",
-    "esp_driver_i2c",
-    "esp_driver_gpio",
-    "esp_timer",
-    "freertos",
-    "vfs",
 ]
 
 CONFIRM_HELP_SNIPPETS = [
@@ -182,24 +157,15 @@ def require_confirmation_contract(text: str) -> None:
 
 
 def main() -> int:
-    common_dir = ROOT / "examples" / "common"
     bringup_main = ROOT / "examples" / "01_basic_bringup_cli" / "main.cpp"
-    idf_main = ROOT / "examples" / "espidf_basic" / "main" / "main.cpp"
-    idf_cmake = ROOT / "examples" / "espidf_basic" / "main" / "CMakeLists.txt"
 
-    ensure_exists(common_dir, "common example directory")
     ensure_exists(bringup_main, "bringup CLI example")
-    ensure_exists(idf_main, "ESP-IDF bringup entry point")
-    ensure_exists(idf_cmake, "ESP-IDF bringup CMake file")
 
     ensure_missing(ROOT / "examples" / "00_smoke_boot", "deprecated example 00_smoke_boot")
     ensure_missing(
         ROOT / "examples" / "03_feature_walkthrough",
         "deprecated example 03_feature_walkthrough",
     )
-
-    for name in REQUIRED_COMMON:
-        ensure_exists(common_dir / name, f"common helper {name}")
 
     text = bringup_main.read_text(encoding="utf-8", errors="replace")
 
@@ -208,18 +174,6 @@ def main() -> int:
         require_dispatch(text, cmd)
         require_help(text, cmd)
     require_confirmation_contract(text)
-
-    idf_text = idf_main.read_text(encoding="utf-8", errors="replace")
-    if 'extern "C" void app_main(void)' not in idf_text:
-        fail("ESP-IDF entry point must define app_main()")
-
-    cmake_text = idf_cmake.read_text(encoding="utf-8", errors="replace")
-    for component in IDF_REQUIRED_COMPONENTS:
-        if re.search(rf"\b{re.escape(component)}\b", cmake_text) is None:
-            fail(f"ESP-IDF CMake file missing required component '{component}'")
-
-    idf_contract = runpy.run_path(str(ROOT / "tools" / "check_idf_example_contract.py"))
-    idf_contract["main"]()
 
     print("CLI contract PASSED")
     return 0

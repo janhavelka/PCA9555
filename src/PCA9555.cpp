@@ -42,7 +42,7 @@ Status busy(BusyDetail detail, const char* message) {
 
 }  // namespace
 
-Status PCA9555::_validateBinding(const Config& config) const {
+Status PCA9555::_validateBinding(const Config& config) {
   if (config.i2cWrite == nullptr || config.i2cWriteRead == nullptr) {
     return Status::Error(Err::INVALID_CONFIG, "transport callbacks required");
   }
@@ -127,7 +127,7 @@ uint32_t PCA9555::_nowMs() const {
 Status PCA9555::_mapTransportResult(const TransportResult& result,
                                     size_t expectedTx, size_t expectedRx,
                                     bool registerWrite,
-                                    WriteEffect& effect) const {
+                                    WriteEffect& effect) {
   effect = expectedTx == 0U ? WriteEffect::NOT_APPLICABLE
                             : WriteEffect::MAY_HAVE_COMMITTED;
   if (registerWrite) {

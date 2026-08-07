@@ -1477,7 +1477,7 @@ void test_named_and_raw_reads_fence_the_whole_pair_on_any_observed_mismatch() {
       clearTransactions(bus);
 
       uint8_t values[2] = {0U, 0U};
-      Status status = Status::Error(Err::INVALID_PARAM, "read not attempted");
+      Status status;
       if (mode == 0U && PAIRS[index] == PAIR_OUTPUTS) {
         status = device.readOutput(Port::PORT_0, values[0]);
       } else if (mode == 0U && PAIRS[index] == PAIR_POLARITY) {

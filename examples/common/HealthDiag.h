@@ -33,8 +33,7 @@ inline const char* errToStr(PCA9555::Err err) {
   return PCA9555::errorName(err);
 }
 
-inline void printHealthDiag(const PCA9555::SettingsSnapshot& snapshot, uint32_t nowMs) {
-  (void)nowMs;
+inline void printHealthDiag(const PCA9555::SettingsSnapshot& snapshot) {
   const char* lastErrorText = (snapshot.lastErrorMs == 0U) ? "never"
                                                            : errToStr(snapshot.lastError.code);
   Serial.println("=== Driver Health ===");

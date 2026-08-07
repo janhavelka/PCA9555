@@ -47,7 +47,6 @@ INPUT                  = README.md \
                          docs/espidf.md \
                          docs/hardware_validation.md \
                          docs/register_reference.md \
-                         docs/release.md \
                          docs/datasheet_extraction.md
 FILE_PATTERNS          = *.h *.cpp *.md
 RECURSIVE              = YES

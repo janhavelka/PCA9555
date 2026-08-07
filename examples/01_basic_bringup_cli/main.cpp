@@ -11,13 +11,15 @@
 #include "examples/common/CliStyle.h"
 #include "examples/common/Log.h"
 #include "examples/common/BoardConfig.h"
-#include "examples/common/BusDiag.h"
 #include "examples/common/CliShell.h"
 #include "examples/common/HealthDiag.h"
 #include "examples/common/I2cTransport.h"
 #include "examples/common/I2cScanner.h"
 
 #include "PCA9555/PCA9555.h"
+
+using health_diag::errToStr;
+using health_diag::stateToStr;
 
 // ============================================================================
 // Globals
@@ -54,20 +56,6 @@ static constexpr uint32_t SERIAL_TX_TIMEOUT_MS = 20U;
 
 uint32_t exampleNowMs(void*) {
   return millis();
-}
-
-const char* errToStr(PCA9555::Err err) {
-  return PCA9555::errorName(err);
-}
-
-const char* stateToStr(PCA9555::DriverState st) {
-  using namespace PCA9555;
-  switch (st) {
-    case DriverState::UNINIT:   return "UNINIT";
-    case DriverState::READY:    return "READY";
-    case DriverState::DEGRADED: return "DEGRADED";
-    default:                    return "UNKNOWN";
-  }
 }
 
 const char* stateColor(PCA9555::DriverState st, bool online, uint8_t consecutiveFailures) {
@@ -388,7 +376,7 @@ void printVerboseState() {
 }
 
 void printDriverHealth() {
-  health_diag::printHealthDiag(device.getSettings(), millis());
+  health_diag::printHealthDiag(device.getSettings());
 }
 
 void printPortBinary(const char* label, uint8_t value) {
@@ -2125,7 +2113,7 @@ void processCommand(const String& cmdLine) {
   }
 
   if (cmd == "scan") {
-    bus_diag::scan();
+    i2c_scanner::scan(Wire);
     return;
   }
 
@@ -2634,7 +2622,7 @@ void setup() {
     return;
   }
   LOGI("I2C initialized (SDA=%d, SCL=%d)", board::I2C_SDA, board::I2C_SCL);
-  bus_diag::scan();
+  i2c_scanner::scan(Wire);
 
   PCA9555::Config cfg;
   cfg.i2cWrite = transport::wireWrite;

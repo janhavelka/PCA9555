@@ -417,7 +417,7 @@ class PCA9555 {
     OperationResult result{};
   };
 
-  Status _validateBinding(const Config& config) const;
+  static Status _validateBinding(const Config& config);
   Status _boundStatus() const;
   Status _shadowStatus(uint8_t pairs) const;
   bool _deadlineReached(uint32_t nowMs) const;
@@ -448,9 +448,9 @@ class PCA9555 {
   Status _writePort(uint8_t reg, uint8_t value, uint8_t pair,
                     uint16_t intendedCombined);
 
-  Status _mapTransportResult(const TransportResult& result,
-                             size_t expectedTx, size_t expectedRx,
-                             bool registerWrite, WriteEffect& effect) const;
+  static Status _mapTransportResult(const TransportResult& result,
+                                    size_t expectedTx, size_t expectedRx,
+                                    bool registerWrite, WriteEffect& effect);
   Status _i2cWriteReadRaw(const uint8_t* txBuf, size_t txLen,
                           uint8_t* rxBuf, size_t rxLen,
                           WriteEffect& commandEffect);

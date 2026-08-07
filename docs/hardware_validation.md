@@ -4,17 +4,18 @@ Automated ESP32-S3/PCA9555 upgrade HIL was performed on COM4 on 2026-07-31 with
 pioarduino `55.03.311`. The reviewed summary at
 `docs/reports/hil-validation-COM4-pioarduino-55.03.311-20260731.md` records
 46/46 post-fix full/fault results and 72/72 extended commands passing, final
-READY health, 7,094 tracked successes, and zero failures while retaining the
+READY health, 2,604 tracked successes, and zero failures while retaining the
 physical gates below.
+
 Hardware qualification for this release is scoped to Arduino ESP32-S3.
 ESP32-S2 and native ESP-IDF remain build/contract targets and are not hardware
 gates; the S3 evidence does not validate native ESP-IDF runtime behavior.
-Earlier COM7 HIL on 2026-07-22 is recorded at
-`docs/reports/hil-validation-COM7-1h-read-stress-20260722.md`: a 73-minute
-device-side input-read/pointer-park stress with 15,000,000 operations and zero
-failures, plus full-function and external-owner supporting coverage.
-It is not electrical, analyzer, reset, or shared-bus evidence. An I2C ACK proves
-address response only; the PCA9555 has no documented chip-ID register.
+Earlier COM7 HIL on 2026-07-22 completed a 73-minute device-side
+input-read/pointer-park stress with 15,000,000 operations and zero failures.
+That historical supporting result remains in the v3.0.1 changelog and Git
+history; it is not electrical, analyzer, reset, or shared-bus evidence. An I2C
+ACK proves address response only; the PCA9555 has no documented chip-ID
+register.
 
 All real-target gates below remain open. Store temporary runner output under
 `hil_logs/`; Git ignores that directory. Commit only a short reviewed summary

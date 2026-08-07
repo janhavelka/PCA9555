@@ -347,8 +347,8 @@ recovery API.
 ## Documentation
 
 The documentation index at `docs/README.md` separates public API guidance,
-chip/register facts, hardware evidence, and remaining release work. Public API
-details are maintained in the headers under `include/PCA9555/`.
+chip/register facts, hardware evidence, and remaining validation work. Public
+API details are maintained in the headers under `include/PCA9555/`.
 
 Generate the local HTML reference with:
 
@@ -361,9 +361,9 @@ by Git and is not shipped in the library package. Doxygen treats undocumented
 public symbols and documentation errors as failures; internal example helpers
 are intentionally outside the generated API surface.
 
-See the [release status](docs/release.md) and
-[hardware validation runbook](docs/hardware_validation.md) for the evidence
-still required on real hardware.
+See the [hardware validation runbook](docs/hardware_validation.md) for the
+evidence still required on real hardware and the limits on field-readiness
+claims.
 
 ## License
 

@@ -48,13 +48,6 @@ Runtime and upload evidence:
   successes and zero failures; the subsequent extended plan raised the final
   success count to 2,604.
 
-The ignored machine summaries are under `hil_logs/i2c_20260731_155046/`,
-`hil_logs/i2c_20260731_155507/`, `hil_logs/i2c_20260731_155524/`, and
-`hil_logs/i2c_20260731_155647/`. The exact `3.0.1` full/fault run is under
-`hil_logs/i2c_20260731_174214/`, and its extended rerun is under
-`hil_logs/i2c_20260731_174225/`. They retain bounded classifier evidence, not
-raw serial transcripts.
-
 ## Scope And Open Physical Checks
 
 The runner verdict remains `OPERATOR_REVIEW_REQUIRED`. These runs prove the

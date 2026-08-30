@@ -12,6 +12,12 @@ idf.py -C examples/espidf_basic set-target esp32s3 build
 idf.py -C examples/espidf_basic set-target esp32s2 build
 ```
 
+The CLI configures the primary console selected by ESP-IDF sdkconfig for
+blocking input before entering its fixed-buffer `fgets()` loop. The default
+UART console, USB Serial/JTAG, and USB CDC are supported. Select a non-default
+primary console with `idf.py -C examples/espidf_basic menuconfig` before the
+build; an output-only secondary console cannot accept commands.
+
 The example owns the I2C bus setup and maps each native ESP-IDF I2C call to one
 terminal `PCA9555::TransportResult`. It calls passive `bind()` first and then
 performs an explicit `probe()`. It is example code, not a production bus

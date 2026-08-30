@@ -36,6 +36,22 @@ uint8_t pairForRegister(uint8_t reg) {
   }
 }
 
+constexpr uint8_t portRegister(uint8_t baseReg, Port port) {
+  return static_cast<uint8_t>(baseReg + static_cast<uint8_t>(port));
+}
+
+constexpr uint16_t withPort(uint16_t combined, Port port, uint8_t value) {
+  return port == Port::PORT_0
+             ? static_cast<uint16_t>((combined & 0xFF00U) | value)
+             : static_cast<uint16_t>((combined & 0x00FFU) |
+                                     (static_cast<uint16_t>(value) << 8U));
+}
+
+constexpr uint8_t portValue(uint16_t combined, Port port) {
+  return static_cast<uint8_t>(combined >>
+                              (8U * static_cast<uint8_t>(port)));
+}
+
 Status busy(BusyDetail detail, const char* message) {
   return Status::Error(Err::BUSY, message, static_cast<int32_t>(detail));
 }
@@ -236,9 +252,16 @@ Status PCA9555::_i2cWriteTracked(const uint8_t* buf, size_t len,
   return _updateHealth(_i2cWriteRaw(buf, len, effect));
 }
 
+Status PCA9555::_i2cWriteCleanupTracked(const uint8_t* buf, size_t len,
+                                        WriteEffect& effect) {
+  const Status status = _i2cWriteRaw(buf, len, effect);
+  return status.ok() ? status : _updateHealth(status);
+}
+
 void PCA9555::_invalidateShadowPair(uint8_t pair) {
   _shadowValidPairs = static_cast<uint8_t>(_shadowValidPairs & ~pair);
   _uncertainPairs = static_cast<uint8_t>(_uncertainPairs | pair);
+  _observed.uncertainPairs = _uncertainPairs;
 }
 
 void PCA9555::_establishShadowPair(uint8_t pair, uint16_t value) {
@@ -247,6 +270,7 @@ void PCA9555::_establishShadowPair(uint8_t pair, uint16_t value) {
   if (pair == PAIR_DIRECTIONS) _shadow.directions = value;
   _shadowValidPairs = static_cast<uint8_t>(_shadowValidPairs | pair);
   _uncertainPairs = static_cast<uint8_t>(_uncertainPairs & ~pair);
+  _observed.uncertainPairs = _uncertainPairs;
   // Re-establishing a pair supersedes any earlier readback contradiction, so a
   // snapshot can never report the same pair as both shadow-valid and mismatched.
   _observed.mismatchPairs = static_cast<uint8_t>(_observed.mismatchPairs & ~pair);
@@ -340,6 +364,13 @@ Status PCA9555::_readRegs(uint8_t startReg, uint8_t* buf, size_t len,
   const Status status = tracked
       ? _i2cWriteReadTracked(&command, 1U, buf, len, localEffect)
       : _i2cWriteReadRaw(&command, 1U, buf, len, localEffect);
+  // Only a callback attempt can invalidate retained full-pair evidence. Local
+  // preflight failures returned above (for example BUSY) leave the timestamped
+  // historical observation intact.
+  if (!status.ok() && len == 2U) {
+    _observed.validPairs = static_cast<uint8_t>(
+        _observed.validPairs & ~pairForRegister(startReg));
+  }
   if (commandEffect != nullptr) *commandEffect = localEffect;
   return status;
 }
@@ -371,25 +402,21 @@ Status PCA9555::_writeRegs(uint8_t startReg, const uint8_t* buf, size_t len,
   return status;
 }
 
-Status PCA9555::_readPair(uint8_t startReg, uint16_t& value, uint8_t pair,
-                          uint32_t nowMs) {
+Status PCA9555::_readPair(uint8_t startReg, uint16_t& value, uint32_t nowMs) {
   uint8_t data[2] = {0U, 0U};
   const Status status = _readRegs(startReg, data, 2U, true);
-  if (!status.ok()) {
-    _observed.validPairs = static_cast<uint8_t>(_observed.validPairs & ~pair);
-    return status;
-  }
+  if (!status.ok()) return status;
   value = static_cast<uint16_t>(data[0] |
                                 (static_cast<uint16_t>(data[1]) << 8U));
-  _recordPairObservation(pair, value, nowMs);
+  _recordPairObservation(pairForRegister(startReg), value, nowMs);
   return Status::Ok();
 }
 
-Status PCA9555::_writePair(uint8_t startReg, uint16_t value, uint8_t pair,
-                           bool tracked) {
+Status PCA9555::_writePair(uint8_t startReg, uint16_t value, bool tracked) {
   const uint8_t data[2] = {static_cast<uint8_t>(value & 0xFFU),
                            static_cast<uint8_t>((value >> 8U) & 0xFFU)};
-  return _writeRegs(startReg, data, 2U, pair, value, true, tracked);
+  return _writeRegs(startReg, data, 2U, pairForRegister(startReg), value, true,
+                    tracked);
 }
 
 Status PCA9555::_writePort(uint8_t reg, uint8_t value, uint8_t pair,
@@ -402,16 +429,29 @@ Status PCA9555::_writePort(uint8_t reg, uint8_t value, uint8_t pair,
   return status;
 }
 
+Status PCA9555::_readWritablePortRegister(uint8_t baseReg, Port port,
+                                           uint8_t& value) {
+  const Status bound = _boundStatus();
+  if (!bound.ok()) return bound;
+  if (!validPort(port)) return Status::Error(Err::INVALID_PARAM, "invalid port");
+  const uint8_t reg = portRegister(baseReg, port);
+  uint8_t observed = 0U;
+  const Status status = _readRegs(reg, &observed, 1U, true);
+  if (status.ok()) {
+    value = observed;
+    _syncObservedRegister(reg, observed, _nowMs());
+  }
+  return status;
+}
+
 Status PCA9555::_parkPointer() {
   const uint8_t command = cmd::ERRATA_SAFE_CMD;
   WriteEffect effect = WriteEffect::NOT_APPLICABLE;
-  const Status status = _i2cWriteRaw(&command, 1U, effect);
   // The park is protocol cleanup, not caller-requested work. A failed park is
   // real transport evidence, but a successful one must not be counted as a
   // success: doing so would clear the DEGRADED state and the consecutive-failure
   // count set by the input read this park is cleaning up after.
-  if (!status.ok()) _updateHealth(status);
-  return status;
+  return _i2cWriteCleanupTracked(&command, 1U, effect);
 }
 
 Status PCA9555::_readInputPair(PortData& data, bool& readCompleted) {
@@ -423,9 +463,6 @@ Status PCA9555::_readInputPair(PortData& data, bool& readCompleted) {
         values[0] | (static_cast<uint16_t>(values[1]) << 8U));
     data = PortData::fromCombined(value);
     _recordPairObservation(PAIR_INPUTS, value, _nowMs());
-  } else {
-    _observed.validPairs = static_cast<uint8_t>(
-        _observed.validPairs & ~PAIR_INPUTS);
   }
   return status;
 }
@@ -449,11 +486,9 @@ Status PCA9555::probe() {
   if (_operation.active) {
     return busy(BusyDetail::OPERATION_ACTIVE, "cooperative operation owns device");
   }
-  uint8_t value = 0U;
   const uint8_t reg = cmd::REG_CONFIG_PORT_0;
-  WriteEffect commandEffect = WriteEffect::NOT_ATTEMPTED;
-  Status status =
-      _i2cWriteReadRaw(&reg, 1U, &value, 1U, commandEffect);
+  WriteEffect effect = WriteEffect::NOT_ATTEMPTED;
+  Status status = _i2cWriteRaw(&reg, 1U, effect);
   if (status.code == Err::I2C_NACK_ADDR) {
     return Status::Error(Err::DEVICE_NOT_FOUND, "address did not respond",
                          status.detail);
@@ -463,8 +498,7 @@ Status PCA9555::probe() {
 
 Status PCA9555::checkPorDefaults(PortData& observedDirections) {
   uint16_t value = 0U;
-  const Status status = _readPair(cmd::REG_CONFIG_PORT_0, value,
-                                  PAIR_DIRECTIONS, _nowMs());
+  const Status status = _readPair(cmd::REG_CONFIG_PORT_0, value, _nowMs());
   if (!status.ok()) return status;
   observedDirections = PortData::fromCombined(value);
   if (value != 0xFFFFU) {
@@ -485,29 +519,26 @@ Status PCA9555::readObservedState(ObservedState& observed) {
   static constexpr uint8_t REGS[3] = {
       cmd::REG_OUTPUT_PORT_0, cmd::REG_POLARITY_INV_0,
       cmd::REG_CONFIG_PORT_0};
-  static constexpr uint8_t PAIRS[3] = {
-      PAIR_OUTPUTS, PAIR_POLARITY, PAIR_DIRECTIONS};
   for (uint8_t i = 0U; i < 3U; ++i) {
     uint16_t value = 0U;
-    const Status status = _readPair(REGS[i], value, PAIRS[i], _nowMs());
+    const uint8_t pair = pairForRegister(REGS[i]);
+    const Status status = _readPair(REGS[i], value, _nowMs());
     if (!status.ok()) {
-      current.uncertainPairs = static_cast<uint8_t>(
-          _uncertainPairs & current.validPairs);
+      current.uncertainPairs = _uncertainPairs;
       observed = current;
       return status;
     }
-    if (PAIRS[i] == PAIR_OUTPUTS) current.registers.outputs = value;
-    if (PAIRS[i] == PAIR_POLARITY) current.registers.polarity = value;
-    if (PAIRS[i] == PAIR_DIRECTIONS) current.registers.directions = value;
-    current.validPairs = static_cast<uint8_t>(current.validPairs | PAIRS[i]);
+    if (pair == PAIR_OUTPUTS) current.registers.outputs = value;
+    if (pair == PAIR_POLARITY) current.registers.polarity = value;
+    if (pair == PAIR_DIRECTIONS) current.registers.directions = value;
+    current.validPairs = static_cast<uint8_t>(current.validPairs | pair);
     current.observedAtMs = _observed.observedAtMs;
-    if ((_observed.mismatchPairs & PAIRS[i]) != 0U) {
+    if ((_observed.mismatchPairs & pair) != 0U) {
       current.mismatchPairs = static_cast<uint8_t>(
-          current.mismatchPairs | PAIRS[i]);
+          current.mismatchPairs | pair);
     }
   }
-  current.uncertainPairs = static_cast<uint8_t>(
-      _uncertainPairs & current.validPairs);
+  current.uncertainPairs = _uncertainPairs;
   observed = current;
   return Status::Ok();
 }
@@ -640,8 +671,7 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
 
   switch (phase) {
     case OperationPhase::APPLY_OUTPUTS:
-      status = _writePair(cmd::REG_OUTPUT_PORT_0, _operation.expected.outputs,
-                          PAIR_OUTPUTS);
+      status = _writePair(cmd::REG_OUTPUT_PORT_0, _operation.expected.outputs);
       _operation.result.lastWriteEffect = _lastWriteEffect;
       if (status.ok()) {
         _operation.result.completedPairs = static_cast<uint8_t>(
@@ -652,7 +682,7 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
 
     case OperationPhase::APPLY_POLARITY:
       status = _writePair(cmd::REG_POLARITY_INV_0,
-                          _operation.expected.polarity, PAIR_POLARITY);
+                          _operation.expected.polarity);
       _operation.result.lastWriteEffect = _lastWriteEffect;
       if (status.ok()) {
         _operation.result.completedPairs = static_cast<uint8_t>(
@@ -663,7 +693,7 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
 
     case OperationPhase::APPLY_DIRECTIONS:
       status = _writePair(cmd::REG_CONFIG_PORT_0,
-                          _operation.expected.directions, PAIR_DIRECTIONS);
+                          _operation.expected.directions);
       _operation.result.lastWriteEffect = _lastWriteEffect;
       if (status.ok()) {
         _operation.result.completedPairs = static_cast<uint8_t>(
@@ -673,7 +703,7 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
       break;
 
     case OperationPhase::VERIFY_OUTPUTS:
-      status = _readPair(cmd::REG_OUTPUT_PORT_0, value, PAIR_OUTPUTS, nowMs);
+      status = _readPair(cmd::REG_OUTPUT_PORT_0, value, nowMs);
       if (status.ok()) {
         _operation.result.observed.registers.outputs = value;
         _operation.result.observed.validPairs = static_cast<uint8_t>(
@@ -687,7 +717,7 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
       break;
 
     case OperationPhase::VERIFY_POLARITY:
-      status = _readPair(cmd::REG_POLARITY_INV_0, value, PAIR_POLARITY, nowMs);
+      status = _readPair(cmd::REG_POLARITY_INV_0, value, nowMs);
       if (status.ok()) {
         _operation.result.observed.registers.polarity = value;
         _operation.result.observed.validPairs = static_cast<uint8_t>(
@@ -701,7 +731,7 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
       break;
 
     case OperationPhase::VERIFY_DIRECTIONS:
-      status = _readPair(cmd::REG_CONFIG_PORT_0, value, PAIR_DIRECTIONS, nowMs);
+      status = _readPair(cmd::REG_CONFIG_PORT_0, value, nowMs);
       if (status.ok()) {
         _operation.result.observed.registers.directions = value;
         _operation.result.observed.validPairs = static_cast<uint8_t>(
@@ -740,11 +770,6 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
             _operation.result.completedPairs | PAIR_INPUTS);
         _operation.result.cleanupRequired = true;
         _operation.phase = OperationPhase::POINTER_PARK;
-      } else {
-        // Match the synchronous path: a failed sample must not leave the
-        // previous input observation marked valid with a stale timestamp.
-        _observed.validPairs = static_cast<uint8_t>(
-            _observed.validPairs & ~PAIR_INPUTS);
       }
       if (!status.ok() && commandEffect != WriteEffect::NOT_ATTEMPTED) {
         // The input command may be the chip's active register pointer even
@@ -849,45 +874,30 @@ Status PCA9555::pollOperation(uint32_t requestId, uint32_t nowMs,
   uint8_t callLimit = transactionBudget < operationRemaining
                           ? transactionBudget
                           : operationRemaining;
-  uint32_t timeoutAllowance = _operation.deadlineMs - nowMs;
-  if (static_cast<int32_t>(timeoutAllowance) > 0 &&
-      timeoutAllowance < callLimit) {
-    callLimit = static_cast<uint8_t>(timeoutAllowance);
+  uint32_t timeoutAllowanceMs = _operation.deadlineMs - nowMs;
+  if (static_cast<int32_t>(timeoutAllowanceMs) > 0 &&
+      timeoutAllowanceMs < callLimit) {
+    // Every callback receives at least 1 ms, so no more callbacks can fit than
+    // the number of whole milliseconds remaining in the operation deadline.
+    callLimit = static_cast<uint8_t>(timeoutAllowanceMs);
   }
   if (callLimit == 0U) callLimit = 1U;
 
   while (_operation.active && transactionsUsed < callLimit) {
-    const bool deadline = _deadlineReached(nowMs);
-    const bool cleanupOwed = _operation.phase == OperationPhase::POINTER_PARK &&
-                             _operation.result.cleanupRequired;
-    if (deadline && !cleanupOwed) {
-      _finishOperation(OperationOutcome::TIMED_OUT,
-                       Status::Error(Err::TIMEOUT, "operation deadline expired"),
-                       _operation.phase);
-      break;
-    }
-    if (deadline && cleanupOwed) {
-      if (!_operation.terminalRequested) {
-        _operation.terminalRequested = true;
-        _operation.requestedOutcome = OperationOutcome::TIMED_OUT;
-        _operation.requestedTerminalPhase = _operation.phase;
-        _operation.requestedStatus =
-            Status::Error(Err::TIMEOUT, "operation deadline expired");
-      }
-      _operation.result.cleanupAfterDeadline = true;
+    if (deadlineAtEntry) {
       _callbackTimeoutMs = _config.i2cTimeoutMs;
     } else {
       const uint8_t callsLeft = static_cast<uint8_t>(callLimit - transactionsUsed);
-      uint32_t fairShare = timeoutAllowance / callsLeft;
+      uint32_t fairShare = timeoutAllowanceMs / callsLeft;
       if (fairShare == 0U) fairShare = 1U;
       _callbackTimeoutMs = fairShare < _config.i2cTimeoutMs
                                ? fairShare
                                : _config.i2cTimeoutMs;
       if (_callbackTimeoutMs == 0U) _callbackTimeoutMs = 1U;
-      if (timeoutAllowance >= _callbackTimeoutMs) {
-        timeoutAllowance -= _callbackTimeoutMs;
+      if (timeoutAllowanceMs >= _callbackTimeoutMs) {
+        timeoutAllowanceMs -= _callbackTimeoutMs;
       } else {
-        timeoutAllowance = 0U;
+        timeoutAllowanceMs = 0U;
       }
     }
     _operationTimeoutActive = true;
@@ -942,8 +952,7 @@ Status PCA9555::readInput(Port port, uint8_t& value) {
   const Status bound = _boundStatus();
   if (!bound.ok()) return bound;
   if (!validPort(port)) return Status::Error(Err::INVALID_PARAM, "invalid port");
-  const uint8_t reg = port == Port::PORT_0 ? cmd::REG_INPUT_PORT_0
-                                           : cmd::REG_INPUT_PORT_1;
+  const uint8_t reg = portRegister(cmd::REG_INPUT_PORT_0, port);
   uint8_t observed = 0U;
   bool readCompleted = false;
   const Status status =
@@ -986,46 +995,26 @@ Status PCA9555::readPin(Pin pin, bool& high) {
 }
 
 Status PCA9555::writeOutputs(const PortData& data) {
-  return _writePair(cmd::REG_OUTPUT_PORT_0, data.combined(), PAIR_OUTPUTS);
+  return _writePair(cmd::REG_OUTPUT_PORT_0, data.combined());
 }
 
 Status PCA9555::writeOutput(Port port, uint8_t value) {
   const Status bound = _boundStatus();
   if (!bound.ok()) return bound;
   if (!validPort(port)) return Status::Error(Err::INVALID_PARAM, "invalid port");
-  uint16_t intended = _shadow.outputs;
-  if (port == Port::PORT_0) {
-    intended = static_cast<uint16_t>((intended & 0xFF00U) | value);
-  } else {
-    intended = static_cast<uint16_t>((intended & 0x00FFU) |
-                                     (static_cast<uint16_t>(value) << 8U));
-  }
-  const uint8_t reg = port == Port::PORT_0 ? cmd::REG_OUTPUT_PORT_0
-                                           : cmd::REG_OUTPUT_PORT_1;
-  return _writePort(reg, value, PAIR_OUTPUTS, intended);
+  return _writePort(portRegister(cmd::REG_OUTPUT_PORT_0, port), value,
+                    PAIR_OUTPUTS, withPort(_shadow.outputs, port, value));
 }
 
 Status PCA9555::readOutputs(PortData& data) {
   uint16_t value = 0U;
-  const Status status = _readPair(cmd::REG_OUTPUT_PORT_0, value, PAIR_OUTPUTS,
-                                  _nowMs());
+  const Status status = _readPair(cmd::REG_OUTPUT_PORT_0, value, _nowMs());
   if (status.ok()) data = PortData::fromCombined(value);
   return status;
 }
 
 Status PCA9555::readOutput(Port port, uint8_t& value) {
-  const Status bound = _boundStatus();
-  if (!bound.ok()) return bound;
-  if (!validPort(port)) return Status::Error(Err::INVALID_PARAM, "invalid port");
-  const uint8_t reg = port == Port::PORT_0 ? cmd::REG_OUTPUT_PORT_0
-                                           : cmd::REG_OUTPUT_PORT_1;
-  uint8_t observed = 0U;
-  const Status status = _readRegs(reg, &observed, 1U, true);
-  if (status.ok()) {
-    value = observed;
-    _syncObservedRegister(reg, observed, _nowMs());
-  }
-  return status;
+  return _readWritablePortRegister(cmd::REG_OUTPUT_PORT_0, port, value);
 }
 
 Status PCA9555::writePin(Pin pin, Level level) {
@@ -1038,8 +1027,7 @@ Status PCA9555::writePin(Pin pin, Level level) {
   const uint16_t desired = level == Level::HIGH_LEVEL
                                ? static_cast<uint16_t>(_shadow.outputs | mask)
                                : static_cast<uint16_t>(_shadow.outputs & ~mask);
-  if (desired == _shadow.outputs) return Status::Ok();
-  return _writePair(cmd::REG_OUTPUT_PORT_0, desired, PAIR_OUTPUTS);
+  return _writePair(cmd::REG_OUTPUT_PORT_0, desired);
 }
 
 Status PCA9555::writePin(Pin pin, bool high) {
@@ -1087,23 +1075,23 @@ Status PCA9555::preloadOutputs(PinMask mask, PinMask values) {
     if (!clean.ok()) return clean;
     desired = static_cast<uint16_t>((_shadow.outputs & ~mask) | (values & mask));
   }
-  return _writePair(cmd::REG_OUTPUT_PORT_0, desired, PAIR_OUTPUTS);
+  return _writePair(cmd::REG_OUTPUT_PORT_0, desired);
 }
 
 Status PCA9555::setOutputBits(PinMask mask) {
   const Status clean = _shadowStatus(PAIR_OUTPUTS);
   if (!clean.ok()) return clean;
-  if (mask == 0U || (_shadow.outputs | mask) == _shadow.outputs) return Status::Ok();
+  if (mask == 0U) return Status::Ok();
   return _writePair(cmd::REG_OUTPUT_PORT_0,
-                    static_cast<uint16_t>(_shadow.outputs | mask), PAIR_OUTPUTS);
+                    static_cast<uint16_t>(_shadow.outputs | mask));
 }
 
 Status PCA9555::clearOutputBits(PinMask mask) {
   const Status clean = _shadowStatus(PAIR_OUTPUTS);
   if (!clean.ok()) return clean;
+  if (mask == 0U) return Status::Ok();
   const uint16_t desired = static_cast<uint16_t>(_shadow.outputs & ~mask);
-  if (desired == _shadow.outputs) return Status::Ok();
-  return _writePair(cmd::REG_OUTPUT_PORT_0, desired, PAIR_OUTPUTS);
+  return _writePair(cmd::REG_OUTPUT_PORT_0, desired);
 }
 
 Status PCA9555::toggleOutputBits(PinMask mask) {
@@ -1111,7 +1099,7 @@ Status PCA9555::toggleOutputBits(PinMask mask) {
   if (!clean.ok()) return clean;
   if (mask == 0U) return Status::Ok();
   return _writePair(cmd::REG_OUTPUT_PORT_0,
-                    static_cast<uint16_t>(_shadow.outputs ^ mask), PAIR_OUTPUTS);
+                    static_cast<uint16_t>(_shadow.outputs ^ mask));
 }
 
 Status PCA9555::togglePin(Pin pin) {
@@ -1126,11 +1114,10 @@ Status PCA9555::setConfiguration(const PortData& data) {
   if (directions != 0xFFFFU) {
     const Status outputs = _shadowStatus(PAIR_OUTPUTS);
     if (!outputs.ok()) return outputs;
-    const Status preload = _writePair(cmd::REG_OUTPUT_PORT_0, _shadow.outputs,
-                                      PAIR_OUTPUTS);
+    const Status preload = _writePair(cmd::REG_OUTPUT_PORT_0, _shadow.outputs);
     if (!preload.ok()) return preload;
   }
-  return _writePair(cmd::REG_CONFIG_PORT_0, directions, PAIR_DIRECTIONS);
+  return _writePair(cmd::REG_CONFIG_PORT_0, directions);
 }
 
 Status PCA9555::setPortConfiguration(Port port, uint8_t value) {
@@ -1140,48 +1127,26 @@ Status PCA9555::setPortConfiguration(Port port, uint8_t value) {
   if (value != 0xFFU) {
     const Status outputs = _shadowStatus(PAIR_OUTPUTS);
     if (!outputs.ok()) return outputs;
-    const uint8_t output = port == Port::PORT_0
-                               ? static_cast<uint8_t>(_shadow.outputs & 0xFFU)
-                               : static_cast<uint8_t>(_shadow.outputs >> 8U);
-    const uint8_t outputReg = port == Port::PORT_0 ? cmd::REG_OUTPUT_PORT_0
-                                                   : cmd::REG_OUTPUT_PORT_1;
+    const uint8_t output = portValue(_shadow.outputs, port);
+    const uint8_t outputReg = portRegister(cmd::REG_OUTPUT_PORT_0, port);
     const Status preload = _writePort(outputReg, output, PAIR_OUTPUTS,
                                       _shadow.outputs);
     if (!preload.ok()) return preload;
   }
-  uint16_t intended = _shadow.directions;
-  if (port == Port::PORT_0) {
-    intended = static_cast<uint16_t>((intended & 0xFF00U) | value);
-  } else {
-    intended = static_cast<uint16_t>((intended & 0x00FFU) |
-                                     (static_cast<uint16_t>(value) << 8U));
-  }
-  const uint8_t reg = port == Port::PORT_0 ? cmd::REG_CONFIG_PORT_0
-                                           : cmd::REG_CONFIG_PORT_1;
-  return _writePort(reg, value, PAIR_DIRECTIONS, intended);
+  return _writePort(portRegister(cmd::REG_CONFIG_PORT_0, port), value,
+                    PAIR_DIRECTIONS,
+                    withPort(_shadow.directions, port, value));
 }
 
 Status PCA9555::getConfiguration(PortData& data) {
   uint16_t value = 0U;
-  const Status status = _readPair(cmd::REG_CONFIG_PORT_0, value,
-                                  PAIR_DIRECTIONS, _nowMs());
+  const Status status = _readPair(cmd::REG_CONFIG_PORT_0, value, _nowMs());
   if (status.ok()) data = PortData::fromCombined(value);
   return status;
 }
 
 Status PCA9555::getPortConfiguration(Port port, uint8_t& value) {
-  const Status bound = _boundStatus();
-  if (!bound.ok()) return bound;
-  if (!validPort(port)) return Status::Error(Err::INVALID_PARAM, "invalid port");
-  const uint8_t reg = port == Port::PORT_0 ? cmd::REG_CONFIG_PORT_0
-                                           : cmd::REG_CONFIG_PORT_1;
-  uint8_t observed = 0U;
-  const Status status = _readRegs(reg, &observed, 1U, true);
-  if (status.ok()) {
-    value = observed;
-    _syncObservedRegister(reg, observed, _nowMs());
-  }
-  return status;
+  return _readWritablePortRegister(cmd::REG_CONFIG_PORT_0, port, value);
 }
 
 Status PCA9555::configureOutputs(PinMask outputMask,
@@ -1195,18 +1160,17 @@ Status PCA9555::configureOutputs(PinMask outputMask,
       (_shadow.outputs & ~outputMask) | (outputValues & outputMask));
   const uint16_t directions = static_cast<uint16_t>(
       _shadow.directions & ~outputMask);
-  const Status preload = _writePair(cmd::REG_OUTPUT_PORT_0, outputs,
-                                    PAIR_OUTPUTS);
+  const Status preload = _writePair(cmd::REG_OUTPUT_PORT_0, outputs);
   if (!preload.ok()) return preload;
-  return _writePair(cmd::REG_CONFIG_PORT_0, directions, PAIR_DIRECTIONS);
+  return _writePair(cmd::REG_CONFIG_PORT_0, directions);
 }
 
 Status PCA9555::configureInputBits(PinMask mask) {
   const Status clean = _shadowStatus(PAIR_DIRECTIONS);
   if (!clean.ok()) return clean;
+  if (mask == 0U) return Status::Ok();
   const uint16_t directions = static_cast<uint16_t>(_shadow.directions | mask);
-  if (directions == _shadow.directions) return Status::Ok();
-  return _writePair(cmd::REG_CONFIG_PORT_0, directions, PAIR_DIRECTIONS);
+  return _writePair(cmd::REG_CONFIG_PORT_0, directions);
 }
 
 Status PCA9555::configureOutputBits(PinMask mask) {
@@ -1248,46 +1212,26 @@ Status PCA9555::getPinDirection(Pin pin, bool& input) {
 }
 
 Status PCA9555::setPolarity(const PortData& data) {
-  return _writePair(cmd::REG_POLARITY_INV_0, data.combined(), PAIR_POLARITY);
+  return _writePair(cmd::REG_POLARITY_INV_0, data.combined());
 }
 
 Status PCA9555::setPortPolarity(Port port, uint8_t value) {
   const Status bound = _boundStatus();
   if (!bound.ok()) return bound;
   if (!validPort(port)) return Status::Error(Err::INVALID_PARAM, "invalid port");
-  uint16_t intended = _shadow.polarity;
-  if (port == Port::PORT_0) {
-    intended = static_cast<uint16_t>((intended & 0xFF00U) | value);
-  } else {
-    intended = static_cast<uint16_t>((intended & 0x00FFU) |
-                                     (static_cast<uint16_t>(value) << 8U));
-  }
-  const uint8_t reg = port == Port::PORT_0 ? cmd::REG_POLARITY_INV_0
-                                           : cmd::REG_POLARITY_INV_1;
-  return _writePort(reg, value, PAIR_POLARITY, intended);
+  return _writePort(portRegister(cmd::REG_POLARITY_INV_0, port), value,
+                    PAIR_POLARITY, withPort(_shadow.polarity, port, value));
 }
 
 Status PCA9555::getPolarity(PortData& data) {
   uint16_t value = 0U;
-  const Status status = _readPair(cmd::REG_POLARITY_INV_0, value,
-                                  PAIR_POLARITY, _nowMs());
+  const Status status = _readPair(cmd::REG_POLARITY_INV_0, value, _nowMs());
   if (status.ok()) data = PortData::fromCombined(value);
   return status;
 }
 
 Status PCA9555::getPortPolarity(Port port, uint8_t& value) {
-  const Status bound = _boundStatus();
-  if (!bound.ok()) return bound;
-  if (!validPort(port)) return Status::Error(Err::INVALID_PARAM, "invalid port");
-  const uint8_t reg = port == Port::PORT_0 ? cmd::REG_POLARITY_INV_0
-                                           : cmd::REG_POLARITY_INV_1;
-  uint8_t observed = 0U;
-  const Status status = _readRegs(reg, &observed, 1U, true);
-  if (status.ok()) {
-    value = observed;
-    _syncObservedRegister(reg, observed, _nowMs());
-  }
-  return status;
+  return _readWritablePortRegister(cmd::REG_POLARITY_INV_0, port, value);
 }
 
 Status PCA9555::setPinPolarity(Pin pin, bool inverted) {
@@ -1298,8 +1242,7 @@ Status PCA9555::setPinPolarity(Pin pin, bool inverted) {
   const uint16_t desired = inverted
       ? static_cast<uint16_t>(_shadow.polarity | mask)
       : static_cast<uint16_t>(_shadow.polarity & ~mask);
-  if (desired == _shadow.polarity) return Status::Ok();
-  return _writePair(cmd::REG_POLARITY_INV_0, desired, PAIR_POLARITY);
+  return _writePair(cmd::REG_POLARITY_INV_0, desired);
 }
 
 Status PCA9555::getPinPolarity(Pin pin, bool& inverted) {
@@ -1315,17 +1258,17 @@ Status PCA9555::getPinPolarity(Pin pin, bool& inverted) {
 Status PCA9555::setInvertBits(PinMask mask) {
   const Status clean = _shadowStatus(PAIR_POLARITY);
   if (!clean.ok()) return clean;
+  if (mask == 0U) return Status::Ok();
   const uint16_t desired = static_cast<uint16_t>(_shadow.polarity | mask);
-  if (desired == _shadow.polarity) return Status::Ok();
-  return _writePair(cmd::REG_POLARITY_INV_0, desired, PAIR_POLARITY);
+  return _writePair(cmd::REG_POLARITY_INV_0, desired);
 }
 
 Status PCA9555::clearInvertBits(PinMask mask) {
   const Status clean = _shadowStatus(PAIR_POLARITY);
   if (!clean.ok()) return clean;
+  if (mask == 0U) return Status::Ok();
   const uint16_t desired = static_cast<uint16_t>(_shadow.polarity & ~mask);
-  if (desired == _shadow.polarity) return Status::Ok();
-  return _writePair(cmd::REG_POLARITY_INV_0, desired, PAIR_POLARITY);
+  return _writePair(cmd::REG_POLARITY_INV_0, desired);
 }
 
 Status PCA9555::readRegister(uint8_t reg, uint8_t& value) {
@@ -1417,6 +1360,7 @@ SettingsSnapshot PCA9555::getSettings() const {
   snapshot.shadowValidPairs = _shadowValidPairs;
   snapshot.uncertainPairs = _uncertainPairs;
   snapshot.observed = _observed;
+  snapshot.observed.uncertainPairs = _uncertainPairs;
   return snapshot;
 }
 

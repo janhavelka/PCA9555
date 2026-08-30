@@ -209,7 +209,8 @@ Public API (readInputs, writeOutputs, etc.)
     ↓
 Register helpers (readRegs, writeRegs)
     ↓
-TRACKED wrappers (_i2cWriteReadTracked, _i2cWriteTracked)
+TRACKED wrappers (_i2cWriteReadTracked, _i2cWriteTracked,
+                  _i2cWriteCleanupTracked)
     ↓  <- _updateHealth() called here ONLY
 RAW wrappers (_i2cWriteReadRaw, _i2cWriteRaw)
     ↓
@@ -220,6 +221,8 @@ Transport callbacks (Config::i2cWrite, i2cWriteRead)
 - Public API methods NEVER call `_updateHealth()` directly
 - `readRegs()`/`writeRegs()` use TRACKED wrappers -> health updated automatically
 - `probe()` uses RAW wrappers -> no health tracking (diagnostic only)
+- `_parkPointer()` uses the cleanup-tracked write wrapper -> failures update
+  health, successes do not
 - There is no library bus-recovery API. Explicit register-image verification
   and reconciliation own only PCA9555 protocol phases.
 

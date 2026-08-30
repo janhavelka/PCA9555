@@ -36,17 +36,25 @@ FORBIDDEN_TOKENS = [
 REQUIRED_NATIVE_TOKENS = [
     'extern "C" void app_main(void)',
     "driver/i2c_master.h",
+    "driver/uart_vfs.h",
     "esp_timer_get_time",
     "vTaskDelay",
     "fgets",
     "i2c_new_master_bus",
+    "initConsole",
+    "uart_vfs_dev_use_driver",
+    "usb_serial_jtag_vfs_use_driver",
+    "CONFIG_ESP_CONSOLE_USB_CDC",
 ]
 
 REQUIRED_COMPONENTS = [
     "PCA9555",
     "esp_driver_i2c",
     "esp_driver_gpio",
+    "esp_driver_uart",
+    "esp_driver_usb_serial_jtag",
     "esp_timer",
+    "esp_vfs_console",
     "freertos",
     "vfs",
 ]

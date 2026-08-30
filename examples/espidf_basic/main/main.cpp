@@ -5,18 +5,27 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <driver/gpio.h>
 #include <driver/i2c_master.h>
+#include <driver/uart.h>
+#include <driver/uart_vfs.h>
+#include <driver/usb_serial_jtag.h>
+#include <driver/usb_serial_jtag_vfs.h>
 #include <esp_err.h>
 #include <esp_timer.h>
+#include <esp_vfs_cdcacm.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <sdkconfig.h>
+#include <soc/soc_caps.h>
 
 #include "PCA9555/PCA9555.h"
 
@@ -65,6 +74,64 @@ static constexpr const char* CONFIRM_REASON_STRESS =
 static constexpr const char* CONFIRM_REASON_RECOVER =
     "recover applies the example image: latches high, normal polarity, all pins input";
 
+// Configure the primary console selected by sdkconfig for blocking reads. The
+// startup VFS implementation is nonblocking, which is unsuitable for the
+// fgets()-driven command loop below. This follows ESP-IDF v5.4's advanced
+// console example without taking ownership of the command parser itself.
+void initConsole() {
+  fflush(stdout);
+  (void)fsync(fileno(stdout));
+
+#if defined(CONFIG_ESP_CONSOLE_UART_DEFAULT) || \
+    defined(CONFIG_ESP_CONSOLE_UART_CUSTOM)
+  uart_vfs_dev_port_set_rx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM,
+                                        ESP_LINE_ENDINGS_CR);
+  uart_vfs_dev_port_set_tx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM,
+                                        ESP_LINE_ENDINGS_CRLF);
+  uart_config_t uartConfig = {};
+  uartConfig.baud_rate = CONFIG_ESP_CONSOLE_UART_BAUDRATE;
+  uartConfig.data_bits = UART_DATA_8_BITS;
+  uartConfig.parity = UART_PARITY_DISABLE;
+  uartConfig.stop_bits = UART_STOP_BITS_1;
+  uartConfig.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+#if SOC_UART_SUPPORT_REF_TICK
+  uartConfig.source_clk = UART_SCLK_REF_TICK;
+#elif SOC_UART_SUPPORT_XTAL_CLK
+  uartConfig.source_clk = UART_SCLK_XTAL;
+#endif
+  ESP_ERROR_CHECK(uart_driver_install(
+      static_cast<uart_port_t>(CONFIG_ESP_CONSOLE_UART_NUM),
+      256, 0, 0, nullptr, 0));
+  ESP_ERROR_CHECK(uart_param_config(
+      static_cast<uart_port_t>(CONFIG_ESP_CONSOLE_UART_NUM), &uartConfig));
+  uart_vfs_dev_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
+#elif defined(CONFIG_ESP_CONSOLE_USB_CDC)
+  esp_vfs_dev_cdcacm_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
+  esp_vfs_dev_cdcacm_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
+  if (fcntl(fileno(stdout), F_SETFL, 0) == -1 ||
+      fcntl(fileno(stdin), F_SETFL, 0) == -1) {
+    abort();
+  }
+#elif defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
+  usb_serial_jtag_vfs_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
+  usb_serial_jtag_vfs_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
+  if (fcntl(fileno(stdout), F_SETFL, 0) == -1 ||
+      fcntl(fileno(stdin), F_SETFL, 0) == -1) {
+    abort();
+  }
+  usb_serial_jtag_driver_config_t usbConfig = {};
+  usbConfig.tx_buffer_size = 256U;
+  usbConfig.rx_buffer_size = 256U;
+  ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usbConfig));
+  usb_serial_jtag_vfs_use_driver();
+#else
+#error Unsupported primary ESP-IDF console type
+#endif
+
+  setvbuf(stdin, nullptr, _IONBF, 0);
+  setvbuf(stdout, nullptr, _IONBF, 0);
+}
+
 uint32_t nowMs(void*) {
   return static_cast<uint32_t>(esp_timer_get_time() / 1000LL);
 }
@@ -87,20 +154,11 @@ PCA9555::TransportResult mapI2c(
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::IO_ERROR, err, writeEffect);
   }
-  // driver/i2c_master.h has no NACK-specific return code. A synchronous
-  // transfer that ends in any non-DONE state - address NACK, data NACK, or a
-  // post-START bus fault - surfaces as ESP_ERR_INVALID_STATE. ESP_ERR_NOT_FOUND
-  // comes from i2c_master_probe() and ESP_FAIL from the legacy driver.
-  // Classifying these as NACK_ADDRESS is what lets PCA9555::probe() answer
-  // DEVICE_NOT_FOUND for a missing expander; treat it as best-effort "no ACK
-  // observed" evidence, not proof that the bus itself is healthy. The failing
-  // phase is unknown, so writeEffect stays whatever the caller passed and the
-  // protocol shadow remains conservatively fenced.
-  if (err == ESP_ERR_INVALID_STATE || err == ESP_FAIL ||
-      err == ESP_ERR_NOT_FOUND) {
-    return PCA9555::TransportResult::Error(
-        PCA9555::TransportCode::NACK_ADDRESS, err, writeEffect);
-  }
+  // The current master driver reports address NACK, data NACK, and some bus
+  // faults through phase-ambiguous errors such as ESP_ERR_INVALID_STATE. Do not
+  // turn that ambiguous evidence into NACK_ADDRESS: caller absence policy must
+  // not mistake a bus fault for proof that this target is missing. The `scan`
+  // command uses i2c_master_probe() when explicit native ACK evidence is needed.
   return PCA9555::TransportResult::Error(
       PCA9555::TransportCode::BUS_ERROR, err, writeEffect);
 }
@@ -569,7 +627,7 @@ const char* portName(PCA9555::Port port) {
 }
 
 uint8_t physicalPortForPin(PCA9555::Pin pin) {
-  return PCA9555::pinIndex(pin) < PCA9555::cmd::PINS_PER_PORT ? 0U : 1U;
+  return static_cast<uint8_t>(PCA9555::portOf(pin));
 }
 
 // PCA9555 auto-increment toggles inside a register pair, so a two-byte access
@@ -603,8 +661,7 @@ PCA9555::Status applyExampleRecoveryImage() {
 }
 
 uint8_t physicalBitForPin(PCA9555::Pin pin) {
-  return static_cast<uint8_t>(PCA9555::pinIndex(pin) %
-                              PCA9555::cmd::PINS_PER_PORT);
+  return PCA9555::bitOf(pin);
 }
 
 PCA9555::PortData portsFrom(uint16_t value) {
@@ -1816,8 +1873,7 @@ void handleCommand(char* line) {
 }  // namespace
 
 extern "C" void app_main(void) {
-  setvbuf(stdin, nullptr, _IONBF, 0);
-  setvbuf(stdout, nullptr, _IONBF, 0);
+  initConsole();
   puts("\nPCA9555 native ESP-IDF CLI");
   if (!initBus()) {
     puts("I2C init failed");

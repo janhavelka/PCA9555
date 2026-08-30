@@ -31,7 +31,8 @@ nonzero pointer-park cleanup is owed without guessing that a failure was safe.
 - the example owns a persistent `i2c_master_dev_handle_t`
 - timestamps use `esp_timer_get_time()` through `Config::nowMs`
 - delays use `vTaskDelay()`
-- console input uses fixed command buffers and `fgets()`
+- the sdkconfig-selected UART, USB Serial/JTAG, or USB CDC primary console is
+  put in blocking mode before fixed command buffers and `fgets()` are used
 - startup uses passive `bind()` followed by an explicit `probe()`
 - the `recover` CLI spelling applies a fixed example-owned register image
   through the cooperative API; it is not library or bus recovery

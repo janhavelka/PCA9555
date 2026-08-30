@@ -95,12 +95,11 @@ uint32_t stressProgressStep(uint32_t total) {
 }
 
 uint8_t physicalPortForPin(PCA9555::Pin pin) {
-  return (PCA9555::pinIndex(pin) < PCA9555::cmd::PINS_PER_PORT) ? 0U : 1U;
+  return static_cast<uint8_t>(PCA9555::portOf(pin));
 }
 
 uint8_t physicalBitForPin(PCA9555::Pin pin) {
-  return static_cast<uint8_t>(PCA9555::pinIndex(pin) %
-                              PCA9555::cmd::PINS_PER_PORT);
+  return PCA9555::bitOf(pin);
 }
 
 void printStressProgress(uint32_t completed, uint32_t total, uint32_t okCount, uint32_t failCount) {

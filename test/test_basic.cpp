@@ -481,10 +481,11 @@ void test_probe_is_explicit_one_transfer_and_health_neutral() {
   PCA9555::PCA9555 device;
   TEST_ASSERT_TRUE(device.bind(makeConfig(bus)).ok());
   TEST_ASSERT_TRUE(device.probe().ok());
-  TEST_ASSERT_EQUAL_UINT32(1U, bus.readCalls);
+  TEST_ASSERT_EQUAL_UINT32(1U, bus.writeCalls);
+  TEST_ASSERT_EQUAL_UINT32(0U, bus.readCalls);
   TEST_ASSERT_EQUAL_UINT32(0U, device.totalSuccess());
   TEST_ASSERT_EQUAL_UINT32(0U, device.totalFailures());
-  assertTransaction(bus, 0U, 'R', cmd::REG_CONFIG_PORT_0);
+  assertTransaction(bus, 0U, 'W', cmd::REG_CONFIG_PORT_0);
 
   bus.present = false;
   const uint32_t before = busTraffic(bus);
@@ -913,6 +914,21 @@ void test_apply_reports_failure_at_every_phase_without_hidden_retry() {
     TEST_ASSERT_EQUAL_HEX8(COMPLETED_BEFORE_FAILURE[failedPhase],
                            result.completedPairs);
     TEST_ASSERT_EQUAL(failedPhase >= 6U, result.cleanupAttempted);
+    if (failedPhase >= 6U) {
+      TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(OperationKind::APPLY_IMAGE),
+                              static_cast<uint8_t>(result.kind));
+      TEST_ASSERT_EQUAL_HEX8(
+          PAIR_ALL_WRITABLE,
+          static_cast<uint8_t>(result.completedPairs & PAIR_ALL_WRITABLE));
+      TEST_ASSERT_EQUAL_HEX8(PAIR_NONE, result.mismatchPairs);
+    }
+    if (failedPhase == 6U) {
+      TEST_ASSERT_TRUE(result.cleanupStatus.ok());
+      TEST_ASSERT_FALSE(result.cleanupRequired);
+    } else if (failedPhase == 7U) {
+      TEST_ASSERT_TRUE(result.cleanupStatus.is(Err::I2C_BUS));
+      TEST_ASSERT_TRUE(result.cleanupRequired);
+    }
   }
 }
 
@@ -1022,10 +1038,8 @@ void test_read_observed_state_failure_returns_only_current_partial_evidence() {
       expectedValid = static_cast<uint8_t>(expectedValid | PAIRS[read]);
     }
     TEST_ASSERT_EQUAL_HEX8(expectedValid, observed.validPairs);
-    TEST_ASSERT_EQUAL_HEX8(expectedValid, observed.uncertainPairs);
-    TEST_ASSERT_EQUAL_HEX8(
-        PAIR_NONE,
-        static_cast<uint8_t>(observed.uncertainPairs & ~observed.validPairs));
+    TEST_ASSERT_EQUAL_HEX8(PAIR_ALL_WRITABLE, observed.uncertainPairs);
+    TEST_ASSERT_EQUAL_HEX8(device.uncertainPairs(), observed.uncertainPairs);
   }
 }
 
@@ -1565,6 +1579,177 @@ void test_verify_matching_external_image_reconciles_observation_and_shadow() {
           (static_cast<uint16_t>(bus.regs[cmd::REG_OUTPUT_PORT_1]) << 8U)));
 }
 
+void test_nonzero_idempotent_cached_updates_reassert_and_report_transport_status() {
+  FakeBus bus;
+  PCA9555::PCA9555 device;
+  bindAndApply(device, bus, RegisterImage{0x0001U, 0x0001U, 0x0001U});
+  clearTransactions(bus);
+  const uint32_t successesBefore = device.totalSuccess();
+
+  TEST_ASSERT_TRUE(device.writePin(Pin::P00, Level::HIGH_LEVEL).ok());
+  TEST_ASSERT_TRUE(device.setOutputBits(0x0001U).ok());
+  TEST_ASSERT_TRUE(device.clearOutputBits(0x0002U).ok());
+  TEST_ASSERT_TRUE(device.configureInputBits(0x0001U).ok());
+  TEST_ASSERT_TRUE(device.setPinPolarity(Pin::P00, true).ok());
+  TEST_ASSERT_TRUE(device.setInvertBits(0x0001U).ok());
+  TEST_ASSERT_TRUE(device.clearInvertBits(0x0002U).ok());
+  TEST_ASSERT_EQUAL_UINT(7U, bus.transactionCount);
+  TEST_ASSERT_EQUAL_UINT32(successesBefore + 7U, device.totalSuccess());
+  assertTransaction(bus, 0U, 'W', cmd::REG_OUTPUT_PORT_0);
+  assertTransaction(bus, 1U, 'W', cmd::REG_OUTPUT_PORT_0);
+  assertTransaction(bus, 2U, 'W', cmd::REG_OUTPUT_PORT_0);
+  assertTransaction(bus, 3U, 'W', cmd::REG_CONFIG_PORT_0);
+  assertTransaction(bus, 4U, 'W', cmd::REG_POLARITY_INV_0);
+  assertTransaction(bus, 5U, 'W', cmd::REG_POLARITY_INV_0);
+  assertTransaction(bus, 6U, 'W', cmd::REG_POLARITY_INV_0);
+
+  armWriteFault(bus, cmd::REG_OUTPUT_PORT_0, TransportCode::BUS_ERROR,
+                WriteEffect::NOT_ATTEMPTED, 0U, -349);
+  TEST_ASSERT_TRUE(device.writePin(Pin::P00, Level::HIGH_LEVEL)
+                       .is(Err::I2C_BUS));
+  TEST_ASSERT_EQUAL_UINT(8U, bus.transactionCount);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
+                          static_cast<uint8_t>(device.state()));
+  TEST_ASSERT_EQUAL_UINT8(1U, device.consecutiveFailures());
+  TEST_ASSERT_TRUE(device.lastError().is(Err::I2C_BUS));
+}
+
+void test_empty_masks_are_bus_silent_but_respect_cooperative_ownership() {
+  FakeBus bus;
+  PCA9555::PCA9555 device;
+  bindAndApply(device, bus, RegisterImage{});
+  clearTransactions(bus);
+
+  TEST_ASSERT_TRUE(device.preloadOutputs(0U, 0xFFFFU).ok());
+  TEST_ASSERT_TRUE(device.configureOutputs(0U, 0xFFFFU).ok());
+  TEST_ASSERT_TRUE(device.setOutputBits(0U).ok());
+  TEST_ASSERT_TRUE(device.clearOutputBits(0U).ok());
+  TEST_ASSERT_TRUE(device.toggleOutputBits(0U).ok());
+  TEST_ASSERT_TRUE(device.configureInputBits(0U).ok());
+  TEST_ASSERT_TRUE(device.configureOutputBits(0U).ok());
+  TEST_ASSERT_TRUE(device.setInvertBits(0U).ok());
+  TEST_ASSERT_TRUE(device.clearInvertBits(0U).ok());
+  TEST_ASSERT_EQUAL_UINT(0U, bus.transactionCount);
+
+  TEST_ASSERT_TRUE(
+      device.startVerifyImage(750U, RegisterImage{}, 10U, 100U).inProgress());
+  TEST_ASSERT_TRUE(device.preloadOutputs(0U, 0U).is(Err::BUSY));
+  TEST_ASSERT_TRUE(device.configureOutputs(0U, 0U).is(Err::BUSY));
+  TEST_ASSERT_TRUE(device.setOutputBits(0U).is(Err::BUSY));
+  TEST_ASSERT_TRUE(device.configureInputBits(0U).is(Err::BUSY));
+  TEST_ASSERT_TRUE(device.setInvertBits(0U).is(Err::BUSY));
+  TEST_ASSERT_EQUAL_UINT(0U, bus.transactionCount);
+  TEST_ASSERT_TRUE(device.cancelOperation(750U).ok());
+  (void)takeResult(device, 750U);
+}
+
+void test_full_pair_rewrite_clears_mismatch_and_uncertainty_evidence() {
+  FakeBus bus;
+  PCA9555::PCA9555 device;
+  const RegisterImage expected = image();
+  bindAndApply(device, bus, expected);
+
+  bus.regs[cmd::REG_OUTPUT_PORT_0] ^= 0x01U;
+  PortData observed{};
+  TEST_ASSERT_TRUE(device.readOutputs(observed).ok());
+  TEST_ASSERT_EQUAL_HEX8(PAIR_OUTPUTS,
+      static_cast<uint8_t>(device.lastObservedState().mismatchPairs &
+                           PAIR_OUTPUTS));
+  TEST_ASSERT_EQUAL_HEX8(PAIR_NONE,
+      static_cast<uint8_t>(device.shadowValidPairs() & PAIR_OUTPUTS));
+
+  TEST_ASSERT_TRUE(
+      device.writeOutputs(PortData::fromCombined(expected.outputs)).ok());
+  TEST_ASSERT_EQUAL_HEX8(PAIR_NONE,
+      static_cast<uint8_t>(device.lastObservedState().mismatchPairs &
+                           PAIR_OUTPUTS));
+  TEST_ASSERT_EQUAL_HEX8(PAIR_OUTPUTS,
+      static_cast<uint8_t>(device.shadowValidPairs() & PAIR_OUTPUTS));
+
+  const uint16_t intended = 0x1357U;
+  armWriteFault(bus, cmd::REG_OUTPUT_PORT_0, TransportCode::TIMEOUT,
+                WriteEffect::MAY_HAVE_COMMITTED, 2U, -3491);
+  TEST_ASSERT_TRUE(device.writeOutputs(PortData::fromCombined(intended))
+                       .is(Err::I2C_TIMEOUT));
+  TEST_ASSERT_EQUAL_HEX8(PAIR_OUTPUTS, device.uncertainPairs());
+  TEST_ASSERT_EQUAL_HEX8(PAIR_OUTPUTS,
+      device.lastObservedState().uncertainPairs);
+  SettingsSnapshot uncertain = device.getSettings();
+  TEST_ASSERT_EQUAL_HEX8(uncertain.uncertainPairs,
+                         uncertain.observed.uncertainPairs);
+  const uint32_t beforeBlocked = busTraffic(bus);
+  TEST_ASSERT_TRUE(device.writePin(Pin::P00, Level::HIGH_LEVEL)
+                       .is(Err::STATE_UNCERTAIN));
+  assertBusSilentSince(bus, beforeBlocked);
+
+  TEST_ASSERT_TRUE(device.writeOutputs(PortData::fromCombined(intended)).ok());
+  TEST_ASSERT_EQUAL_HEX8(PAIR_NONE, device.uncertainPairs());
+  TEST_ASSERT_EQUAL_HEX8(PAIR_NONE,
+                         device.lastObservedState().uncertainPairs);
+  const SettingsSnapshot recovered = device.getSettings();
+  TEST_ASSERT_EQUAL_HEX8(PAIR_NONE, recovered.uncertainPairs);
+  TEST_ASSERT_EQUAL_HEX8(PAIR_NONE, recovered.observed.uncertainPairs);
+  TEST_ASSERT_TRUE(device.writePin(Pin::P00, Level::HIGH_LEVEL).ok());
+}
+
+void test_rejected_pair_reads_preserve_observations_until_a_callback_fails() {
+  FakeBus bus;
+  PCA9555::PCA9555 device;
+  bindAndApply(device, bus, RegisterImage{});
+  const ObservedState before = device.lastObservedState();
+  TEST_ASSERT_TRUE(before.valid(PAIR_INPUTS));
+  TEST_ASSERT_TRUE(before.valid(PAIR_OUTPUTS));
+  clearTransactions(bus);
+
+  TEST_ASSERT_TRUE(
+      device.startVerifyImage(753U, RegisterImage{}, 10U, 100U).inProgress());
+  PortData values{};
+  TEST_ASSERT_TRUE(device.readOutputs(values).is(Err::BUSY));
+  TEST_ASSERT_TRUE(device.readInputs(values).is(Err::BUSY));
+  TEST_ASSERT_EQUAL_UINT(0U, bus.transactionCount);
+  const ObservedState afterBusy = device.lastObservedState();
+  TEST_ASSERT_EQUAL_HEX8(before.validPairs, afterBusy.validPairs);
+  TEST_ASSERT_EQUAL_HEX16(before.inputs, afterBusy.inputs);
+  TEST_ASSERT_EQUAL_HEX16(before.registers.outputs,
+                          afterBusy.registers.outputs);
+  TEST_ASSERT_EQUAL_UINT32(before.observedAtMs, afterBusy.observedAtMs);
+  TEST_ASSERT_TRUE(device.cancelOperation(753U).ok());
+  (void)takeResult(device, 753U);
+
+  armReadFault(bus, cmd::REG_OUTPUT_PORT_0, TransportCode::BUS_ERROR,
+               0U, -3492);
+  TEST_ASSERT_TRUE(device.readOutputs(values).is(Err::I2C_BUS));
+  TEST_ASSERT_EQUAL_HEX8(PAIR_NONE,
+      static_cast<uint8_t>(device.lastObservedState().validPairs &
+                           PAIR_OUTPUTS));
+  TEST_ASSERT_TRUE(device.lastObservedState().valid(PAIR_INPUTS));
+
+  armReadFault(bus, cmd::REG_INPUT_PORT_0, TransportCode::BUS_ERROR,
+               0U, -3493, WriteEffect::MAY_HAVE_COMMITTED, 0U);
+  TEST_ASSERT_TRUE(device.readInputs(values).is(Err::I2C_BUS));
+  TEST_ASSERT_EQUAL_HEX8(PAIR_NONE,
+      static_cast<uint8_t>(device.lastObservedState().validPairs &
+                           PAIR_INPUTS));
+}
+
+void test_odd_scalar_mismatch_compares_against_high_shadow_byte() {
+  FakeBus bus;
+  PCA9555::PCA9555 device;
+  bindAndApply(device, bus, RegisterImage{0xA55AU, 0U, 0xFFFFU});
+  bus.regs[cmd::REG_OUTPUT_PORT_1] = 0x5AU;
+  clearTransactions(bus);
+
+  uint8_t value = 0U;
+  TEST_ASSERT_TRUE(device.readRegister(cmd::REG_OUTPUT_PORT_1, value).ok());
+  TEST_ASSERT_EQUAL_HEX8(0x5A, value);
+  TEST_ASSERT_EQUAL_UINT(1U, bus.transactionCount);
+  TEST_ASSERT_EQUAL_HEX8(PAIR_NONE,
+      static_cast<uint8_t>(device.shadowValidPairs() & PAIR_OUTPUTS));
+  TEST_ASSERT_EQUAL_HEX8(PAIR_OUTPUTS,
+      static_cast<uint8_t>(device.lastObservedState().mismatchPairs &
+                           PAIR_OUTPUTS));
+}
+
 void test_repeated_failures_never_gate_owner_requested_io_or_retry_internally() {
   FakeBus bus;
   PCA9555::PCA9555 device;
@@ -1956,6 +2141,57 @@ void test_failed_cooperative_input_read_preserves_primary_and_cleanup_evidence()
   }
 }
 
+void test_input_read_failures_survive_successful_cleanup_in_health_and_validity() {
+  {
+    FakeBus bus;
+    PCA9555::PCA9555 device;
+    bindAndApply(device, bus, RegisterImage{});
+    TEST_ASSERT_TRUE(device.lastObservedState().valid(PAIR_INPUTS));
+    clearTransactions(bus);
+    const uint32_t successesBefore = device.totalSuccess();
+    const uint32_t failuresBefore = device.totalFailures();
+
+    armReadFault(bus, cmd::REG_INPUT_PORT_0, TransportCode::BUS_ERROR,
+                 0U, -363, WriteEffect::MAY_HAVE_COMMITTED, 0U);
+    PortData inputs{};
+    TEST_ASSERT_TRUE(device.readInputs(inputs).is(Err::I2C_BUS));
+    TEST_ASSERT_EQUAL_UINT(2U, bus.transactionCount);
+    assertTransaction(bus, 1U, 'W', cmd::ERRATA_SAFE_CMD);
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
+                            static_cast<uint8_t>(device.state()));
+    TEST_ASSERT_EQUAL_UINT8(1U, device.consecutiveFailures());
+    TEST_ASSERT_EQUAL_UINT32(successesBefore, device.totalSuccess());
+    TEST_ASSERT_EQUAL_UINT32(failuresBefore + 1U, device.totalFailures());
+    TEST_ASSERT_FALSE(device.lastObservedState().valid(PAIR_INPUTS));
+  }
+
+  {
+    FakeBus bus;
+    PCA9555::PCA9555 device;
+    bindAndApply(device, bus, RegisterImage{});
+    TEST_ASSERT_TRUE(device.lastObservedState().valid(PAIR_INPUTS));
+    clearTransactions(bus);
+    const uint32_t successesBefore = device.totalSuccess();
+
+    armReadFault(bus, cmd::REG_INPUT_PORT_0, TransportCode::TIMEOUT,
+                 0U, -364, WriteEffect::MAY_HAVE_COMMITTED, 0U);
+    TEST_ASSERT_TRUE(device.startReadInputs(764U, 100U, 100U).inProgress());
+    uint8_t used = 0U;
+    TEST_ASSERT_TRUE(
+        device.pollOperation(764U, 100U, 2U, used).is(Err::I2C_TIMEOUT));
+    TEST_ASSERT_EQUAL_UINT8(2U, used);
+    TEST_ASSERT_FALSE(device.lastObservedState().valid(PAIR_INPUTS));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::DEGRADED),
+                            static_cast<uint8_t>(device.state()));
+    TEST_ASSERT_EQUAL_UINT8(1U, device.consecutiveFailures());
+    TEST_ASSERT_EQUAL_UINT32(successesBefore, device.totalSuccess());
+    const OperationResult result = takeResult(device, 764U);
+    TEST_ASSERT_TRUE(result.cleanupAttempted);
+    TEST_ASSERT_TRUE(result.cleanupStatus.ok());
+    TEST_ASSERT_FALSE(result.cleanupRequired);
+  }
+}
+
 void test_interrupt_helpers_are_bounded_exclusive_and_preserve_not_attempted_pointer() {
   FakeBus bus;
   bus.pointer = cmd::REG_CONFIG_PORT_1;
@@ -2226,6 +2462,34 @@ void test_operation_callback_timeouts_share_remaining_deadline_budget() {
   (void)takeResult(device, 811U);
 }
 
+void test_near_deadline_callback_count_respects_minimum_timeout() {
+  FakeBus bus;
+  PCA9555::PCA9555 device;
+  TEST_ASSERT_TRUE(device.bind(makeConfig(bus)).ok());
+  TEST_ASSERT_TRUE(
+      device.startApplyImage(812U, RegisterImage{}, 100U, 3U).inProgress());
+
+  uint8_t used = 0U;
+  TEST_ASSERT_TRUE(device.pollOperation(812U, 100U, 8U, used).inProgress());
+  TEST_ASSERT_EQUAL_UINT8(3U, used);
+  TEST_ASSERT_EQUAL_UINT(3U, bus.transactionCount);
+  uint32_t timeoutSum = 0U;
+  for (size_t i = 0U; i < bus.transactionCount; ++i) {
+    TEST_ASSERT_EQUAL_UINT32(1U, bus.transactions[i].timeoutMs);
+    timeoutSum += bus.transactions[i].timeoutMs;
+  }
+  TEST_ASSERT_EQUAL_UINT32(3U, timeoutSum);
+
+  const uint32_t beforeDeadline = busTraffic(bus);
+  TEST_ASSERT_TRUE(device.pollOperation(812U, 103U, 8U, used)
+                       .is(Err::TIMEOUT));
+  TEST_ASSERT_EQUAL_UINT8(0U, used);
+  assertBusSilentSince(bus, beforeDeadline);
+  const OperationResult result = takeResult(device, 812U);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(OperationOutcome::TIMED_OUT),
+                          static_cast<uint8_t>(result.outcome));
+}
+
 void test_detach_is_passive_repeatable_and_retains_active_cancellation_result() {
   FakeBus bus;
   PCA9555::PCA9555 device;
@@ -2237,7 +2501,8 @@ void test_detach_is_passive_repeatable_and_retains_active_cancellation_result() 
   TEST_ASSERT_FALSE(device.isBound());
   TEST_ASSERT_TRUE(device.detach().ok());
   TEST_ASSERT_TRUE(device.operationResultPending());
-  const OperationResult result = takeResult(device, 82U);
+  TEST_ASSERT_EQUAL_UINT32(82U, device.activeRequestId());
+  const OperationResult result = takeResult(device, device.activeRequestId());
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(OperationOutcome::CANCELLED),
                           static_cast<uint8_t>(result.outcome));
   TEST_ASSERT_TRUE(device.detach().ok());
@@ -2296,7 +2561,7 @@ void test_wire_read_adapter_reports_command_phase_evidence() {
   wire._setEndTransmissionResult(3U);  // Command-byte NACK.
   result = transport::wireWriteRead(
       cmd::BASE_ADDRESS, &command, 1U, data, 2U, 10U, &wire);
-  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(WriteEffect::NOT_ATTEMPTED),
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(WriteEffect::MAY_HAVE_COMMITTED),
                           static_cast<uint8_t>(result.writeEffect));
 
   wire._setEndTransmissionResult(4U);  // Ambiguous bus error.
@@ -2371,6 +2636,11 @@ int main() {
   RUN_TEST(test_named_and_raw_reads_fence_the_whole_pair_on_any_observed_mismatch);
   RUN_TEST(test_verify_caller_mismatch_preserves_a_truthful_protocol_shadow);
   RUN_TEST(test_verify_matching_external_image_reconciles_observation_and_shadow);
+  RUN_TEST(test_nonzero_idempotent_cached_updates_reassert_and_report_transport_status);
+  RUN_TEST(test_empty_masks_are_bus_silent_but_respect_cooperative_ownership);
+  RUN_TEST(test_full_pair_rewrite_clears_mismatch_and_uncertainty_evidence);
+  RUN_TEST(test_rejected_pair_reads_preserve_observations_until_a_callback_fails);
+  RUN_TEST(test_odd_scalar_mismatch_compares_against_high_shadow_byte);
   RUN_TEST(test_repeated_failures_never_gate_owner_requested_io_or_retry_internally);
   RUN_TEST(test_consecutive_failure_counter_saturates_without_gating_io);
   RUN_TEST(test_safe_direction_change_writes_latch_before_direction);
@@ -2383,6 +2653,7 @@ int main() {
   RUN_TEST(test_synchronous_input_reads_always_park_pointer_and_return_both_ports);
   RUN_TEST(test_failed_input_command_effect_controls_synchronous_pointer_cleanup);
   RUN_TEST(test_failed_cooperative_input_read_preserves_primary_and_cleanup_evidence);
+  RUN_TEST(test_input_read_failures_survive_successful_cleanup_in_health_and_validity);
   RUN_TEST(test_interrupt_helpers_are_bounded_exclusive_and_preserve_not_attempted_pointer);
   RUN_TEST(test_scalar_observations_clear_pair_validity_until_a_full_pair_read);
   RUN_TEST(test_synchronous_input_read_preserves_data_when_park_fails);
@@ -2395,6 +2666,7 @@ int main() {
   RUN_TEST(test_transport_short_counts_are_rejected_and_never_fake_success);
   RUN_TEST(test_transport_timeout_and_owner_deadline_remain_distinct);
   RUN_TEST(test_operation_callback_timeouts_share_remaining_deadline_budget);
+  RUN_TEST(test_near_deadline_callback_count_respects_minimum_timeout);
   RUN_TEST(test_detach_is_passive_repeatable_and_retains_active_cancellation_result);
   RUN_TEST(test_rebind_is_rejected_while_operation_or_result_is_pending);
   RUN_TEST(test_detach_refuses_to_abandon_required_pointer_cleanup);

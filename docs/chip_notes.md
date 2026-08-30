@@ -59,8 +59,6 @@ Primary sources:
 - INT is open-drain, active low, and requires an external pull-up.
 - Interrupt output timing is microsecond-scale; debounce and event policy belong
   in the application.
-- On a shared bus, the input read and the errata pointer-park write must stay one
-  uninterrupted owner-exclusive sequence.
 
 When INT is asserted or cleared, and how the errata pointer park works, are
 register-protocol facts:
@@ -91,5 +89,5 @@ see the interrupt and errata notes in
 - Capture INT assertion/clear behavior with the final pull-up value.
 - Confirm application re-read or debounce policy for transitions near the input
   read ACK/NACK edge.
-- For shared buses, capture or otherwise prove the errata pointer park happens
-  before any other target read.
+- For shared-bus protocol validation, use the owner-exclusive sequence defined
+  in [register_reference.md](register_reference.md).

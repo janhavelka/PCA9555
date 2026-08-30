@@ -18,10 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Re-establishing a protocol-shadow pair now clears that pair's stale
   `ObservedState::mismatchPairs` bit, so a snapshot can no longer report the same
   pair as both shadow-valid and mismatched.
-- The native ESP-IDF example transport now maps `ESP_ERR_INVALID_STATE`,
-  `ESP_FAIL` and `ESP_ERR_NOT_FOUND` to `TransportCode::NACK_ADDRESS`. The
-  `i2c_master` driver reports a NACK as `ESP_ERR_INVALID_STATE`, so `probe()`
-  previously returned `I2C_BUS` and could never report `DEVICE_NOT_FOUND`.
+- The native ESP-IDF scanner now uses `i2c_master_probe()` for exact address
+  presence. Phase-ambiguous master-transmit errors remain `BUS_ERROR` instead
+  of being misreported as address NACKs.
 - The native ESP-IDF `rregs` command labelled the second byte of an odd-start
   pair read with the next register instead of the pair partner the chip actually
   returns.
@@ -32,10 +31,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The native ESP-IDF `pins` command builds its summary from four complete pair
   reads instead of sixteen per-pin queries, cutting roughly 80 transfers to 5 and
   clearing the interrupt once instead of sixteen times.
+- Pair-read transport failures now invalidate that pair's observation only
+  after an actual callback fails. Bus-silent rejections such as `BUSY` preserve
+  the last valid observation, and synchronous and cooperative input reads use
+  the same rule.
+- Driver-wide uncertainty evidence is now mirrored consistently into every
+  `ObservedState`, including partial snapshots and `SettingsSnapshot`.
+- `probe()` now uses a single raw command-byte write, so Arduino transports can
+  observe an address NACK instead of staging an uncompleted repeated-start
+  write. Probe remains health-neutral and does not modify a register.
+- Arduino write-read result 3 is now treated as a command phase that may have
+  reached the device, ensuring the mandatory input-read pointer cleanup is not
+  skipped.
+- Nonzero cached update requests now reassert their complete register pair and
+  report the real transport outcome even when the requested value already
+  matches the shadow. Empty masks remain bus-silent no-ops after ownership and
+  shadow guards.
+- Empty output/preload requests no longer bypass cooperative ownership checks,
+  and the Wire result mapper no longer contains an impossible success branch
+  that the core would reject for missing byte counts.
+- Native ESP-IDF `verbose` parsing now rejects trailing garbage and reports the
+  current mode when no argument is supplied instead of toggling implicitly.
 
 ### Changed
 
 - Arduino `stress N` is bounded to `1..10000`, matching the native ESP-IDF CLI.
+- The native ESP-IDF example configures the selected UART, USB CDC, or USB
+  Serial/JTAG console as blocking before running its interactive CLI.
+- Repeated register/pair and per-port bookkeeping now uses shared private
+  helpers; operation-deadline handling has one entry decision while retaining
+  the minimum-time callback-count bound.
+- Example pin labels now delegate to the public `portOf()` and `bitOf()` helpers.
 - Documentation: the README synchronous example now shows a cold start that
   actually works (the previous one returned `SHADOW_INVALID` on its first call);
   the error table lists `CONFIG_REG_MISMATCH` and `UNSUPPORTED`;
@@ -43,6 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interrupt and errata facts, with `docs/chip_notes.md` reduced to board and
   electrical guidance; `docs/hardware_validation.md` carries an evidence table
   instead of pointing at a dated per-run report.
+- Public contracts now describe retained-result discovery after detach,
+  whole-operation apply evidence, global uncertainty semantics, cached-update
+  reassertion, and the command-write probe behavior. The hardware evidence row
+  correctly calls its 22 negative cases bus-silent CLI guard/rejection checks,
+  not transport fault injection.
 
 ### Removed
 

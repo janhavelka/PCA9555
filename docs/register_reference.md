@@ -83,9 +83,10 @@ enforces this in `configureOutputs()`, `configureOutputBits()`,
 ## Presence, Defaults, and Reconciliation
 
 - `bind()` and its `begin()` compatibility alias perform no I2C.
-- `probe()` means the configured address responded to one raw
-  Configuration-register read. It is not chip-ID proof because PCA9555 has no
-  identity register. Probe is diagnostic and does not update health counters.
+- `probe()` means the configured address acknowledged one raw command-byte
+  write that selects Configuration Port 0 (`0x06`). It does not change a
+  register, and it is not chip-ID proof because PCA9555 has no identity
+  register. Probe is diagnostic and does not update health counters.
 - `checkPorDefaults()` explicitly reads Configuration Port 0/1 and compares
   them with `0xFF/0xFF`. This is plausibility evidence, not identity proof.
 - Recovery policy belongs to the caller. `startApplyImage()` applies and reads
@@ -95,7 +96,8 @@ enforces this in `configureOutputs()`, `configureOutputBits()`,
 
 ## Interrupt and Errata Notes
 
-- INT is active-low/open-drain and requires a pull-up.
+- INT asserts low. Electrical wiring and pull-up requirements are owned by
+  [chip_notes.md](chip_notes.md).
 - Reading an input port clears interrupt state for that port only. Reading Port 0
   does not clear Port 1, and reading Port 1 does not clear Port 0.
 - The clear point is tied to the read ACK/NACK phase; an input transition during

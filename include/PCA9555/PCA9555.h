@@ -83,7 +83,7 @@ struct ObservedState {
   uint16_t inputs = 0;        ///< Latest observed complete input pair.
   uint8_t validPairs = PAIR_NONE;  ///< Complete pairs observed in one transfer.
   uint8_t mismatchPairs = PAIR_NONE;  ///< Pairs differing from the comparison basis.
-  uint8_t uncertainPairs = PAIR_NONE;  ///< Pairs with ambiguous write effects.
+  uint8_t uncertainPairs = PAIR_NONE;  ///< Driver-wide ambiguous-write evidence.
   uint32_t observedAtMs = 0;  ///< Timestamp supplied by Config::nowMs.
 
   /// Return true when every bit in one requested pair mask is valid.
@@ -167,6 +167,10 @@ static constexpr uint8_t MAX_VERIFY_IMAGE_TRANSACTIONS = 3U;
 static constexpr uint8_t MAX_READ_INPUTS_TRANSACTIONS = 2U;
 
 /// Exactly-once terminal evidence retained by a cooperative operation.
+/// outcome and status describe the whole operation, including input read and
+/// pointer cleanup. For APPLY_IMAGE, a terminal READ_INPUTS or POINTER_PARK
+/// phase is reached only after all writable pairs were read back and matched;
+/// completedPairs and mismatchPairs retain that independently useful evidence.
 struct OperationResult {
   uint32_t requestId = 0;  ///< Exact caller-supplied correlation ID.
   OperationKind kind = OperationKind::NONE;  ///< Admitted operation type.
@@ -230,6 +234,9 @@ class PCA9555 {
   /// Compatibility alias for bind(); performs zero I2C.
   Status begin(const Config& config) { return bind(config); }
   /// Remove the binding with zero I2C when no pointer cleanup is owed.
+  /// Ordinary active work becomes a retained cancellation result. A pending
+  /// result remains exactly-once evidence; use activeRequestId() and
+  /// takeOperationResult() before replacing the binding.
   Status detach();
   /// Compatibility alias for detach(); performs zero I2C.
   Status end() { return detach(); }
@@ -244,14 +251,16 @@ class PCA9555 {
   /// Return the stored binding configuration.
   const Config& getConfig() const { return _config; }
 
-  /// Perform one raw address-response read without changing health counters.
+  /// Perform one raw, nonzero command-byte write without changing health counters.
   Status probe();
   /// Read both Configuration registers and report whether they match POR defaults.
   Status checkPorDefaults(PortData& observedDirections);
   /// Advanced synchronous writable-register snapshot. This performs at most
   /// three callbacks and can block for up to 3 * Config::i2cTimeoutMs. Use
   /// startVerifyImage() when the external owner needs transaction budgeting.
-  /// On failure, observed contains only pairs read during this invocation.
+  /// On failure, register values, validPairs, and mismatchPairs contain only
+  /// pairs read during this invocation. uncertainPairs is driver-wide evidence
+  /// at return time and can include pairs not valid in this sample.
   Status readObservedState(ObservedState& observed);
   /// Return the latest retained hardware observations.
   const ObservedState& lastObservedState() const { return _observed; }
@@ -317,6 +326,7 @@ class PCA9555 {
   /// Read one port's output latch as observation.
   Status readOutput(Port port, uint8_t& value);
   /// Update one output-latch bit using a valid, certain output shadow.
+  /// Reasserts the complete pair even when the requested level already matches.
   Status writePin(Pin pin, Level level);
   /// Boolean compatibility overload for writePin().
   Status writePin(Pin pin, bool high);
@@ -331,8 +341,10 @@ class PCA9555 {
   /// Set selected output-latch bits without changing direction.
   Status preloadOutputs(PinMask mask, PinMask values);
   /// Set selected output-latch bits using the cached output shadow.
+  /// A nonzero mask reasserts the complete pair even when all bits already match.
   Status setOutputBits(PinMask mask);
   /// Clear selected output-latch bits using the cached output shadow.
+  /// A nonzero mask reasserts the complete pair even when all bits already match.
   Status clearOutputBits(PinMask mask);
   /// Toggle selected output-latch bits using the cached output shadow.
   Status toggleOutputBits(PinMask mask);
@@ -350,6 +362,7 @@ class PCA9555 {
   /// Preload selected latch values, then enable those pins as outputs.
   Status configureOutputs(PinMask outputMask, PinMask outputValues);
   /// Configure selected pins as inputs using a valid direction shadow.
+  /// A nonzero mask reasserts the complete pair even when all bits already match.
   Status configureInputBits(PinMask mask);
   /// Enable selected pins as outputs after safely preloading known latches.
   Status configureOutputBits(PinMask mask);
@@ -371,12 +384,15 @@ class PCA9555 {
   /// Read one port's input-polarity byte as observation.
   Status getPortPolarity(Port port, uint8_t& value);
   /// Set or clear one polarity bit using a valid, certain polarity shadow.
+  /// Reasserts the complete pair even when the requested value already matches.
   Status setPinPolarity(Pin pin, bool inverted);
   /// Read one pin's input-polarity setting.
   Status getPinPolarity(Pin pin, bool& inverted);
   /// Set selected input-polarity bits using the cached polarity shadow.
+  /// A nonzero mask reasserts the complete pair even when all bits already match.
   Status setInvertBits(PinMask mask);
   /// Clear selected input-polarity bits using the cached polarity shadow.
+  /// A nonzero mask reasserts the complete pair even when all bits already match.
   Status clearInvertBits(PinMask mask);
 
   /// Read one register as observation; input reads also park the pointer.
@@ -452,12 +468,11 @@ class PCA9555 {
                              bool& readCompleted);
   Status _readPin(Pin pin, Level& level, bool& readCompleted);
   Status _parkPointer();
-  Status _readPair(uint8_t startReg, uint16_t& value, uint8_t pair,
-                   uint32_t nowMs);
-  Status _writePair(uint8_t startReg, uint16_t value, uint8_t pair,
-                    bool tracked = true);
+  Status _readPair(uint8_t startReg, uint16_t& value, uint32_t nowMs);
+  Status _writePair(uint8_t startReg, uint16_t value, bool tracked = true);
   Status _writePort(uint8_t reg, uint8_t value, uint8_t pair,
                     uint16_t intendedCombined);
+  Status _readWritablePortRegister(uint8_t baseReg, Port port, uint8_t& value);
 
   static Status _mapTransportResult(const TransportResult& result,
                                     size_t expectedTx, size_t expectedRx,
@@ -472,6 +487,8 @@ class PCA9555 {
                               WriteEffect& commandEffect);
   Status _i2cWriteTracked(const uint8_t* buf, size_t len,
                           WriteEffect& effect);
+  Status _i2cWriteCleanupTracked(const uint8_t* buf, size_t len,
+                                  WriteEffect& effect);
   Status _updateHealth(const Status& status);
   uint32_t _nowMs() const;
   void _syncObservedRegister(uint8_t reg, uint8_t value, uint32_t nowMs);

@@ -249,6 +249,14 @@ the primary result; cleanup outcome is reported separately in
 polled at or after the stored operation deadline; an explicit earlier
 `timeoutOperation()` request does not set it.
 
+`OperationResult::outcome` and `status` describe the entire operation, not just
+the writable image. An apply operation reaches `READ_INPUTS` or `POINTER_PARK`
+only after all three writable pairs were read back and matched. Therefore, even
+when the later input/cleanup work fails, callers can avoid an unnecessary
+re-apply when `kind == APPLY_IMAGE`, all `PAIR_ALL_WRITABLE` bits are present in
+`completedPairs`, and `mismatchPairs == PAIR_NONE`; the primary and cleanup
+fields still report why the whole operation failed.
+
 A terminal result remains pending until taken exactly once. While work is
 active or a result is pending, new operation admission and binding replacement
 return `Err::BUSY` with a stable `BusyDetail`. A wrong request ID cannot consume
@@ -257,9 +265,11 @@ methods return `Err::BUSY` without invoking a callback, so no synchronous call
 can interleave between its phases.
 
 `detach()`/`end()` never perform I2C. Detaching during ordinary active work
-cancels it and retains the terminal result for one take. If an input transaction
-already owes pointer-park cleanup, detach returns `Err::BUSY` and keeps the
-binding so the caller can give that cleanup its bounded poll.
+cancels it and retains the terminal result for one take. The retained request ID
+remains available through `activeRequestId()`, so a replacement owner can take
+the result before rebinding. If an input transaction already owes pointer-park
+cleanup, detach returns `Err::BUSY` and keeps the binding so the caller can give
+that cleanup its bounded poll.
 
 ## Register state and write ambiguity
 
@@ -274,7 +284,9 @@ Relevant evidence is explicit:
 - `shadowValidPairs`: protocol-shadow pairs safe for cached RMW;
 - `mismatchPairs`: observed writable pairs that did not match the expected
   image;
-- `uncertainPairs`: pairs whose hardware effect cannot be proved;
+- `uncertainPairs`: driver-wide pairs whose hardware effect cannot be proved.
+  In an `ObservedState` snapshot this evidence is independent of `validPairs`,
+  so it can name a pair that the same read did not successfully observe;
 - `WriteEffect`: whether one callback's relevant device-side transmit phase was
   not attempted, committed, or may have committed. Successful apply/verify
   outcomes and readback evidence report operation-level verification separately.
@@ -304,8 +316,12 @@ Health counters and timestamps are observational. They never suppress a
 requested transfer. `probe()` is a diagnostic raw transfer and does not update
 health. The errata pointer park counts only when it fails, so a successful
 cleanup transfer cannot clear the DEGRADED state produced by the input read it
-follows. The caller decides absence policy, retry eligibility, device health,
-and bus recovery.
+follows. Nonzero cached read-modify-write requests reassert their complete
+register pair even when the requested value already matches the shadow; empty
+masks remain bus-silent no-ops. This makes the returned status current transport
+evidence, but only `probe()` is the explicit address-liveness diagnostic. The
+caller decides absence policy, retry eligibility, device health, and bus
+recovery.
 
 The class is non-copyable, non-movable, single-threaded, non-reentrant, and not
 ISR-safe. Keep it in stable storage and serialize every call through one owner.

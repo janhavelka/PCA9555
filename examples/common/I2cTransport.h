@@ -206,11 +206,10 @@ inline PCA9555::TransportResult wireWriteRead(uint8_t addr, const uint8_t* tx,
 
   uint8_t result = wire->endTransmission(false);  // Repeated start
   if (result != 0) {
-    const PCA9555::WriteEffect commandEffect =
-        (result == 2U || result == 3U)
-            ? PCA9555::WriteEffect::NOT_ATTEMPTED
-            : PCA9555::WriteEffect::MAY_HAVE_COMMITTED;
-    return mapWireResult(result, commandEffect);
+    // An address NACK is proven not attempted by mapWireResult(). For a data
+    // NACK the command byte was clocked out, so conservatively allow for the
+    // PCA9555 having accepted it before the adapter observed the failure.
+    return mapWireResult(result, PCA9555::WriteEffect::MAY_HAVE_COMMITTED);
   }
 
   size_t read = wire->requestFrom(addr, static_cast<uint8_t>(rxLen));

@@ -14,7 +14,7 @@ PCA9555 has no documented chip-ID register, so no run can claim chip identity.
 
 | Date | Target | Result |
 | --- | --- | --- |
-| 2026-07-31 | ESP32-S3 on COM4, pioarduino `55.03.311` (Arduino-ESP32 `3.3.11`, ESP-IDF `v5.5.5`), PCA9555 at `0x20`, 400 kHz, SDA GPIO8 / SCL GPIO9 | Release-candidate full and fault plan 46/46; extended command plan 72/72 including all four odd-start paired-register wrap cases, all eight scalar register reads, a 32/32 sweep, a 16/16 walking-one test and 24 complete-image recoveries; the 22 fault-injection rejection cases left every reported health and settings field unchanged. Final health READY with 2,604 tracked successes and zero failures. |
+| 2026-07-31 | ESP32-S3 on COM4, pioarduino `55.03.311` (Arduino-ESP32 `3.3.11`, ESP-IDF `v5.5.5`), PCA9555 at `0x20`, 400 kHz, SDA GPIO8 / SCL GPIO9 | Release-candidate full and fault plan 46/46; extended command plan 72/72 including all four odd-start paired-register wrap cases, all eight scalar register reads, a 32/32 sweep, a 16/16 walking-one test and 24 complete-image recoveries; the 22 bus-silent CLI guard/rejection cases left every reported health and settings field unchanged. Final health READY with 2,604 tracked successes and zero failures. |
 | 2026-07-22 | ESP32-S3 on COM7 | 73-minute device-side input-read/pointer-park stress, 15,000,000 operations, zero failures. |
 
 Neither run is electrical, analyzer, reset, or shared-bus evidence, and both

@@ -68,6 +68,9 @@ The second pass confirmed these remaining gaps and corrected them:
 The core cooperative state machine, deadlines, exact-once results, health
 tracking, shadow/observation/uncertainty model, and conservative write-effect
 normalization survived the second review without another confirmed defect.
+After the repairs, all three independent reviewers rechecked the updated tree
+and returned a clean verdict with no remaining actionable gap in the original
+audit scope.
 
 ## Previously applied findings
 
@@ -231,8 +234,11 @@ cleanup, near-deadline call count, and retained-result discovery.
 - Arduino ESP32-S2 and ESP32-S3 builds through `scripts/pio.cmd`: passed.
 - Strict host C++17 syntax/warning compile, including conversion and shadow
   warnings: passed in the independent core review.
-- Native ESP-IDF target build: not available locally because `idf.py` is not
-  installed; the repository's static native-IDF contract passed. The final
-  GitHub target builds are recorded after the synchronized code commit.
+- Synchronized implementation commit `9cf1b22`: [GitHub CI run 33321769399](https://github.com/janhavelka/PCA9555/actions/runs/33321769399)
+  passed all six jobs, including native ESP-IDF example builds for ESP32-S2 and
+  ESP32-S3.
+- Native ESP-IDF target build was not available locally because `idf.py` is not
+  installed; the repository's static native-IDF contract and both GitHub target
+  builds passed.
 - Native ESP-IDF runtime and physical HIL were not performed; the durable
   hardware-validation document continues to mark those evidence gates open.

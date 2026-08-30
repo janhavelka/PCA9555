@@ -67,12 +67,17 @@ class ScopedWireTimeout {
 #endif
 };
 
+/**
+ * @brief Map a NONZERO Wire endTransmission() code to a terminal result.
+ *
+ * Callers must handle result == 0 themselves, because only they know the byte
+ * counts a successful transfer completed. Returning Ok(0, 0) here would be
+ * rejected by the driver as an incomplete successful transport.
+ */
 inline PCA9555::TransportResult mapWireResult(
     uint8_t result,
     PCA9555::WriteEffect writeEffect = PCA9555::WriteEffect::NOT_APPLICABLE) {
   switch (result) {
-    case 0:
-      return PCA9555::TransportResult::Ok(0U, 0U);
     case 1:
       return PCA9555::TransportResult::Error(
           PCA9555::TransportCode::IO_ERROR, result,

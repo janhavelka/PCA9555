@@ -26,6 +26,13 @@ python tools/check_package.py
 doxygen Doxyfile
 ```
 
+On Windows use `.\scripts\pio.cmd <arguments>` in place of
+`python -m platformio`; it selects the VS Code-managed PlatformIO installation.
+
+CI additionally builds `examples/espidf_basic` for `esp32s2` and `esp32s3` with
+ESP-IDF v5.4. Build it locally with `idf.py set-target <target> build` from that
+directory when you change the native example or the component metadata.
+
 `doxygen Doxyfile` is strict: undocumented public symbols and documentation
 errors fail the command. Generated output under `docs/doxygen/` is local and
 ignored; do not add it to a commit or package.

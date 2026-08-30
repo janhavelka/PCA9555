@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A successful interrupt-errata pointer park no longer counts as a tracked
+  health success. Previously an input read that failed and was followed by a
+  successful park left the driver reporting `READY` with zero consecutive
+  failures, hiding every `readInputs()` failure from a caller's health policy. A
+  failed park still records a failure. `totalSuccess` therefore no longer counts
+  park transfers.
+- Re-establishing a protocol-shadow pair now clears that pair's stale
+  `ObservedState::mismatchPairs` bit, so a snapshot can no longer report the same
+  pair as both shadow-valid and mismatched.
+- The native ESP-IDF example transport now maps `ESP_ERR_INVALID_STATE`,
+  `ESP_FAIL` and `ESP_ERR_NOT_FOUND` to `TransportCode::NACK_ADDRESS`. The
+  `i2c_master` driver reports a NACK as `ESP_ERR_INVALID_STATE`, so `probe()`
+  previously returned `I2C_BUS` and could never report `DEVICE_NOT_FOUND`.
+- The native ESP-IDF `rregs` command labelled the second byte of an odd-start
+  pair read with the next register instead of the pair partner the chip actually
+  returns.
+- Example restore helpers always attempt the direction restore even when an
+  earlier restore step fails, and the Arduino self-test can no longer return
+  from its all-outputs section before restoring direction. Both could leave all
+  sixteen pins configured as driven outputs.
+- The native ESP-IDF `pins` command builds its summary from four complete pair
+  reads instead of sixteen per-pin queries, cutting roughly 80 transfers to 5 and
+  clearing the interrupt once instead of sixteen times.
+
+### Changed
+
+- Arduino `stress N` is bounded to `1..10000`, matching the native ESP-IDF CLI.
+- Documentation: the README synchronous example now shows a cold start that
+  actually works (the previous one returned `SHADOW_INVALID` on its first call);
+  the error table lists `CONFIG_REG_MISMATCH` and `UNSUPPORTED`;
+  `docs/register_reference.md` is the single owner of register, auto-increment,
+  interrupt and errata facts, with `docs/chip_notes.md` reduced to board and
+  electrical guidance; `docs/hardware_validation.md` carries an evidence table
+  instead of pointing at a dated per-run report.
+
+### Removed
+
+- `docs/reports/hil-validation-COM4-pioarduino-55.03.311-20260731.md` and its
+  hard-wired references in `library.json`, `tools/check_package.py` and
+  `docs/README.md`. Its reviewed evidence is now a row in
+  `docs/hardware_validation.md`; the full detail remains in Git history.
+
 ## [3.0.2] - 2026-08-07
 
 ### Changed

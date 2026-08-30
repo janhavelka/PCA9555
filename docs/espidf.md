@@ -63,10 +63,13 @@ usable for bring-up without silently mutating hardware.
 - native ESP-IDF API usage
 - component metadata and version alignment
 - absence of Arduino/Wire compatibility tokens
-- command-surface parity with the Arduino CLI
+- presence of every mandatory CLI command name shared with the Arduino example
 - confirmation guard wording and command coverage
 
-The check proves static contract coverage only. Native ESP-IDF remains a
+The check is textual: it proves each mandatory command name and guard string is
+present in the native source, not that the two CLIs behave identically. Behavior
+parity is a review and HIL responsibility. The check proves static contract
+coverage only. Native ESP-IDF remains a
 build/contract target, while native-IDF hardware qualification is outside the
 current release scope and was not performed. The applicable Arduino ESP32-S3
 evidence in [hardware_validation.md](hardware_validation.md) does not validate

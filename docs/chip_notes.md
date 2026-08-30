@@ -1,14 +1,19 @@
 # PCA9555 Chip Notes
 
-This page preserves implementation-relevant chip facts from the original
-datasheet extraction. It is not a replacement for the TI datasheet; use it as a
-checklist when reviewing driver behavior, board bring-up, and field integration.
+This page owns the **board and electrical** facts you need when wiring, powering
+and bringing up a PCA9555. It is not a replacement for the TI datasheet; use it
+as a checklist during board review and bring-up.
+
+Register map, pair auto-increment, interrupt behavior and the interrupt errata
+are **not** repeated here. Those live in
+[register_reference.md](register_reference.md), which is their single owner.
+Full page-cited datasheet detail is in
+[datasheet_extraction.md](datasheet_extraction.md).
 
 Primary sources:
 
 - TI PCA9555 datasheet, SCPS131J, revised March 2021
 - TI application note SLVAFL0, I2C auto-increment feature
-- Local implementation extraction: `datasheet_extraction.md`
 
 ## Identity And Limits
 
@@ -49,48 +54,18 @@ Primary sources:
   output.
 - Do not externally drive a pin that is configured as an output.
 
-## Register And Auto-Increment Notes
-
-- The eight command registers are four port pairs: Input, Output, Polarity
-  Inversion, and Configuration.
-- Power-on defaults are output latches `0xFFFF`, polarity `0x0000`, and
-  configuration `0xFFFF` (all pins input). Input registers are pin-dependent.
-- Auto-increment is pair-local. A 2-byte access from an even register reads or
-  writes the matching Port 0/Port 1 pair. Access does not advance into the next
-  pair.
-- Writing the desired output latch before clearing configuration bits avoids
-  output-enable glitches. Prefer APIs that make the preload explicit when
-  changing pins from input to output.
-- Command byte bits above the documented `0x00` through `0x07` range are not
-  specified by the datasheet. Keep command bytes in the documented range.
-
-## Interrupt Notes
+## Interrupt Wiring Notes
 
 - INT is open-drain, active low, and requires an external pull-up.
-- A pin configured as an output does not generate input-change interrupts.
-- Reading an input port clears interrupt state for that port. To clear pending
-  sources from both ports, read both Input Port registers.
-- The interrupt clear point is associated with the read ACK/NACK phase. Input
-  transitions during that clock can be lost or create very short INT pulses, so
-  debounce or re-read in application policy when edge certainty matters.
-- Changing a pin from output to input can cause a false interrupt if the sampled
-  pin level differs from the previous input-register state.
 - Interrupt output timing is microsecond-scale; debounce and event policy belong
   in the application.
+- On a shared bus, the input read and the errata pointer-park write must stay one
+  uninterrupted owner-exclusive sequence.
 
-## Interrupt Errata
-
-The datasheet documents an interrupt errata condition:
-
-- If the PCA9555 command pointer is left at Input Port 0 (`0x00`) and another
-  slave on the same bus acknowledges a read address, PCA9555 INT can be
-  improperly de-asserted.
-- The workaround is to write a command byte other than `0x00` after reading
-  input ports before allowing another target read on the shared bus.
-- The library parks the pointer at Output Port 0 (`0x02`) when the workaround is
-  enabled.
-- On a shared bus, serialize the input read and pointer-park write so no other
-  target transaction interleaves between them.
+When INT is asserted or cleared, and how the errata pointer park works, are
+register-protocol facts:
+see the interrupt and errata notes in
+[register_reference.md](register_reference.md).
 
 ## Power And Layout Notes
 

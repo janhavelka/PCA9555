@@ -48,6 +48,8 @@ struct StressStats {
 StressStats stressStats;
 int stressRemaining = 0;
 static constexpr uint32_t STRESS_PROGRESS_UPDATES = 10U;
+/// Upper bound for `stress N`, matching the native ESP-IDF CLI.
+static constexpr long MAX_STRESS_COUNT = 10000L;
 static constexpr uint32_t SERIAL_TX_TIMEOUT_MS = 20U;
 
 // ============================================================================
@@ -324,12 +326,30 @@ void printStatus(const PCA9555::Status& st) {
   Serial.flush();
 }
 
+// Restore always attempts the direction write even when an earlier step failed.
+// Leaving pins configured as driven outputs is the unsafe state, and the
+// library refuses a direction change that would enable an output from an
+// uncertain latch, so the attempt fails closed rather than driving blind.
+// The first failure is returned; later failures are logged.
+PCA9555::Status firstFailure(const PCA9555::Status& first,
+                             const PCA9555::Status& next,
+                             const char* label) {
+  if (next.ok()) return first;
+  LOGE("%s failed during restore", label);
+  printStatus(next);
+  return first.ok() ? next : first;
+}
+
 PCA9555::Status restoreOutputAndDirection(
     const PCA9555::PortData& outputs,
     const PCA9555::PortData& directions) {
   PCA9555::Status status = device.writeOutputs(outputs);
-  if (status.ok()) status = device.setConfiguration(directions);
-  return status;
+  if (!status.ok()) {
+    LOGE("Output latch restore failed; still restoring direction");
+    printStatus(status);
+  }
+  return firstFailure(status, device.setConfiguration(directions),
+                      "Direction restore");
 }
 
 PCA9555::Status restoreWritableState(
@@ -337,14 +357,14 @@ PCA9555::Status restoreWritableState(
     const PCA9555::PortData& polarity,
     const PCA9555::PortData& directions) {
   PCA9555::Status status = device.writeOutputs(outputs);
-  if (!status.ok()) return status;
-  const PCA9555::Status polarityStatus = device.setPolarity(polarity);
-  const PCA9555::Status directionStatus = device.setConfiguration(directions);
-  if (!polarityStatus.ok() && !directionStatus.ok()) {
-    LOGE("Writable-state direction restore also failed");
-    printStatus(directionStatus);
+  if (!status.ok()) {
+    LOGE("Output latch restore failed; still restoring polarity and direction");
+    printStatus(status);
   }
-  return polarityStatus.ok() ? directionStatus : polarityStatus;
+  status = firstFailure(status, device.setPolarity(polarity),
+                        "Polarity restore");
+  return firstFailure(status, device.setConfiguration(directions),
+                      "Direction restore");
 }
 
 PCA9555::Status applyExampleRecoveryImage() {
@@ -1498,15 +1518,19 @@ void runSelfTest() {
     reportCheck("clearInvertBits(0x0001)", false, errToStr(st.code));
   }
 
-  st = device.writeOutputs(savedOut);
-  if (!requireStep("restore bit-test output latches", st)) { printResult(); return; }
+  // All sixteen pins are driven outputs at this point, so the direction restore
+  // must be attempted even if the latch restore fails first. Returning early
+  // here would leave the fixture driven.
+  const PCA9555::Status latchRestore = device.writeOutputs(savedOut);
+  reportCheck("restore bit-test output latches", latchRestore.ok(),
+              latchRestore.ok() ? "" : errToStr(latchRestore.code));
   const PCA9555::Status polarityRestore = device.setPolarity(savedPol);
   reportCheck("restore bit-test polarity", polarityRestore.ok(),
               polarityRestore.ok() ? "" : errToStr(polarityRestore.code));
   const PCA9555::Status directionRestore = device.setConfiguration(savedCfg);
   reportCheck("restore bit-test direction", directionRestore.ok(),
               directionRestore.ok() ? "" : errToStr(directionRestore.code));
-  if (!polarityRestore.ok() || !directionRestore.ok()) {
+  if (!latchRestore.ok() || !polarityRestore.ok() || !directionRestore.ok()) {
     reportSkip("remaining checks", "selftest aborted after restore failure");
     printResult();
     return;
@@ -2088,7 +2112,7 @@ void printHelp() {
   cli::printHelpItem("recover [confirm]", "Apply the explicit example recovery image");
   cli::printHelpItem("verbose [0|1]", "Enable/disable verbose output");
   cli::printHelpItem("selftest [confirm]", "Run guarded mutating API self-test incl. readback, masks, direction, and polarity");
-  cli::printHelpItem("stress [N]", "Run N readInputs cycles (default 10)");
+  cli::printHelpItem("stress [N]", "Run N readInputs cycles (1..10000, default 10)");
   cli::printHelpItem("stress_mix [N] [confirm]", "Run N mixed read/write/config/polarity/mask cycles (default 50)");
 }
 
@@ -2589,11 +2613,13 @@ void processCommand(const String& cmdLine) {
   if (cmd.startsWith("stress ")) {
     const char* cursor = cmd.c_str() + 7;
     long parsedCount = 0;
+    // Same upper bound as the native ESP-IDF CLI: the run has no abort command,
+    // so an unbounded count could only be stopped by resetting the board.
     if (!parseLongToken(cursor, parsedCount) ||
         hasTrailingArgs(cursor) ||
         parsedCount <= 0 ||
-        parsedCount > std::numeric_limits<int>::max()) {
-      LOGW("Usage: stress <positive count>");
+        parsedCount > MAX_STRESS_COUNT) {
+      LOGW("Usage: stress <1..%ld>", static_cast<long>(MAX_STRESS_COUNT));
       return;
     }
     const int count = static_cast<int>(parsedCount);

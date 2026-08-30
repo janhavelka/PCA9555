@@ -43,6 +43,20 @@ Access never crosses from one pair to the next in a single PCA9555 transaction.
 The library direct bulk helpers are therefore limited to one or two bytes within
 one pair.
 
+Auto-increment is always active and needs no enabling. Command-byte bits above
+the documented `0x00` through `0x07` range are not specified by the datasheet;
+keep command bytes inside that range.
+
+## Output Enable Ordering
+
+Configuration bit `1` is input and `0` is push-pull output, so clearing a
+Configuration bit connects the pin to whatever the Output latch already holds.
+Write the intended Output latch value **before** clearing the matching
+Configuration bit, or the pin briefly drives the stale latch value. The library
+enforces this in `configureOutputs()`, `configureOutputBits()`,
+`setDirection()`, `setConfiguration()`, `setPortConfiguration()` and
+`startApplyImage()`, and rejects raw Configuration writes for the same reason.
+
 ## Direct Access Rules
 
 - `readRegister()` reads a single register.
@@ -92,9 +106,18 @@ one pair.
 - Pins configured as outputs do not generate input-change interrupts.
 - Changing an output to an input can cause false interrupt behavior if the
   sampled pin state differs from the previous input-register state.
-- The PCA9555 interrupt errata workaround parks the command pointer at
-  `cmd::ERRATA_SAFE_CMD` (`0x02`) after input reads. On a shared bus, the input
-  read and pointer-park write are one owner-exclusive protocol sequence; no
-  other operation on this driver may interleave between them. Cooperative
-  cancellation or whole-operation timeout does not silently discard required
-  cleanup after the input read has completed.
+
+### The errata condition and the pointer park
+
+TI documents this errata: if the PCA9555 command pointer is left at Input Port 0
+(`0x00`) and another target on the same bus acknowledges a read address, the
+PCA9555 can de-assert INT improperly. The workaround is to write a command byte
+other than `0x00` after reading input ports, before any other target read on that
+bus.
+
+The library always parks the command pointer at `cmd::ERRATA_SAFE_CMD` (`0x02`)
+after an input read; this is unconditional and cannot be disabled. On a shared
+bus the input read and the pointer-park write are one owner-exclusive protocol
+sequence, and no other operation on this driver may interleave between them.
+Cooperative cancellation or whole-operation timeout does not silently discard
+required cleanup after the input read has completed.

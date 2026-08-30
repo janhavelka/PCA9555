@@ -257,21 +257,32 @@ class PCA9555 {
   const ObservedState& lastObservedState() const { return _observed; }
 
   /// Admit a bounded write-and-verify of a complete caller-owned image.
-  /// Admission performs zero I2C; timeoutMs must be 1 through INT32_MAX.
+  /// Admission performs zero I2C and returns Err::IN_PROGRESS on success;
+  /// timeoutMs must be 1 through INT32_MAX. The operation writes and reads back
+  /// all three writable pairs, then reads both input ports and parks the command
+  /// pointer, so it also clears both pending interrupt sources.
   Status startApplyImage(uint32_t requestId, const RegisterImage& image,
                          uint32_t nowMs, uint32_t timeoutMs);
   /// Admit a bounded readback comparison against a complete caller image.
+  /// Admission performs zero I2C and returns Err::IN_PROGRESS on success.
+  /// Reads only; it does not touch the input ports or the command pointer.
   Status startVerifyImage(uint32_t requestId, const RegisterImage& expected,
                           uint32_t nowMs, uint32_t timeoutMs);
   /// Admit an exclusive two-port input read and required pointer park.
+  /// Admission performs zero I2C and returns Err::IN_PROGRESS on success.
   Status startReadInputs(uint32_t requestId, uint32_t nowMs,
                          uint32_t timeoutMs);
   /// Advance the matching operation by at most transactionBudget callbacks.
+  /// Returns Err::IN_PROGRESS while work remains, otherwise the terminal status.
   Status pollOperation(uint32_t requestId, uint32_t nowMs,
                        uint8_t transactionBudget, uint8_t& transactionsUsed);
   /// Request cooperative cancellation of the matching active operation.
+  /// Returns Status::Ok() once the result is terminal, or Err::IN_PROGRESS while
+  /// a required pointer park still owes one bounded pollOperation() call.
   Status cancelOperation(uint32_t requestId);
   /// Request a caller-forced cooperative timeout of the matching operation.
+  /// Returns Status::Ok() once the result is terminal, or Err::IN_PROGRESS while
+  /// a required pointer park still owes one bounded pollOperation() call.
   Status timeoutOperation(uint32_t requestId);
   /// Consume the matching terminal result exactly once.
   Status takeOperationResult(uint32_t requestId, OperationResult& result);

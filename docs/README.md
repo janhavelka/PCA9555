@@ -12,15 +12,14 @@ and API contracts live in Doxygen comments under `include/PCA9555/`.
   summary.
 - [Chip notes](chip_notes.md): durable electrical, reset, current, interrupt,
   and layout facts extracted from the source chip documentation.
-- [Hardware validation](hardware_validation.md): HIL runner usage, target run
-  command contract, known serial-channel constraint, and open hardware gates.
-- [v3.0.1 ESP32-S3 HIL summary](reports/hil-validation-COM4-pioarduino-55.03.311-20260731.md):
-  reviewed automated target evidence and explicitly open physical checks.
+- [Hardware validation](hardware_validation.md): evidence on record, HIL runner
+  usage, target run command contract, known serial-channel constraint, and open
+  hardware gates.
 - [ESP-IDF notes](espidf.md): native ESP-IDF component/example boundary,
   transport ownership, and static contract checks.
-- [Datasheet extraction](datasheet_extraction.md):
-  comprehensive datasheet extraction retained as AI-coder and implementation
-  review context. The TI datasheet remains authoritative.
+- [Datasheet extraction](datasheet_extraction.md): page-cited extraction of the
+  TI datasheet, kept as the implementation reference for register, timing, and
+  errata questions. The TI datasheet remains authoritative.
 - [Changelog](../CHANGELOG.md): versioned API and behavior history.
 - [Security policy](../SECURITY.md): supported-version and vulnerability
   reporting policy.

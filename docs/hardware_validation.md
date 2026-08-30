@@ -1,29 +1,31 @@
 # Hardware Validation
 
-Automated ESP32-S3/PCA9555 upgrade HIL was performed on COM4 on 2026-07-31 with
-pioarduino `55.03.311`. The reviewed summary at
-`docs/reports/hil-validation-COM4-pioarduino-55.03.311-20260731.md` records
-46/46 post-fix full/fault results and 72/72 extended commands passing, final
-READY health, 2,604 tracked successes, and zero failures while retaining the
-physical gates below.
+This runbook owns the hardware-evidence status of the library. It records what
+automated target runs have proved, what remains open, and how to run the HIL
+runner. Full machine transcripts are never committed; keep them under
+`hil_logs/`, which Git ignores.
 
-Hardware qualification for this release is scoped to Arduino ESP32-S3.
-ESP32-S2 and native ESP-IDF remain build/contract targets and are not hardware
-gates; the S3 evidence does not validate native ESP-IDF runtime behavior.
-Earlier COM7 HIL on 2026-07-22 completed a 73-minute device-side
-input-read/pointer-park stress with 15,000,000 operations and zero failures.
-That historical supporting result remains in the v3.0.1 changelog and Git
-history; it is not electrical, analyzer, reset, or shared-bus evidence. An I2C
-ACK proves address response only; the PCA9555 has no documented chip-ID
-register.
+## Evidence On Record
 
-All real-target gates below remain open. Store temporary runner output under
-`hil_logs/`; Git ignores that directory. Commit only a short reviewed summary
-when a run closes a gate.
+Hardware qualification is scoped to Arduino ESP32-S3. ESP32-S2 and native
+ESP-IDF are build/contract targets only; the S3 evidence does not validate
+native ESP-IDF runtime behavior. An I2C ACK proves address response only — the
+PCA9555 has no documented chip-ID register, so no run can claim chip identity.
+
+| Date | Target | Result |
+| --- | --- | --- |
+| 2026-07-31 | ESP32-S3 on COM4, pioarduino `55.03.311` (Arduino-ESP32 `3.3.11`, ESP-IDF `v5.5.5`), PCA9555 at `0x20`, 400 kHz, SDA GPIO8 / SCL GPIO9 | Release-candidate full and fault plan 46/46; extended command plan 72/72 including all four odd-start paired-register wrap cases, all eight scalar register reads, a 32/32 sweep, a 16/16 walking-one test and 24 complete-image recoveries; the 22 fault-injection rejection cases left every reported health and settings field unchanged. Final health READY with 2,604 tracked successes and zero failures. |
+| 2026-07-22 | ESP32-S3 on COM7 | 73-minute device-side input-read/pointer-park stress, 15,000,000 operations, zero failures. |
+
+Neither run is electrical, analyzer, reset, or shared-bus evidence, and both
+carry the runner verdict `OPERATOR_REVIEW_REQUIRED`. Every gate in the Open
+Gates table below remains open. Detailed per-run transcripts live in Git
+history; record a new row here when a run closes a gate rather than committing
+another dated report file.
 
 ## Known Constraint
 
-The June 2026 v2-era ESP32-S3 run used native USB CDC. Opening COM5 reset the
+The June 2026 v2-era ESP32-S3 run used native USB CDC. Opening the port reset the
 target, and long sessions also timed out, so the run did not prove continuous
 firmware uptime. Use a non-resetting UART or another stable command channel for
 the strongest uptime evidence. The runner keeps one serial session open by
@@ -93,13 +95,15 @@ The default command contract is:
 For a bounded eight-hour soak on a stable serial channel:
 
 ```text
-python tools/run_i2c_hil.py --port <PORT> --soak-duration-s 28800 --soak-command-mix read,outputs,config,polarity,health,probe --report docs/reports/hil-validation-<TARGET>-YYYYMMDD.md
+python tools/run_i2c_hil.py --port <PORT> --soak-duration-s 28800 --soak-command-mix read,outputs,config,polarity,health,probe --report hil_logs/hil-validation-<TARGET>-YYYYMMDD.md
 ```
 
 The runner writes concise Markdown and JSON summaries, not full CLI
 transcripts. Manual rows remain `OPERATOR_CHECK_REQUIRED`, and a serial PASS
 remains `OPERATOR_REVIEW_REQUIRED`, until the checks below have attached
-evidence.
+evidence. Runner output belongs in the ignored `hil_logs/` directory; when a run
+changes the evidence status, edit the table above instead of committing the
+generated file.
 
 ## Open Gates
 

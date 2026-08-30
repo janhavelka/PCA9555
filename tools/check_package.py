@@ -29,7 +29,6 @@ REQUIRED_FILES = {
     "docs/datasheet_extraction.md",
     "docs/espidf.md",
     "docs/hardware_validation.md",
-    "docs/reports/hil-validation-COM4-pioarduino-55.03.311-20260731.md",
     "docs/register_reference.md",
     "examples/01_basic_bringup_cli/main.cpp",
     "examples/espidf_basic/main/main.cpp",

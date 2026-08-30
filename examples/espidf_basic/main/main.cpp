@@ -83,13 +83,23 @@ PCA9555::TransportResult mapI2c(
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::TIMEOUT, err, writeEffect);
   }
-  if (err == ESP_ERR_INVALID_ARG) {
+  if (err == ESP_ERR_INVALID_ARG || err == ESP_ERR_INVALID_RESPONSE) {
     return PCA9555::TransportResult::Error(
         PCA9555::TransportCode::IO_ERROR, err, writeEffect);
   }
-  if (err == ESP_ERR_INVALID_RESPONSE || err == ESP_ERR_NOT_FOUND) {
+  // driver/i2c_master.h has no NACK-specific return code. A synchronous
+  // transfer that ends in any non-DONE state - address NACK, data NACK, or a
+  // post-START bus fault - surfaces as ESP_ERR_INVALID_STATE. ESP_ERR_NOT_FOUND
+  // comes from i2c_master_probe() and ESP_FAIL from the legacy driver.
+  // Classifying these as NACK_ADDRESS is what lets PCA9555::probe() answer
+  // DEVICE_NOT_FOUND for a missing expander; treat it as best-effort "no ACK
+  // observed" evidence, not proof that the bus itself is healthy. The failing
+  // phase is unknown, so writeEffect stays whatever the caller passed and the
+  // protocol shadow remains conservatively fenced.
+  if (err == ESP_ERR_INVALID_STATE || err == ESP_FAIL ||
+      err == ESP_ERR_NOT_FOUND) {
     return PCA9555::TransportResult::Error(
-        PCA9555::TransportCode::IO_ERROR, err, writeEffect);
+        PCA9555::TransportCode::NACK_ADDRESS, err, writeEffect);
   }
   return PCA9555::TransportResult::Error(
       PCA9555::TransportCode::BUS_ERROR, err, writeEffect);
@@ -497,6 +507,42 @@ void printPinInfo(PCA9555::Pin pin) {
   }
 }
 
+// Whole-device pin summary from four complete pair reads. Calling printPinInfo()
+// sixteen times would cost ~80 transfers and, because every readPin() services
+// the input port, would clear the interrupt sixteen times while merely
+// inspecting state.
+void printAllPins() {
+  PCA9555::PortData inputs{};
+  PCA9555::PortData outputs{};
+  PCA9555::PortData config{};
+  PCA9555::PortData polarity{};
+
+  PCA9555::Status st = gDev.readInputs(inputs);
+  if (st.ok()) st = gDev.readOutputs(outputs);
+  if (st.ok()) st = gDev.getConfiguration(config);
+  if (st.ok()) st = gDev.getPolarity(polarity);
+  printStatus("pins", st);
+  if (!st.ok()) {
+    return;
+  }
+
+  for (uint8_t index = 0; index < PCA9555::cmd::TOTAL_PINS; ++index) {
+    const PCA9555::Pin pin = static_cast<PCA9555::Pin>(index);
+    const bool port1 = PCA9555::portOf(pin) == PCA9555::Port::PORT_1;
+    const uint8_t bit = PCA9555::bitOf(pin);
+    const uint8_t inputByte = port1 ? inputs.port1 : inputs.port0;
+    const uint8_t outputByte = port1 ? outputs.port1 : outputs.port0;
+    const uint8_t configByte = port1 ? config.port1 : config.port0;
+    const uint8_t polarityByte = port1 ? polarity.port1 : polarity.port0;
+    printf("pin=%u input=%d output_latch=%d direction=%s polarity=%s\n",
+           static_cast<unsigned>(index),
+           ((inputByte >> bit) & 0x01U) != 0U ? 1 : 0,
+           ((outputByte >> bit) & 0x01U) != 0U ? 1 : 0,
+           ((configByte >> bit) & 0x01U) != 0U ? "input" : "output",
+           ((polarityByte >> bit) & 0x01U) != 0U ? "inverted" : "normal");
+  }
+}
+
 void printConfirmationRequired(const char* wouldChange, const char* reason,
                                const char* confirmedCommand) {
   puts("Confirmation required.");
@@ -524,6 +570,14 @@ const char* portName(PCA9555::Port port) {
 
 uint8_t physicalPortForPin(PCA9555::Pin pin) {
   return PCA9555::pinIndex(pin) < PCA9555::cmd::PINS_PER_PORT ? 0U : 1U;
+}
+
+// PCA9555 auto-increment toggles inside a register pair, so a two-byte access
+// that starts on an odd register wraps back to the even one instead of
+// advancing to the next pair.
+uint8_t autoIncrementPairRegister(uint8_t startReg, uint32_t offset) {
+  return static_cast<uint8_t>((startReg & 0xFEU) |
+                              ((startReg + offset) & 0x01U));
 }
 
 PCA9555::Status applyExampleRecoveryImage() {
@@ -563,15 +617,23 @@ void delayMs(uint32_t delay) {
   }
 }
 
+// Restore always attempts the direction write even when an earlier step failed.
+// Leaving pins configured as driven outputs is the unsafe state, and the
+// library refuses a direction change that would enable an output from an
+// uncertain latch, so the attempt fails closed rather than driving blind.
+PCA9555::Status firstFailure(const PCA9555::Status& first,
+                             const PCA9555::Status& next) {
+  return first.ok() ? next : first;
+}
+
 PCA9555::Status restoreOutputAndDirection(
     const PCA9555::PortData& outputs,
     const PCA9555::PortData& config) {
   PCA9555::Status st = gDev.writeOutputs(outputs);
   printStatus("restore output latches", st);
-  if (!st.ok()) return st;
-  st = gDev.setConfiguration(config);
-  printStatus("restore direction", st);
-  return st;
+  const PCA9555::Status directionStatus = gDev.setConfiguration(config);
+  printStatus("restore direction", directionStatus);
+  return firstFailure(st, directionStatus);
 }
 
 PCA9555::Status restoreState(const PCA9555::PortData& outputs,
@@ -579,13 +641,11 @@ PCA9555::Status restoreState(const PCA9555::PortData& outputs,
                              const PCA9555::PortData& config) {
   PCA9555::Status st = gDev.writeOutputs(outputs);
   printStatus("restore output latches", st);
-  if (!st.ok()) return st;
-  st = gDev.setPolarity(polarity);
-  printStatus("restore polarity", st);
-  const PCA9555::Status polarityStatus = st;
+  const PCA9555::Status polarityStatus = gDev.setPolarity(polarity);
+  printStatus("restore polarity", polarityStatus);
   const PCA9555::Status directionStatus = gDev.setConfiguration(config);
   printStatus("restore direction", directionStatus);
-  return polarityStatus.ok() ? directionStatus : polarityStatus;
+  return firstFailure(firstFailure(st, polarityStatus), directionStatus);
 }
 
 void reportCheck(const char* label, bool passed, uint32_t* passCount, uint32_t* failCount) {
@@ -1633,9 +1693,7 @@ void handleCommand(char* line) {
       puts("Usage: pininfo <0..15>");
     }
   } else if (strcmp(full, "pins") == 0) {
-    for (uint8_t pinIndex = 0; pinIndex < 16U; ++pinIndex) {
-      printPinInfo(static_cast<PCA9555::Pin>(pinIndex));
-    }
+    printAllPins();
   } else if (strncmp(full, "write pin ", 10) == 0) {
     cmdWritePin(full + 10);
   } else if (strncmp(full, "wpin ", 5) == 0) {
@@ -1732,12 +1790,24 @@ void handleCommand(char* line) {
     printStatus("rregs", st);
     if (st.ok()) {
       for (uint32_t i = 0; i < len; ++i) {
-        printf("reg[0x%02X]=0x%02X\n", static_cast<unsigned>(reg + i), values[i]);
+        printf("reg[0x%02X]=0x%02X\n",
+               static_cast<unsigned>(autoIncrementPairRegister(
+                   static_cast<uint8_t>(reg), i)),
+               values[i]);
       }
     }
-  } else if (strcmp(full, "verbose") == 0 || strncmp(full, "verbose ", 8) == 0) {
-    gVerbose = strstr(full, " 0") == nullptr && (strstr(full, " 1") != nullptr || !gVerbose);
+  } else if (strcmp(full, "verbose") == 0) {
+    // Bare `verbose` reports, it does not toggle - same as the Arduino CLI.
     printf("verbose=%d\n", gVerbose ? 1 : 0);
+  } else if (strncmp(full, "verbose ", 8) == 0) {
+    const char* cursor = full + 8;
+    uint32_t value = 0;
+    if (parseU32Token(cursor, &value) && value <= 1U && !hasTrailingArgs(cursor)) {
+      gVerbose = value != 0U;
+      printf("verbose=%d\n", gVerbose ? 1 : 0);
+    } else {
+      printUsage("verbose [0|1]");
+    }
   } else {
     puts("Unknown command. Try 'help'.");
   }

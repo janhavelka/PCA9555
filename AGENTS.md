@@ -13,7 +13,9 @@ wrapper cannot find it, stop and report the missing installation.
 ## Role and Target
 You are a professional embedded software engineer building a production-grade PCA9555 16-bit I/O expander library.
 
-- Target: ESP32-S2 / ESP32-S3, Arduino framework, PlatformIO.
+- The core library is framework-neutral C++17 and must build without Arduino or ESP-IDF.
+- Validated build targets: Arduino ESP32-S2 / ESP32-S3 via PlatformIO, native ESP-IDF via the root `CMakeLists.txt`, and a host-native test environment.
+- The library is used both standalone for bench-testing a PCA9555 and as a component inside a larger firmware. Neither use may require the other.
 - Goals: deterministic behavior, long-term stability, clean API contracts, portability, no surprises in the field.
 - These rules are binding.
 
@@ -28,16 +30,20 @@ include/PCA9555/         - Public API headers only (Doxygen)
   Config.h
   PCA9555.h
   Version.h              - Auto-generated (do not edit)
-src/                     - Implementation (.cpp)
+src/PCA9555.cpp          - The whole implementation
 examples/
-  01_*/
-  common/                - Example-only helpers (Log.h, BoardConfig.h,
+  01_basic_bringup_cli/  - Arduino bring-up and HIL CLI
+  espidf_basic/          - Native ESP-IDF bring-up CLI
+  common/                - Example-only helpers (Log.h, BuildConfig.h,
+                           BoardConfig.h, CliShell.h, CliStyle.h,
                            I2cTransport.h, I2cScanner.h, HealthDiag.h)
-platformio.ini
-library.json
-README.md
-CHANGELOG.md
-AGENTS.md
+test/                    - Native Unity tests plus Arduino/Wire stubs
+tools/                   - Contract checkers, package check, HIL runner
+scripts/                 - generate_version.py, pio.cmd (Windows wrapper)
+docs/                    - Durable public documentation (see docs/README.md)
+.github/workflows/ci.yml - Build, native test, contract and package gates
+platformio.ini  library.json  idf_component.yml  CMakeLists.txt  Doxyfile
+README.md  CHANGELOG.md  CONTRIBUTING.md  SECURITY.md  AGENTS.md
 ```
 
 Rules:
@@ -45,6 +51,7 @@ Rules:
 - No board-specific pins/bus in library code; only in `Config`.
 - Public headers only in `include/PCA9555/`.
 - Examples demonstrate usage and may use `examples/common/BoardConfig.h`.
+- Every fact about the chip has exactly one owning document; see `docs/README.md`.
 - Keep the layout boring and predictable.
 
 ---
@@ -223,6 +230,11 @@ Transport callbacks (Config::i2cWrite, i2cWriteRead)
 - NOT called for config/param validation errors (INVALID_CONFIG, INVALID_PARAM).
 - NOT called for precondition errors (NOT_INITIALIZED).
 - `probe()` uses raw I2C and does NOT update health (diagnostic only).
+- The errata pointer park is protocol cleanup, not caller-requested work. A
+  failed park records a failure; a successful park records nothing. Counting the
+  park as a success would clear the DEGRADED state and the consecutive-failure
+  count produced by the input read it is cleaning up after, hiding every
+  input-read failure from a caller's health policy.
 
 ### Health Tracking Fields
 

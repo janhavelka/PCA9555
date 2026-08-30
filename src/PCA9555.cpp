@@ -247,6 +247,9 @@ void PCA9555::_establishShadowPair(uint8_t pair, uint16_t value) {
   if (pair == PAIR_DIRECTIONS) _shadow.directions = value;
   _shadowValidPairs = static_cast<uint8_t>(_shadowValidPairs | pair);
   _uncertainPairs = static_cast<uint8_t>(_uncertainPairs & ~pair);
+  // Re-establishing a pair supersedes any earlier readback contradiction, so a
+  // snapshot can never report the same pair as both shadow-valid and mismatched.
+  _observed.mismatchPairs = static_cast<uint8_t>(_observed.mismatchPairs & ~pair);
 }
 
 uint16_t PCA9555::_shadowValue(uint8_t pair) const {
@@ -402,7 +405,13 @@ Status PCA9555::_writePort(uint8_t reg, uint8_t value, uint8_t pair,
 Status PCA9555::_parkPointer() {
   const uint8_t command = cmd::ERRATA_SAFE_CMD;
   WriteEffect effect = WriteEffect::NOT_APPLICABLE;
-  return _i2cWriteTracked(&command, 1U, effect);
+  const Status status = _i2cWriteRaw(&command, 1U, effect);
+  // The park is protocol cleanup, not caller-requested work. A failed park is
+  // real transport evidence, but a successful one must not be counted as a
+  // success: doing so would clear the DEGRADED state and the consecutive-failure
+  // count set by the input read this park is cleaning up after.
+  if (!status.ok()) _updateHealth(status);
+  return status;
 }
 
 Status PCA9555::_readInputPair(PortData& data, bool& readCompleted) {
@@ -731,7 +740,13 @@ Status PCA9555::_executeOperationTransfer(uint32_t nowMs) {
             _operation.result.completedPairs | PAIR_INPUTS);
         _operation.result.cleanupRequired = true;
         _operation.phase = OperationPhase::POINTER_PARK;
-      } else if (commandEffect != WriteEffect::NOT_ATTEMPTED) {
+      } else {
+        // Match the synchronous path: a failed sample must not leave the
+        // previous input observation marked valid with a stale timestamp.
+        _observed.validPairs = static_cast<uint8_t>(
+            _observed.validPairs & ~PAIR_INPUTS);
+      }
+      if (!status.ok() && commandEffect != WriteEffect::NOT_ATTEMPTED) {
         // The input command may be the chip's active register pointer even
         // though the receive phase failed. Preserve the read failure and park
         // the pointer as a separate, bounded cleanup transfer.
@@ -1063,8 +1078,8 @@ Status PCA9555::preloadOutput(Pin pin, bool high) {
 }
 
 Status PCA9555::preloadOutputs(PinMask mask, PinMask values) {
-  const Status bound = _boundStatus();
-  if (!bound.ok()) return bound;
+  const Status ready = _shadowStatus(PAIR_NONE);
+  if (!ready.ok()) return ready;
   if (mask == 0U) return Status::Ok();
   uint16_t desired = values;
   if (mask != 0xFFFFU) {
@@ -1171,7 +1186,9 @@ Status PCA9555::getPortConfiguration(Port port, uint8_t& value) {
 
 Status PCA9555::configureOutputs(PinMask outputMask,
                                  PinMask outputValues) {
-  if (outputMask == 0U) return _boundStatus();
+  // An empty mask still has to answer the ownership question: PAIR_NONE runs the
+  // bound and cooperative-operation guards without demanding any shadow pair.
+  if (outputMask == 0U) return _shadowStatus(PAIR_NONE);
   const Status clean = _shadowStatus(PAIR_OUTPUTS | PAIR_DIRECTIONS);
   if (!clean.ok()) return clean;
   const uint16_t outputs = static_cast<uint16_t>(

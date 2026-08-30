@@ -40,7 +40,7 @@
 
 (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1, p.31)
 
-### Addendum: Latch-Up and ESD Feature Ratings
+### Latch-Up and ESD Feature Ratings
 
 - **Latch-up performance** exceeds 100 mA per JESD 78, Class II.
   (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1)
@@ -128,7 +128,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 
 (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.5)
 
-### Addendum: Absolute Maximum Ratings
+### Absolute Maximum Ratings
 
 | Parameter | Symbol | Min | Max | Unit | Notes |
 |-----------|--------|-----|-----|------|-------|
@@ -149,7 +149,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 **Stresses beyond those listed under Absolute Maximum Ratings may cause permanent damage to the device. These are stress ratings only, and functional operation of the device at these or any other conditions beyond those indicated under Recommended Operating Conditions is not implied. Exposure to absolute-maximum-rated conditions for extended periods may affect device reliability.**
 (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.5)
 
-### Addendum: Output Voltage Specifications (VOH, VOL)
+### Output Voltage Specifications (VOH, VOL)
 
 **P-Port High-Level Output Voltage (VOH)**:
 
@@ -173,7 +173,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 
 (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7)
 
-### Addendum: Input Diode Clamp and Leakage Currents
+### Input Diode Clamp and Leakage Currents
 
 | Parameter | Symbol | Test Condition | VCC | Min | Typ | Max | Unit |
 |-----------|--------|----------------|-----|-----|-----|-----|------|
@@ -284,7 +284,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 
 (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.7)
 
-### Addendum: Electrical Characteristics Footnotes
+### Electrical Characteristics Footnotes
 
 - (1) All typical values are at nominal supply voltage (2.5-V, 3.3-V, or 5-V VCC) and TA = 25°C.
 - (2) Each I/O must be externally limited to a maximum of 25 mA, and each octal (P07–P00 and P17–P10) must be limited to a maximum current of 100 mA, for a device total of 200 mA.
@@ -293,7 +293,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 - (5) Switching Characteristics test condition: CL ≤ 100 pF.
   (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.5, p.7, p.8)
 
-### Addendum: Thermal Information
+### Thermal Information
 
 | Thermal Metric | DB (SSOP) | DBQ (QSOP) | DGV (TVSOP) | DW (SOIC) | PW (TSSOP) | RGE (QFN) | Unit |
 |----------------|-----------|------------|-------------|-----------|------------|-----------|------|
@@ -307,7 +307,7 @@ The PCA9555 is a **16-bit I/O expander** for the I2C / SMBus bus, operating from
 All packages are 24 pins.
 (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.6)
 
-### Addendum: Parameter Measurement Test Conditions
+### Parameter Measurement Test Conditions
 
 - **I2C load circuit**: RL = 1 kΩ pullup to VCC, CL = 50 pF (includes probe and jig capacitance).
 - **P-port load circuit**: CL = 100 pF (includes probe and jig capacitance).
@@ -917,7 +917,7 @@ Not applicable to this device. The PCA9555 has no nonvolatile memory, OTP, or EE
 
 (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.14, p.27)
 
-### Addendum: 16.11 QFN Package Pin Mapping Differences
+### 16.11 QFN Package Pin Mapping Differences
 
 The QFN (RGE) package has a different pinout from the SSOP/TSSOP/TVSOP/SOIC packages. Key differences:
 
@@ -939,7 +939,7 @@ The QFN (RGE) package has a different pinout from the SSOP/TSSOP/TVSOP/SOIC pack
 The QFN package also has a thermal pad on the bottom.
 (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.4)
 
-### Addendum: 16.12 Layout Guidelines
+### 16.12 Layout Guidelines
 
 - Common PCB layout practices must be followed; additional high-speed concerns like matched impedances and differential pairs are **not** a concern at I2C signal speeds.
 - Avoid right angles in signal traces.
@@ -950,7 +950,7 @@ The QFN package also has a thermal pad on the bottom.
 - A **4-layer PCB** is preferable for higher-density boards (signals on top/bottom, one internal ground plane, one internal power plane). Use vias next to SMD pads to connect to internal planes.
   (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.29)
 
-### Addendum: 16.13 I2C Pullup Resistor Sizing
+### 16.13 I2C Pullup Resistor Sizing
 
 The datasheet provides application curves (Figure 9-4 and 9-5) for pullup resistor selection:
 
@@ -965,7 +965,7 @@ The datasheet provides application curves (Figure 9-4 and 9-5) for pullup resist
 - At VCC = 3.3 V: Rp_min ≈ 1 kΩ.
   (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.26)
 
-### Addendum: 16.14 Typical Application Circuit Details
+### 16.14 Typical Application Circuit Details
 
 The typical application circuit (Figure 9-1) shows:
 - **Pullup resistors**: 10 kΩ on SDA, SCL, and INT lines (to VCC = 5 V).
@@ -1054,12 +1054,12 @@ The datasheet explicitly describes using INT to signal the master that an input 
 
 - The device is described as compatible with "I2C and SMBus" but the specific SMBus compliance level (1.0, 1.1, 2.0, etc.) is not stated.
 
-### Addendum: 18.10 Machine Model ESD Discrepancy
+### 18.10 Machine Model ESD Discrepancy
 
 - The Features list (p.1) claims ESD protection for "200-V Machine Model (A115-A)", but the formal ESD Ratings table (p.5, Section 6.2) lists only HBM (2000 V) and CDM (1000 V). Machine Model is not included in the ESD Ratings table, possibly because it was deprecated from JEDEC standards after the original datasheet revision.
   (PCA9555-Remote-16-bit-I2C-SMBus-IO-Expander-Data-Sheet-SCPS131J.pdf, p.1, p.5)
 
-### Addendum: 18.11 Revision History — Implementation-Relevant Changes
+### 18.11 Revision History — Implementation-Relevant Changes
 
 Key changes across datasheet revisions that may affect designs based on older revisions:
 - **Rev I → Rev J (March 2021)**: VIH max for SCL/SDA changed from 5.5 V to VCC. Ci SCL max changed from 7 pF to 8 pF. Cio SDA max changed from 7 pF to 9.5 pF. VPORF row added. ICC standby high inputs values changed. Power supply recommendations changed.

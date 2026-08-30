@@ -21,6 +21,8 @@ validation are still required before a field-readiness claim.
 - Plain register APIs are synchronous and use one callback. Input APIs use at
   most two callbacks for read plus pointer park. Safe direction APIs use at
   most two callbacks for latch preload plus direction write.
+  `readObservedState()` is the one synchronous exception: it uses three
+  callbacks and can block for up to three callback timeouts.
 - Compound apply, verify, and input-read work has one fixed cooperative
   operation slot with a caller-supplied request ID, admission time,
   whole-operation timeout, and transfer budget.
@@ -129,7 +131,9 @@ storage; `Status::detail` carries error-specific numeric evidence.
 | `TIMEOUT` | The caller-owned cooperative operation deadline expired or the caller explicitly requested timeout. It is distinct from one callback timing out. |
 | `SHADOW_INVALID`, `STATE_UNCERTAIN` | Cached read-modify-write is unsafe. Verify or apply a complete caller-owned image before continuing. |
 | `VERIFY_MISMATCH` | Readback did not match the complete expected image. Inspect `OperationResult::mismatchPairs`. |
-| `IN_PROGRESS`, `NO_RESULT`, `CANCELLED` | Cooperative lifecycle evidence; keep the exact request ID and consume each terminal result once. |
+| `CONFIG_REG_MISMATCH` | `checkPorDefaults()` read Configuration registers that are not `0xFF/0xFF`. `Status::detail` carries the observed 16-bit value. |
+| `UNSUPPORTED` | A raw `writeRegister()`/`writeRegisters()` targeted a Configuration register. Use the named direction APIs so latches are preloaded first. |
+| `IN_PROGRESS`, `NO_RESULT`, `CANCELLED` | Cooperative lifecycle evidence; keep the exact request ID and consume each terminal result once. `IN_PROGRESS` is also the success reply of `startApplyImage()`/`startVerifyImage()`/`startReadInputs()` admission. |
 
 Read output parameters only when the corresponding receive completed. Input
 APIs deliberately retain valid received data even if the following mandatory
@@ -140,12 +144,23 @@ the same distinction explicitly.
 
 ## Typed synchronous APIs
 
+A fresh `bind()` performs no I2C, so the driver holds no protocol shadow yet and
+every cached read-modify-write helper fails with `SHADOW_INVALID` until each
+writable pair has been established by one complete pair write. Establish all
+three pairs first; only then are the per-pin helpers usable.
+
 ```cpp
 using namespace PCA9555;
 
-// First establish and verify a complete caller-owned RegisterImage with the
-// cooperative startApplyImage()/pollOperation()/takeOperationResult() flow.
-Status status = device.preloadOutput(Pin::P03, Level::LOW_LEVEL);
+// Cold start: three complete pair writes establish the whole writable shadow.
+// preloadOutputs() with a full 0xFFFF mask needs no prior shadow, and
+// setConfiguration() to all-inputs enables nothing, so this order is glitch-free.
+Status status = device.preloadOutputs(0xFFFF, 0xFFFF);              // latches high
+if (status.ok()) status = device.setPolarity(PortData::fromCombined(0x0000));
+if (status.ok()) status = device.setConfiguration(PortData::fromCombined(0xFFFF));
+
+// The per-pin helpers work from here on.
+if (status.ok()) status = device.preloadOutput(Pin::P03, Level::LOW_LEVEL);
 if (status.ok()) status = device.setDirection(Pin::P03, Direction::OUTPUT_MODE);
 if (status.ok()) status = device.writePin(Pin::P03, Level::HIGH_LEVEL);
 
@@ -158,6 +173,10 @@ if (!status.ok()) {
   // Caller handles the exact error; the driver does not retry.
 }
 ```
+
+`startApplyImage()` is the equivalent cold start for an owner that wants the
+readback verified in the same bounded operation; it also establishes all three
+pairs. Either bootstrap is required — reads never establish the shadow.
 
 The `Pin` names match the data sheet: `P00` through `P07`, then `P10` through
 `P17`. A `PinMask` uses bit 0 for P00 and bit 15 for P17. Helpers such as
@@ -283,7 +302,9 @@ and only re-establish it after a complete two-register write.
 
 Health counters and timestamps are observational. They never suppress a
 requested transfer. `probe()` is a diagnostic raw transfer and does not update
-health. The caller decides absence policy, retry eligibility, device health,
+health. The errata pointer park counts only when it fails, so a successful
+cleanup transfer cannot clear the DEGRADED state produced by the input read it
+follows. The caller decides absence policy, retry eligibility, device health,
 and bus recovery.
 
 The class is non-copyable, non-movable, single-threaded, non-reentrant, and not

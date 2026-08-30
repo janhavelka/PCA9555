@@ -41,10 +41,22 @@ REQUIRED_NATIVE_TOKENS = [
     "vTaskDelay",
     "fgets",
     "i2c_new_master_bus",
+    "i2c_master_probe",
     "initConsole",
+    "probeTargetAddress",
+    "uart_driver_install",
     "uart_vfs_dev_use_driver",
+    "uart_vfs_dev_port_set_rx_line_endings",
+    "uart_vfs_dev_port_set_tx_line_endings",
+    "usb_serial_jtag_driver_install",
     "usb_serial_jtag_vfs_use_driver",
+    "usb_serial_jtag_vfs_set_rx_line_endings",
+    "usb_serial_jtag_vfs_set_tx_line_endings",
     "CONFIG_ESP_CONSOLE_USB_CDC",
+    "esp_vfs_dev_cdcacm_set_rx_line_endings",
+    "esp_vfs_dev_cdcacm_set_tx_line_endings",
+    "F_SETFL",
+    "setvbuf",
 ]
 
 REQUIRED_COMPONENTS = [
@@ -123,7 +135,12 @@ REQUIRED_CONFIRMED_HELP_TEXT = [
     "write regs <2-5> <V0> [V1] / wregs <2-5> <V0> [V1] [confirm]",
     "pattern <VALUE> / pat <VALUE> [confirm]",
     "recover [confirm]",
-    "selftest [confirm] | stress [N] [confirm] | stress_mix [N] [confirm]",
+    "setbits <M> [confirm] / sb <M> [confirm]",
+    "clearbits <M> [confirm] / cb <M> [confirm]",
+    "togglebits <M> [confirm] / tb <M> [confirm]",
+    "dirin <M> [confirm] | dirout <M> [confirm]",
+    "invertset <M> [confirm] | invertclr <M> [confirm]",
+    "selftest [confirm] | stress [N] | stress_mix [N] [confirm]",
 ]
 
 
@@ -195,6 +212,46 @@ def main() -> int:
     for token in REQUIRED_IDF_SURFACE_TOKENS:
         if token not in main_cpp:
             fail(violations, f"native IDF command surface token missing: {token}")
+    if "gDev.probe()" in main_cpp:
+        fail(violations, "native probe must use the exact address-only ESP-IDF API")
+    if main_cpp.count('printStatus("probe", probeTargetAddress())') != 2:
+        fail(violations, "startup and CLI must both use the exact native probe")
+    if "full[1] == 'r' ? full + 5 : full + 9" not in main_cpp:
+        fail(violations, "read reg long-form dispatch offset is not guarded")
+    stress_body = re.search(
+        r"void cmdStress\(const char\* args\)\s*\{(?P<body>.*?)\n\}",
+        main_cpp,
+        re.DOTALL,
+    )
+    if stress_body is None or "requireConfirmation" in stress_body.group("body"):
+        fail(violations, "read-only stress must not require mutation confirmation")
+    selftest_body = re.search(
+        r"void cmdSelfTest\(const char\* args\)\s*\{(?P<body>.*?)\n\}",
+        main_cpp,
+        re.DOTALL,
+    )
+    if (
+        selftest_body is None
+        or "restoreOutputAndDirection(savedOut, savedCfg)"
+        not in selftest_body.group("body")
+    ):
+        fail(violations, "selftest direction-phase cleanup must not rewrite polarity")
+    for token in (
+        "restoreDirectionAfterLatch",
+        "force all pins to inputs",
+        "force all pins to inputs after direction failure",
+        "target.combined() != PORTS_ALL_HIGH",
+        "sweep clear output latches",
+        "walk clear output latches",
+    ):
+        if token not in main_cpp:
+            fail(violations, f"safe restore token missing: {token}")
+    if main_cpp.count("restoreOutputAfterFailedPreload(") < 5:
+        fail(violations, "setup cleanup must be phase-aware at every latch-preload failure")
+    if main_cpp.count("restoreOutputAndPolarity(") < 2:
+        fail(violations, "polarity-phase cleanup must not rewrite untouched direction state")
+    if "outputs.combined() == attemptedOutputs.combined()" not in main_cpp:
+        fail(violations, "preload cleanup must skip a byte-identical restore")
     for token in REQUIRED_CONFIRMED_HELP_TEXT:
         if token not in main_cpp:
             fail(violations, f"confirmed command help text missing: {token}")

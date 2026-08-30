@@ -156,6 +156,32 @@ def require_confirmation_contract(text: str) -> None:
         fail("Arduino CLI mutating dispatch must route through requireConfirmation()")
 
 
+def require_safe_restore_contract(text: str) -> None:
+    for token in (
+        "restoreDirectionAfterLatch",
+        "forcing all pins to inputs",
+        "Saved direction restore failed; forcing all pins to inputs",
+        "target.combined() == 0xFFFFU",
+        "Bit-test restore after latch setup failure failed",
+        "Bit-test restore after direction setup failure failed",
+        "stress_mix restore after latch setup failure failed",
+        "Sweep restore after latch setup failure failed",
+        "Walk restore after latch setup failure failed",
+    ):
+        if token not in text:
+            fail(f"Arduino safe restore token missing: {token}")
+    if text.count("(void)restoreDirectionAfterLatch(st, savedCfg);") < 3:
+        fail("Arduino selftest saved-latch failures must apply the safe direction fallback")
+    if "restoreDirectionAfterLatch(PCA9555::Status::Ok(), savedCfg)" not in text:
+        fail("Arduino selftest saved-direction writes must use the fallback-aware helper")
+    if text.count("restoreOutputAfterFailedPreload(") < 5:
+        fail("Arduino setup cleanup must be phase-aware at every latch-preload failure")
+    if text.count("restoreOutputAndPolarity(") < 2:
+        fail("Arduino polarity-phase cleanup must not rewrite untouched direction state")
+    if "outputs.combined() == attemptedOutputs.combined()" not in text:
+        fail("Arduino preload cleanup must skip a byte-identical restore")
+
+
 def main() -> int:
     bringup_main = ROOT / "examples" / "01_basic_bringup_cli" / "main.cpp"
 
@@ -174,6 +200,7 @@ def main() -> int:
         require_dispatch(text, cmd)
         require_help(text, cmd)
     require_confirmation_contract(text)
+    require_safe_restore_contract(text)
 
     print("CLI contract PASSED")
     return 0

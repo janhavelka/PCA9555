@@ -339,14 +339,18 @@ class PCA9555 {
   /// Boolean compatibility overload for preloadOutput().
   Status preloadOutput(Pin pin, bool high);
   /// Set selected output-latch bits without changing direction.
+  /// A zero mask needs no shadow and is bus-silent after normal guards.
   Status preloadOutputs(PinMask mask, PinMask values);
   /// Set selected output-latch bits using the cached output shadow.
+  /// A zero mask needs no shadow and is bus-silent after normal guards.
   /// A nonzero mask reasserts the complete pair even when all bits already match.
   Status setOutputBits(PinMask mask);
   /// Clear selected output-latch bits using the cached output shadow.
+  /// A zero mask needs no shadow and is bus-silent after normal guards.
   /// A nonzero mask reasserts the complete pair even when all bits already match.
   Status clearOutputBits(PinMask mask);
   /// Toggle selected output-latch bits using the cached output shadow.
+  /// A zero mask needs no shadow and is bus-silent after normal guards.
   Status toggleOutputBits(PinMask mask);
   /// Toggle one output-latch bit using the cached output shadow.
   Status togglePin(Pin pin);
@@ -360,11 +364,14 @@ class PCA9555 {
   /// Read one port's direction byte as observation.
   Status getPortConfiguration(Port port, uint8_t& value);
   /// Preload selected latch values, then enable those pins as outputs.
+  /// A zero mask needs no shadow and is bus-silent after normal guards.
   Status configureOutputs(PinMask outputMask, PinMask outputValues);
   /// Configure selected pins as inputs using a valid direction shadow.
+  /// A zero mask needs no shadow and is bus-silent after normal guards.
   /// A nonzero mask reasserts the complete pair even when all bits already match.
   Status configureInputBits(PinMask mask);
   /// Enable selected pins as outputs after safely preloading known latches.
+  /// A zero mask needs no shadow and is bus-silent after normal guards.
   Status configureOutputBits(PinMask mask);
   /// Change one pin direction with latch-before-output-enable ordering.
   Status setDirection(Pin pin, Direction direction);
@@ -389,9 +396,11 @@ class PCA9555 {
   /// Read one pin's input-polarity setting.
   Status getPinPolarity(Pin pin, bool& inverted);
   /// Set selected input-polarity bits using the cached polarity shadow.
+  /// A zero mask needs no shadow and is bus-silent after normal guards.
   /// A nonzero mask reasserts the complete pair even when all bits already match.
   Status setInvertBits(PinMask mask);
   /// Clear selected input-polarity bits using the cached polarity shadow.
+  /// A zero mask needs no shadow and is bus-silent after normal guards.
   /// A nonzero mask reasserts the complete pair even when all bits already match.
   Status clearInvertBits(PinMask mask);
 

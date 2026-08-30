@@ -33,7 +33,7 @@ nonzero pointer-park cleanup is owed without guessing that a failure was safe.
 - delays use `vTaskDelay()`
 - the sdkconfig-selected UART, USB Serial/JTAG, or USB CDC primary console is
   put in blocking mode before fixed command buffers and `fgets()` are used
-- startup uses passive `bind()` followed by an explicit `probe()`
+- startup uses passive `bind()` followed by an exact, address-only native probe
 - the `recover` CLI spelling applies a fixed example-owned register image
   through the cooperative API; it is not library or bus recovery
 
@@ -50,12 +50,13 @@ The ESP-IDF CLI requires a final `confirm` suffix before any command that:
 - changes polarity
 - writes raw Output or Polarity registers (`0x02` through `0x05`); raw
   Configuration writes remain intentionally unsupported
-- runs output patterns, sweep, walk, self-test, example-image recovery, or
-  stress flows
+- runs output patterns, sweep, walk, self-test, example-image recovery, or the
+  mutating `stress_mix` flow
 
 Unconfirmed guarded commands print the pending change, why confirmation is
 required, and the exact confirmed command form. This keeps the native example
 usable for bring-up without silently mutating hardware.
+The read-only `stress` command does not require confirmation.
 
 ## Static Checks
 

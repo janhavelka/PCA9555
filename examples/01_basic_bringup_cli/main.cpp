@@ -94,14 +94,6 @@ uint32_t stressProgressStep(uint32_t total) {
   return (step == 0U) ? 1U : step;
 }
 
-uint8_t physicalPortForPin(PCA9555::Pin pin) {
-  return static_cast<uint8_t>(PCA9555::portOf(pin));
-}
-
-uint8_t physicalBitForPin(PCA9555::Pin pin) {
-  return PCA9555::bitOf(pin);
-}
-
 void printStressProgress(uint32_t completed, uint32_t total, uint32_t okCount, uint32_t failCount) {
   if (completed == 0U || total == 0U) {
     return;
@@ -325,11 +317,11 @@ void printStatus(const PCA9555::Status& st) {
   Serial.flush();
 }
 
-// Restore always attempts the direction write even when an earlier step failed.
-// Leaving pins configured as driven outputs is the unsafe state, and the
-// library refuses a direction change that would enable an output from an
-// uncertain latch, so the attempt fails closed rather than driving blind.
-// The first failure is returned; later failures are logged.
+// Restore a saved direction only after the saved latch image is known to have
+// been restored. If that write fails, the only safe direction target is all
+// inputs: re-enabling saved outputs could drive the diagnostic latch pattern or
+// rely on an uncertain latch. A failed saved-direction write also falls back to
+// all inputs. The first failure is returned; later failures are logged.
 PCA9555::Status firstFailure(const PCA9555::Status& first,
                              const PCA9555::Status& next,
                              const char* label) {
@@ -339,31 +331,100 @@ PCA9555::Status firstFailure(const PCA9555::Status& first,
   return first.ok() ? next : first;
 }
 
+PCA9555::Status restoreDirectionAfterLatch(
+    const PCA9555::Status& latchStatus,
+    const PCA9555::PortData& savedDirections) {
+  const PCA9555::PortData target =
+      latchStatus.ok() ? savedDirections : PORTS_ALL_HIGH;
+  if (!latchStatus.ok()) {
+    LOGE("Saved latches are not established; forcing all pins to inputs");
+  }
+  const PCA9555::Status directionStatus = device.setConfiguration(target);
+  if (directionStatus.ok()) {
+    return directionStatus;
+  }
+  if (target.combined() == 0xFFFFU) {
+    LOGE("All-input direction fallback failed");
+    printStatus(directionStatus);
+    return directionStatus;
+  }
+
+  LOGE("Saved direction restore failed; forcing all pins to inputs");
+  const PCA9555::Status safeStatus = device.setConfiguration(PORTS_ALL_HIGH);
+  if (!safeStatus.ok()) {
+    LOGE("All-input direction fallback failed");
+    printStatus(safeStatus);
+  }
+  return directionStatus;
+}
+
 PCA9555::Status restoreOutputAndDirection(
     const PCA9555::PortData& outputs,
     const PCA9555::PortData& directions) {
   PCA9555::Status status = device.writeOutputs(outputs);
   if (!status.ok()) {
-    LOGE("Output latch restore failed; still restoring direction");
+    LOGE("Output latch restore failed; applying safe direction fallback");
     printStatus(status);
   }
-  return firstFailure(status, device.setConfiguration(directions),
-                      "Direction restore");
+  return firstFailure(status, restoreDirectionAfterLatch(status, directions),
+                      status.ok() ? "Direction restore"
+                                  : "All-input direction fallback");
+}
+
+PCA9555::Status restoreOutputAfterFailedPreload(
+    const PCA9555::PortData& outputs,
+    const PCA9555::PortData& attemptedOutputs,
+    const PCA9555::PortData& directions) {
+  if (outputs.combined() == attemptedOutputs.combined()) {
+    return PCA9555::Status::Ok();
+  }
+
+  const PCA9555::Status latchStatus = device.writeOutputs(outputs);
+  if (latchStatus.ok()) {
+    return latchStatus;
+  }
+  LOGE("Output latch restore failed; applying safe direction fallback");
+  printStatus(latchStatus);
+  return firstFailure(
+      latchStatus, restoreDirectionAfterLatch(latchStatus, directions),
+      "All-input direction fallback");
+}
+
+PCA9555::Status restoreOutputAndPolarity(
+    const PCA9555::PortData& outputs,
+    const PCA9555::PortData& polarity,
+    const PCA9555::PortData& directions) {
+  const PCA9555::Status latchStatus = device.writeOutputs(outputs);
+  if (!latchStatus.ok()) {
+    LOGE("Output latch restore failed; restoring polarity and forcing inputs");
+    printStatus(latchStatus);
+  }
+  PCA9555::Status status =
+      firstFailure(latchStatus, device.setPolarity(polarity),
+                   "Polarity restore");
+  if (latchStatus.ok()) {
+    return status;
+  }
+  return firstFailure(
+      status, restoreDirectionAfterLatch(latchStatus, directions),
+      "All-input direction fallback");
 }
 
 PCA9555::Status restoreWritableState(
     const PCA9555::PortData& outputs,
     const PCA9555::PortData& polarity,
     const PCA9555::PortData& directions) {
-  PCA9555::Status status = device.writeOutputs(outputs);
-  if (!status.ok()) {
-    LOGE("Output latch restore failed; still restoring polarity and direction");
-    printStatus(status);
+  const PCA9555::Status latchStatus = device.writeOutputs(outputs);
+  if (!latchStatus.ok()) {
+    LOGE("Output latch restore failed; restoring polarity and forcing inputs");
+    printStatus(latchStatus);
   }
-  status = firstFailure(status, device.setPolarity(polarity),
-                        "Polarity restore");
-  return firstFailure(status, device.setConfiguration(directions),
-                      "Direction restore");
+  PCA9555::Status status =
+      firstFailure(latchStatus, device.setPolarity(polarity),
+                   "Polarity restore");
+  return firstFailure(
+      status, restoreDirectionAfterLatch(latchStatus, directions),
+      latchStatus.ok() ? "Direction restore" : "All-input direction fallback");
 }
 
 PCA9555::Status applyExampleRecoveryImage() {
@@ -614,8 +675,8 @@ void cmdWritePin(const String& args) {
   }
   LOGI("Output latch pin %u (P%u%u) = %d",
        static_cast<unsigned>(pin),
-       static_cast<unsigned>(physicalPortForPin(pin)),
-       static_cast<unsigned>(physicalBitForPin(pin)),
+       static_cast<unsigned>(PCA9555::portOf(pin)),
+       static_cast<unsigned>(PCA9555::bitOf(pin)),
        high ? 1 : 0);
 }
 
@@ -634,8 +695,8 @@ void cmdReadPin(const String& args) {
   }
   LOGI("Input sense pin %u (P%u%u) = %d",
        static_cast<unsigned>(pin),
-       static_cast<unsigned>(physicalPortForPin(pin)),
-       static_cast<unsigned>(physicalBitForPin(pin)),
+       static_cast<unsigned>(PCA9555::portOf(pin)),
+       static_cast<unsigned>(PCA9555::bitOf(pin)),
        state ? 1 : 0);
 }
 
@@ -675,8 +736,8 @@ void cmdReadOutputPin(const String& args) {
 
   LOGI("Output latch pin %u (P%u%u) = %d",
        static_cast<unsigned>(pin),
-       static_cast<unsigned>(physicalPortForPin(pin)),
-       static_cast<unsigned>(physicalBitForPin(pin)),
+       static_cast<unsigned>(PCA9555::portOf(pin)),
+       static_cast<unsigned>(PCA9555::bitOf(pin)),
        high ? 1 : 0);
 }
 
@@ -697,8 +758,8 @@ void cmdReadDirectionPin(const String& args) {
 
   LOGI("Pin %u (P%u%u) direction = %s",
        static_cast<unsigned>(pin),
-       static_cast<unsigned>(physicalPortForPin(pin)),
-       static_cast<unsigned>(physicalBitForPin(pin)),
+       static_cast<unsigned>(PCA9555::portOf(pin)),
+       static_cast<unsigned>(PCA9555::bitOf(pin)),
        input ? "INPUT" : "OUTPUT");
 }
 
@@ -719,8 +780,8 @@ void cmdReadPolarityPin(const String& args) {
 
   LOGI("Pin %u (P%u%u) polarity = %s",
        static_cast<unsigned>(pin),
-       static_cast<unsigned>(physicalPortForPin(pin)),
-       static_cast<unsigned>(physicalBitForPin(pin)),
+       static_cast<unsigned>(PCA9555::portOf(pin)),
+       static_cast<unsigned>(PCA9555::bitOf(pin)),
        inverted ? "INVERTED" : "NORMAL");
 }
 
@@ -760,8 +821,8 @@ void cmdPinInfo(const String& args) {
 
   Serial.printf("=== Pin %u (P%u%u) ===\n",
                 static_cast<unsigned>(pin),
-                static_cast<unsigned>(physicalPortForPin(pin)),
-                static_cast<unsigned>(physicalBitForPin(pin)));
+                static_cast<unsigned>(PCA9555::portOf(pin)),
+                static_cast<unsigned>(PCA9555::bitOf(pin)));
   Serial.printf("  Input sense: %d%s\n",
                 inputState ? 1 : 0,
                 polarityInverted ? " (polarity inverted)" : "");
@@ -813,8 +874,8 @@ void cmdPins() {
     const bool inverted = ((polarityPort >> shift) & 0x01U) != 0U;
 
     Serial.printf("  P%u%u     %d      %d   %-3s  %s\n",
-                  static_cast<unsigned>(physicalPortForPin(pin)),
-                  static_cast<unsigned>(physicalBitForPin(pin)),
+                  static_cast<unsigned>(PCA9555::portOf(pin)),
+                  static_cast<unsigned>(PCA9555::bitOf(pin)),
                   inputLevel ? 1 : 0,
                   outputLevel ? 1 : 0,
                   inputDir ? "IN" : "OUT",
@@ -837,8 +898,8 @@ void cmdTogglePin(const String& args) {
   }
   LOGI("Output latch pin %u (P%u%u) toggled",
        static_cast<unsigned>(pin),
-       static_cast<unsigned>(physicalPortForPin(pin)),
-       static_cast<unsigned>(physicalBitForPin(pin)));
+       static_cast<unsigned>(PCA9555::portOf(pin)),
+       static_cast<unsigned>(PCA9555::bitOf(pin)));
 }
 
 void cmdSetDirection(const String& args) {
@@ -858,8 +919,8 @@ void cmdSetDirection(const String& args) {
   }
   LOGI("Pin %u (P%u%u) set to %s",
        static_cast<unsigned>(pin),
-       static_cast<unsigned>(physicalPortForPin(pin)),
-       static_cast<unsigned>(physicalBitForPin(pin)),
+       static_cast<unsigned>(PCA9555::portOf(pin)),
+       static_cast<unsigned>(PCA9555::bitOf(pin)),
        input ? "INPUT" : "OUTPUT");
 }
 
@@ -936,8 +997,8 @@ void cmdSetPinPolarity(const String& args) {
 
   LOGI("Pin %u (P%u%u) polarity set to %s",
        static_cast<unsigned>(pin),
-       static_cast<unsigned>(physicalPortForPin(pin)),
-       static_cast<unsigned>(physicalBitForPin(pin)),
+       static_cast<unsigned>(PCA9555::portOf(pin)),
+       static_cast<unsigned>(PCA9555::bitOf(pin)),
        inverted ? "INVERTED" : "NORMAL");
 }
 
@@ -1330,7 +1391,11 @@ void runSelfTest() {
     reportCheck("writeOutput(PORT_1, 0x55)", false, errToStr(st.code));
   }
   st = device.writeOutputs(savedOut);
-  if (!requireStep("restore output latches", st)) { printResult(); return; }
+  if (!requireStep("restore output latches", st)) {
+    (void)restoreDirectionAfterLatch(st, savedCfg);
+    printResult();
+    return;
+  }
 
   // --- setPortConfiguration + readback ---
   st = device.setPortConfiguration(PCA9555::Port::PORT_0, 0x0F);
@@ -1343,7 +1408,7 @@ void runSelfTest() {
   } else {
     reportCheck("setPortConfiguration(PORT_0, 0x0F)", false, errToStr(st.code));
   }
-  st = device.setConfiguration(savedCfg);
+  st = restoreDirectionAfterLatch(PCA9555::Status::Ok(), savedCfg);
   if (!requireStep("restore direction", st)) { printResult(); return; }
 
   // --- setPortPolarity + readback ---
@@ -1393,7 +1458,11 @@ void runSelfTest() {
   }
   const uint8_t restoreBulkOut[2] = {savedOut.port0, savedOut.port1};
   st = device.writeRegisters(PCA9555::cmd::REG_OUTPUT_PORT_0, restoreBulkOut, 2);
-  if (!requireStep("restore bulk output latches", st)) { printResult(); return; }
+  if (!requireStep("restore bulk output latches", st)) {
+    (void)restoreDirectionAfterLatch(st, savedCfg);
+    printResult();
+    return;
+  }
 
   uint8_t bulkCfg[2] = {};
   st = device.readRegisters(PCA9555::cmd::REG_CONFIG_PORT_0, bulkCfg, 2);
@@ -1414,13 +1483,35 @@ void runSelfTest() {
     reportCheck("writeRegister(2, 0xBB)", false, errToStr(st.code));
   }
   st = device.writeRegister(2, savedReg2);
-  if (!requireStep("restore output register 0", st)) { printResult(); return; }
+  if (!requireStep("restore output register 0", st)) {
+    (void)restoreDirectionAfterLatch(st, savedCfg);
+    printResult();
+    return;
+  }
 
   // --- bit manipulation helpers ---
   st = device.writeOutputs(PORTS_ALL_LOW);
-  if (!requireStep("prepare bit-test output latches", st)) { printResult(); return; }
+  if (!requireStep("prepare bit-test output latches", st)) {
+    const PCA9555::Status restore =
+        restoreOutputAfterFailedPreload(savedOut, PORTS_ALL_LOW, savedCfg);
+    if (!restore.ok()) {
+      LOGE("Bit-test restore after latch setup failure failed");
+      printStatus(restore);
+    }
+    printResult();
+    return;
+  }
   st = device.setConfiguration(PORTS_ALL_LOW);
-  if (!requireStep("prepare bit-test direction", st)) { printResult(); return; }
+  if (!requireStep("prepare bit-test direction", st)) {
+    const PCA9555::Status restore =
+        restoreOutputAndDirection(savedOut, savedCfg);
+    if (!restore.ok()) {
+      LOGE("Bit-test restore after direction setup failure failed");
+      printStatus(restore);
+    }
+    printResult();
+    return;
+  }
   if (st.ok()) {
     st = device.setOutputBits(0x0103U);
   }
@@ -1526,7 +1617,8 @@ void runSelfTest() {
   const PCA9555::Status polarityRestore = device.setPolarity(savedPol);
   reportCheck("restore bit-test polarity", polarityRestore.ok(),
               polarityRestore.ok() ? "" : errToStr(polarityRestore.code));
-  const PCA9555::Status directionRestore = device.setConfiguration(savedCfg);
+  const PCA9555::Status directionRestore =
+      restoreDirectionAfterLatch(latchRestore, savedCfg);
   reportCheck("restore bit-test direction", directionRestore.ok(),
               directionRestore.ok() ? "" : errToStr(directionRestore.code));
   if (!latchRestore.ok() || !polarityRestore.ok() || !directionRestore.ok()) {
@@ -1653,13 +1745,19 @@ void runStressMix(int count) {
   st = device.writeOutputs(PORTS_ALL_LOW);
   if (!st.ok()) {
     printStatus(st);
+    const PCA9555::Status restore =
+        restoreOutputAfterFailedPreload(savedOut, PORTS_ALL_LOW, savedCfg);
+    if (!restore.ok()) {
+      LOGE("stress_mix restore after latch setup failure failed");
+      printStatus(restore);
+    }
     return;
   }
   st = device.setPolarity(PORTS_ALL_LOW);
   if (!st.ok()) {
     printStatus(st);
     const PCA9555::Status restore =
-        restoreWritableState(savedOut, savedPol, savedCfg);
+        restoreOutputAndPolarity(savedOut, savedPol, savedCfg);
     if (!restore.ok()) {
       LOGE("stress_mix restore after polarity setup failure failed");
       printStatus(restore);
@@ -1801,7 +1899,16 @@ void cmdSweep(const String& args) {
 
   // Set all pins to output, all low
   st = device.writeOutputs(PORTS_ALL_LOW);
-  if (!st.ok()) { printStatus(st); return; }
+  if (!st.ok()) {
+    printStatus(st);
+    const PCA9555::Status restore =
+        restoreOutputAfterFailedPreload(savedOut, PORTS_ALL_LOW, savedCfg);
+    if (!restore.ok()) {
+      LOGE("Sweep restore after latch setup failure failed");
+      printStatus(restore);
+    }
+    return;
+  }
   st = device.setConfiguration(PORTS_ALL_LOW);
   if (!st.ok()) {
     printStatus(st);
@@ -1824,8 +1931,8 @@ void cmdSweep(const String& args) {
     st = device.writePin(pin, true);
     if (!st.ok()) {
       Serial.printf("  P%u%u: %s[FAIL]%s set high - %s\n",
-                    static_cast<unsigned>(physicalPortForPin(pin)),
-                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    static_cast<unsigned>(PCA9555::portOf(pin)),
+                    static_cast<unsigned>(PCA9555::bitOf(pin)),
                     LOG_COLOR_RED, LOG_COLOR_RESET, errToStr(st.code));
       fail++;
       continue;
@@ -1839,15 +1946,15 @@ void cmdSweep(const String& args) {
     const uint16_t expected = static_cast<uint16_t>((1U << (pinIndex + 1U)) - 1U);
     if (!st.ok() || readback.combined() != expected) {
       Serial.printf("  P%u%u: %s[FAIL]%s ON readback 0x%04X != 0x%04X\n",
-                    static_cast<unsigned>(physicalPortForPin(pin)),
-                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    static_cast<unsigned>(PCA9555::portOf(pin)),
+                    static_cast<unsigned>(PCA9555::bitOf(pin)),
                     LOG_COLOR_RED, LOG_COLOR_RESET,
                     readback.combined(), expected);
       fail++;
     } else {
       Serial.printf("  P%u%u: %s[OK]%s ON (0x%04X)\n",
-                    static_cast<unsigned>(physicalPortForPin(pin)),
-                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    static_cast<unsigned>(PCA9555::portOf(pin)),
+                    static_cast<unsigned>(PCA9555::bitOf(pin)),
                     LOG_COLOR_GREEN, LOG_COLOR_RESET, expected);
       pass++;
     }
@@ -1860,8 +1967,8 @@ void cmdSweep(const String& args) {
     st = device.writePin(pin, false);
     if (!st.ok()) {
       Serial.printf("  P%u%u: %s[FAIL]%s set low - %s\n",
-                    static_cast<unsigned>(physicalPortForPin(pin)),
-                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    static_cast<unsigned>(PCA9555::portOf(pin)),
+                    static_cast<unsigned>(PCA9555::bitOf(pin)),
                     LOG_COLOR_RED, LOG_COLOR_RESET, errToStr(st.code));
       fail++;
       continue;
@@ -1877,15 +1984,15 @@ void cmdSweep(const String& args) {
         : static_cast<uint16_t>(0x0000U);
     if (!st.ok() || readback.combined() != expected) {
       Serial.printf("  P%u%u: %s[FAIL]%s OFF readback 0x%04X != 0x%04X\n",
-                    static_cast<unsigned>(physicalPortForPin(pin)),
-                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    static_cast<unsigned>(PCA9555::portOf(pin)),
+                    static_cast<unsigned>(PCA9555::bitOf(pin)),
                     LOG_COLOR_RED, LOG_COLOR_RESET,
                     readback.combined(), expected);
       fail++;
     } else {
       Serial.printf("  P%u%u: %s[OK]%s OFF (0x%04X)\n",
-                    static_cast<unsigned>(physicalPortForPin(pin)),
-                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    static_cast<unsigned>(PCA9555::portOf(pin)),
+                    static_cast<unsigned>(PCA9555::bitOf(pin)),
                     LOG_COLOR_GREEN, LOG_COLOR_RESET, expected);
       pass++;
     }
@@ -1926,7 +2033,16 @@ void cmdWalk(const String& args) {
 
   // Preload a known low latch image before enabling outputs.
   st = device.writeOutputs(PORTS_ALL_LOW);
-  if (!st.ok()) { printStatus(st); return; }
+  if (!st.ok()) {
+    printStatus(st);
+    const PCA9555::Status restore =
+        restoreOutputAfterFailedPreload(savedOut, PORTS_ALL_LOW, savedCfg);
+    if (!restore.ok()) {
+      LOGE("Walk restore after latch setup failure failed");
+      printStatus(restore);
+    }
+    return;
+  }
   st = device.setConfiguration(PORTS_ALL_LOW);
   if (!st.ok()) {
     printStatus(st);
@@ -1958,15 +2074,15 @@ void cmdWalk(const String& args) {
     st = device.readOutputs(readback);
     if (!st.ok() || readback.combined() != pattern) {
       Serial.printf("  P%u%u: %s[FAIL]%s readback 0x%04X != 0x%04X\n",
-                    static_cast<unsigned>(physicalPortForPin(pin)),
-                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    static_cast<unsigned>(PCA9555::portOf(pin)),
+                    static_cast<unsigned>(PCA9555::bitOf(pin)),
                     LOG_COLOR_RED, LOG_COLOR_RESET,
                     readback.combined(), pattern);
       fail++;
     } else {
       Serial.printf("  P%u%u: %s[OK]%s P0=0x%02X P1=0x%02X\n",
-                    static_cast<unsigned>(physicalPortForPin(pin)),
-                    static_cast<unsigned>(physicalBitForPin(pin)),
+                    static_cast<unsigned>(PCA9555::portOf(pin)),
+                    static_cast<unsigned>(PCA9555::bitOf(pin)),
                     LOG_COLOR_GREEN, LOG_COLOR_RESET, out.port0, out.port1);
       pass++;
     }

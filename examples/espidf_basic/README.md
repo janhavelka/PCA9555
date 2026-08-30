@@ -20,9 +20,10 @@ build; an output-only secondary console cannot accept commands.
 
 The example owns the I2C bus setup and maps each native ESP-IDF I2C call to one
 terminal `PCA9555::TransportResult`. It calls passive `bind()` first and then
-performs an explicit `probe()`. It is example code, not a production bus
-manager. Review SDA, SCL, address straps, pull-ups, INT wiring, supply voltage,
-and output loads before connecting hardware.
+uses ESP-IDF's address-only probe for an exact ACK/NACK result without changing
+driver health. It is example code, not a production bus manager. Review SDA,
+SCL, address straps, pull-ups, INT wiring, supply voltage, and output loads
+before connecting hardware.
 
 Commands that write outputs, change direction or polarity, write raw Output or
 Polarity registers (`0x02` through `0x05`),
@@ -32,6 +33,7 @@ the pending change and the confirmed command form. The `recover` command is
 application policy: it applies high output latches, normal polarity, and all
 pins input through the cooperative apply-image API. It does not recover the I2C
 bus and does not invoke a library-owned retry policy.
+The read-only `stress` command does not require confirmation.
 
 This example is not hardware validation. Native ESP-IDF remains a build/contract
 target, while native-IDF hardware qualification is outside the current release

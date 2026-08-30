@@ -1079,7 +1079,7 @@ Status PCA9555::preloadOutputs(PinMask mask, PinMask values) {
 }
 
 Status PCA9555::setOutputBits(PinMask mask) {
-  const Status clean = _shadowStatus(PAIR_OUTPUTS);
+  const Status clean = _shadowStatus(mask == 0U ? PAIR_NONE : PAIR_OUTPUTS);
   if (!clean.ok()) return clean;
   if (mask == 0U) return Status::Ok();
   return _writePair(cmd::REG_OUTPUT_PORT_0,
@@ -1087,7 +1087,7 @@ Status PCA9555::setOutputBits(PinMask mask) {
 }
 
 Status PCA9555::clearOutputBits(PinMask mask) {
-  const Status clean = _shadowStatus(PAIR_OUTPUTS);
+  const Status clean = _shadowStatus(mask == 0U ? PAIR_NONE : PAIR_OUTPUTS);
   if (!clean.ok()) return clean;
   if (mask == 0U) return Status::Ok();
   const uint16_t desired = static_cast<uint16_t>(_shadow.outputs & ~mask);
@@ -1095,7 +1095,7 @@ Status PCA9555::clearOutputBits(PinMask mask) {
 }
 
 Status PCA9555::toggleOutputBits(PinMask mask) {
-  const Status clean = _shadowStatus(PAIR_OUTPUTS);
+  const Status clean = _shadowStatus(mask == 0U ? PAIR_NONE : PAIR_OUTPUTS);
   if (!clean.ok()) return clean;
   if (mask == 0U) return Status::Ok();
   return _writePair(cmd::REG_OUTPUT_PORT_0,
@@ -1166,7 +1166,7 @@ Status PCA9555::configureOutputs(PinMask outputMask,
 }
 
 Status PCA9555::configureInputBits(PinMask mask) {
-  const Status clean = _shadowStatus(PAIR_DIRECTIONS);
+  const Status clean = _shadowStatus(mask == 0U ? PAIR_NONE : PAIR_DIRECTIONS);
   if (!clean.ok()) return clean;
   if (mask == 0U) return Status::Ok();
   const uint16_t directions = static_cast<uint16_t>(_shadow.directions | mask);
@@ -1174,8 +1174,10 @@ Status PCA9555::configureInputBits(PinMask mask) {
 }
 
 Status PCA9555::configureOutputBits(PinMask mask) {
-  const Status clean = _shadowStatus(PAIR_OUTPUTS | PAIR_DIRECTIONS);
+  const Status clean = _shadowStatus(
+      mask == 0U ? PAIR_NONE : PAIR_OUTPUTS | PAIR_DIRECTIONS);
   if (!clean.ok()) return clean;
+  if (mask == 0U) return Status::Ok();
   return configureOutputs(mask, _shadow.outputs);
 }
 
@@ -1256,7 +1258,7 @@ Status PCA9555::getPinPolarity(Pin pin, bool& inverted) {
 }
 
 Status PCA9555::setInvertBits(PinMask mask) {
-  const Status clean = _shadowStatus(PAIR_POLARITY);
+  const Status clean = _shadowStatus(mask == 0U ? PAIR_NONE : PAIR_POLARITY);
   if (!clean.ok()) return clean;
   if (mask == 0U) return Status::Ok();
   const uint16_t desired = static_cast<uint16_t>(_shadow.polarity | mask);
@@ -1264,7 +1266,7 @@ Status PCA9555::setInvertBits(PinMask mask) {
 }
 
 Status PCA9555::clearInvertBits(PinMask mask) {
-  const Status clean = _shadowStatus(PAIR_POLARITY);
+  const Status clean = _shadowStatus(mask == 0U ? PAIR_NONE : PAIR_POLARITY);
   if (!clean.ok()) return clean;
   if (mask == 0U) return Status::Ok();
   const uint16_t desired = static_cast<uint16_t>(_shadow.polarity & ~mask);

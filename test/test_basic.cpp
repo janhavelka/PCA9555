@@ -1614,10 +1614,22 @@ void test_nonzero_idempotent_cached_updates_reassert_and_report_transport_status
   TEST_ASSERT_TRUE(device.lastError().is(Err::I2C_BUS));
 }
 
-void test_empty_masks_are_bus_silent_but_respect_cooperative_ownership() {
+void test_empty_masks_need_no_shadow_and_respect_normal_guards() {
   FakeBus bus;
   PCA9555::PCA9555 device;
-  bindAndApply(device, bus, RegisterImage{});
+
+  TEST_ASSERT_TRUE(device.preloadOutputs(0U, 0U).is(Err::NOT_INITIALIZED));
+  TEST_ASSERT_TRUE(device.configureOutputs(0U, 0U).is(Err::NOT_INITIALIZED));
+  TEST_ASSERT_TRUE(device.setOutputBits(0U).is(Err::NOT_INITIALIZED));
+  TEST_ASSERT_TRUE(device.clearOutputBits(0U).is(Err::NOT_INITIALIZED));
+  TEST_ASSERT_TRUE(device.toggleOutputBits(0U).is(Err::NOT_INITIALIZED));
+  TEST_ASSERT_TRUE(device.configureInputBits(0U).is(Err::NOT_INITIALIZED));
+  TEST_ASSERT_TRUE(device.configureOutputBits(0U).is(Err::NOT_INITIALIZED));
+  TEST_ASSERT_TRUE(device.setInvertBits(0U).is(Err::NOT_INITIALIZED));
+  TEST_ASSERT_TRUE(device.clearInvertBits(0U).is(Err::NOT_INITIALIZED));
+
+  TEST_ASSERT_TRUE(device.bind(makeConfig(bus)).ok());
+  TEST_ASSERT_EQUAL_HEX8(PAIR_NONE, device.shadowValidPairs());
   clearTransactions(bus);
 
   TEST_ASSERT_TRUE(device.preloadOutputs(0U, 0xFFFFU).ok());
@@ -1636,8 +1648,12 @@ void test_empty_masks_are_bus_silent_but_respect_cooperative_ownership() {
   TEST_ASSERT_TRUE(device.preloadOutputs(0U, 0U).is(Err::BUSY));
   TEST_ASSERT_TRUE(device.configureOutputs(0U, 0U).is(Err::BUSY));
   TEST_ASSERT_TRUE(device.setOutputBits(0U).is(Err::BUSY));
+  TEST_ASSERT_TRUE(device.clearOutputBits(0U).is(Err::BUSY));
+  TEST_ASSERT_TRUE(device.toggleOutputBits(0U).is(Err::BUSY));
   TEST_ASSERT_TRUE(device.configureInputBits(0U).is(Err::BUSY));
+  TEST_ASSERT_TRUE(device.configureOutputBits(0U).is(Err::BUSY));
   TEST_ASSERT_TRUE(device.setInvertBits(0U).is(Err::BUSY));
+  TEST_ASSERT_TRUE(device.clearInvertBits(0U).is(Err::BUSY));
   TEST_ASSERT_EQUAL_UINT(0U, bus.transactionCount);
   TEST_ASSERT_TRUE(device.cancelOperation(750U).ok());
   (void)takeResult(device, 750U);
@@ -2590,6 +2606,29 @@ void test_wire_read_adapter_reports_command_phase_evidence() {
   TEST_ASSERT_EQUAL_UINT32(1U, result.completedRxBytes);
 }
 
+void test_wire_adapter_probe_reports_address_nack_and_stays_health_neutral() {
+  TwoWire wire;
+  PCA9555::PCA9555 device;
+  Config config;
+  config.i2cWrite = transport::wireWrite;
+  config.i2cWriteRead = transport::wireWriteRead;
+  config.i2cUser = &wire;
+  config.i2cTimeoutMs = 10U;
+  TEST_ASSERT_TRUE(device.bind(config).ok());
+
+  wire._setEndTransmissionResult(2U);
+  TEST_ASSERT_TRUE(device.probe().is(Err::DEVICE_NOT_FOUND));
+  TEST_ASSERT_EQUAL_UINT32(0U, device.totalSuccess());
+  TEST_ASSERT_EQUAL_UINT32(0U, device.totalFailures());
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(DriverState::READY),
+                          static_cast<uint8_t>(device.state()));
+
+  wire._setEndTransmissionResult(4U);
+  TEST_ASSERT_TRUE(device.probe().is(Err::I2C_BUS));
+  TEST_ASSERT_EQUAL_UINT32(0U, device.totalSuccess());
+  TEST_ASSERT_EQUAL_UINT32(0U, device.totalFailures());
+}
+
 void test_wire_init_reports_begin_failure() {
   Wire._setBeginResult(false);
   TEST_ASSERT_FALSE(transport::initWire(8, 9, 400000U, 50U));
@@ -2637,7 +2676,7 @@ int main() {
   RUN_TEST(test_verify_caller_mismatch_preserves_a_truthful_protocol_shadow);
   RUN_TEST(test_verify_matching_external_image_reconciles_observation_and_shadow);
   RUN_TEST(test_nonzero_idempotent_cached_updates_reassert_and_report_transport_status);
-  RUN_TEST(test_empty_masks_are_bus_silent_but_respect_cooperative_ownership);
+  RUN_TEST(test_empty_masks_need_no_shadow_and_respect_normal_guards);
   RUN_TEST(test_full_pair_rewrite_clears_mismatch_and_uncertainty_evidence);
   RUN_TEST(test_rejected_pair_reads_preserve_observations_until_a_callback_fails);
   RUN_TEST(test_odd_scalar_mismatch_compares_against_high_shadow_byte);
@@ -2671,6 +2710,7 @@ int main() {
   RUN_TEST(test_rebind_is_rejected_while_operation_or_result_is_pending);
   RUN_TEST(test_detach_refuses_to_abandon_required_pointer_cleanup);
   RUN_TEST(test_wire_read_adapter_reports_command_phase_evidence);
+  RUN_TEST(test_wire_adapter_probe_reports_address_nack_and_stays_health_neutral);
   RUN_TEST(test_wire_init_reports_begin_failure);
 
   return UNITY_END();

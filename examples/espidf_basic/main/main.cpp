@@ -157,10 +157,36 @@ PCA9555::TransportResult mapI2c(
   // The current master driver reports address NACK, data NACK, and some bus
   // faults through phase-ambiguous errors such as ESP_ERR_INVALID_STATE. Do not
   // turn that ambiguous evidence into NACK_ADDRESS: caller absence policy must
-  // not mistake a bus fault for proof that this target is missing. The `scan`
-  // command uses i2c_master_probe() when explicit native ACK evidence is needed.
+  // not mistake a bus fault for proof that this target is missing. Native
+  // presence diagnostics use i2c_master_probe() for exact ACK evidence.
   return PCA9555::TransportResult::Error(
       PCA9555::TransportCode::BUS_ERROR, err, writeEffect);
+}
+
+// The generic transaction adapter cannot safely infer whether an ambiguous
+// transmit failure was an address NACK. ESP-IDF's dedicated probe has an exact
+// address-only result, so the native example uses it for startup and the CLI
+// without changing driver health counters.
+PCA9555::Status probeTargetAddress() {
+  if (gBus.bus == nullptr) {
+    return PCA9555::Status::Error(PCA9555::Err::NOT_INITIALIZED,
+                                  "I2C bus not initialized");
+  }
+  const esp_err_t error = i2c_master_probe(
+      gBus.bus, gCfg.i2cAddress, timeoutArg(I2C_TIMEOUT_MS));
+  if (error == ESP_OK) {
+    return PCA9555::Status::Ok();
+  }
+  if (error == ESP_ERR_NOT_FOUND) {
+    return PCA9555::Status::Error(PCA9555::Err::DEVICE_NOT_FOUND,
+                                  "address did not respond", error);
+  }
+  if (error == ESP_ERR_TIMEOUT) {
+    return PCA9555::Status::Error(PCA9555::Err::I2C_TIMEOUT,
+                                  "address probe timed out", error);
+  }
+  return PCA9555::Status::Error(PCA9555::Err::I2C_BUS,
+                                "address probe failed", error);
 }
 
 esp_err_t addDevice(NativeBus& bus, uint8_t addr, i2c_master_dev_handle_t* out) {
@@ -455,7 +481,7 @@ void beginDriver() {
   PCA9555::Status status = gDev.bind(gCfg);
   printStatus("bind", status);
   if (status.ok()) {
-    printStatus("probe", gDev.probe());
+    printStatus("probe", probeTargetAddress());
   }
 }
 
@@ -476,14 +502,15 @@ void printHelp() {
   puts("  dir port <P> <V> / dport <P> <V> [confirm]");
   puts("  polarity pin <N> <0|1> / pol <N> <0|1> [confirm]");
   puts("  polarity port <P> <V> / wpol <P> <V> [confirm]");
-  puts("  setbits <M> / sb <M> | clearbits <M> / cb <M> | togglebits <M> / tb <M> [confirm]");
-  puts("  dirin <M> | dirout <M> | invertset <M> | invertclr <M> [confirm]");
+  puts("  setbits <M> [confirm] / sb <M> [confirm] | clearbits <M> [confirm] / cb <M> [confirm]");
+  puts("  togglebits <M> [confirm] / tb <M> [confirm]");
+  puts("  dirin <M> [confirm] | dirout <M> [confirm] | invertset <M> [confirm] | invertclr <M> [confirm]");
   puts("  read reg <R> / rreg <R> | read regs <R> <N> / rregs <R> <N>");
   puts("  write reg <2-5> <V> / wreg <2-5> <V> [confirm] (Output/Polarity only)");
   puts("  write regs <2-5> <V0> [V1] / wregs <2-5> <V0> [V1] [confirm]");
   puts("  pattern <VALUE> / pat <VALUE> [confirm] | sweep [delay_ms] [confirm] | walk [delay_ms] [confirm]");
   puts("  allhigh [confirm] | alllow [confirm] | drv / health | probe | recover [confirm] | verbose [0|1]");
-  puts("  selftest [confirm] | stress [N] [confirm] | stress_mix [N] [confirm]");
+  puts("  selftest [confirm] | stress [N] | stress_mix [N] [confirm]");
 }
 
 void scanBus() {
@@ -626,10 +653,6 @@ const char* portName(PCA9555::Port port) {
   return port == PCA9555::Port::PORT_0 ? "0" : "1";
 }
 
-uint8_t physicalPortForPin(PCA9555::Pin pin) {
-  return static_cast<uint8_t>(PCA9555::portOf(pin));
-}
-
 // PCA9555 auto-increment toggles inside a register pair, so a two-byte access
 // that starts on an odd register wraps back to the even one instead of
 // advancing to the next pair.
@@ -660,10 +683,6 @@ PCA9555::Status applyExampleRecoveryImage() {
   return taken.ok() ? result.status : taken;
 }
 
-uint8_t physicalBitForPin(PCA9555::Pin pin) {
-  return PCA9555::bitOf(pin);
-}
-
 PCA9555::PortData portsFrom(uint16_t value) {
   return PCA9555::PortData::fromCombined(value);
 }
@@ -674,13 +693,31 @@ void delayMs(uint32_t delay) {
   }
 }
 
-// Restore always attempts the direction write even when an earlier step failed.
-// Leaving pins configured as driven outputs is the unsafe state, and the
-// library refuses a direction change that would enable an output from an
-// uncertain latch, so the attempt fails closed rather than driving blind.
+// Restore saved directions only after restoring the saved latch image. If the
+// latch write fails, force all pins to inputs instead of risking saved output
+// directions with a diagnostic or uncertain latch image. A failed saved-
+// direction write also gets one all-input fallback.
 PCA9555::Status firstFailure(const PCA9555::Status& first,
                              const PCA9555::Status& next) {
   return first.ok() ? next : first;
+}
+
+PCA9555::Status restoreDirectionAfterLatch(
+    const PCA9555::Status& latchStatus,
+    const PCA9555::PortData& savedConfig) {
+  const PCA9555::PortData target = latchStatus.ok()
+      ? savedConfig
+      : PCA9555::PortData::fromCombined(PORTS_ALL_HIGH);
+  const PCA9555::Status directionStatus = gDev.setConfiguration(target);
+  printStatus(latchStatus.ok() ? "restore direction"
+                               : "force all pins to inputs",
+              directionStatus);
+  if (!directionStatus.ok() && target.combined() != PORTS_ALL_HIGH) {
+    const PCA9555::Status safeStatus =
+        gDev.setConfiguration(portsFrom(PORTS_ALL_HIGH));
+    printStatus("force all pins to inputs after direction failure", safeStatus);
+  }
+  return directionStatus;
 }
 
 PCA9555::Status restoreOutputAndDirection(
@@ -688,21 +725,57 @@ PCA9555::Status restoreOutputAndDirection(
     const PCA9555::PortData& config) {
   PCA9555::Status st = gDev.writeOutputs(outputs);
   printStatus("restore output latches", st);
-  const PCA9555::Status directionStatus = gDev.setConfiguration(config);
-  printStatus("restore direction", directionStatus);
+  const PCA9555::Status directionStatus =
+      restoreDirectionAfterLatch(st, config);
   return firstFailure(st, directionStatus);
+}
+
+PCA9555::Status restoreOutputAfterFailedPreload(
+    const PCA9555::PortData& outputs,
+    const PCA9555::PortData& attemptedOutputs,
+    const PCA9555::PortData& config) {
+  if (outputs.combined() == attemptedOutputs.combined()) {
+    return PCA9555::Status::Ok();
+  }
+
+  const PCA9555::Status latchStatus = gDev.writeOutputs(outputs);
+  printStatus("restore output latches", latchStatus);
+  if (latchStatus.ok()) {
+    return latchStatus;
+  }
+  const PCA9555::Status directionStatus =
+      restoreDirectionAfterLatch(latchStatus, config);
+  return firstFailure(latchStatus, directionStatus);
+}
+
+PCA9555::Status restoreOutputAndPolarity(
+    const PCA9555::PortData& outputs,
+    const PCA9555::PortData& polarity,
+    const PCA9555::PortData& config) {
+  const PCA9555::Status latchStatus = gDev.writeOutputs(outputs);
+  printStatus("restore output latches", latchStatus);
+  const PCA9555::Status polarityStatus = gDev.setPolarity(polarity);
+  printStatus("restore polarity", polarityStatus);
+  if (latchStatus.ok()) {
+    return polarityStatus;
+  }
+  const PCA9555::Status directionStatus =
+      restoreDirectionAfterLatch(latchStatus, config);
+  return firstFailure(firstFailure(latchStatus, polarityStatus),
+                      directionStatus);
 }
 
 PCA9555::Status restoreState(const PCA9555::PortData& outputs,
                              const PCA9555::PortData& polarity,
                              const PCA9555::PortData& config) {
-  PCA9555::Status st = gDev.writeOutputs(outputs);
-  printStatus("restore output latches", st);
+  const PCA9555::Status latchStatus = gDev.writeOutputs(outputs);
+  printStatus("restore output latches", latchStatus);
   const PCA9555::Status polarityStatus = gDev.setPolarity(polarity);
   printStatus("restore polarity", polarityStatus);
-  const PCA9555::Status directionStatus = gDev.setConfiguration(config);
-  printStatus("restore direction", directionStatus);
-  return firstFailure(firstFailure(st, polarityStatus), directionStatus);
+  const PCA9555::Status directionStatus =
+      restoreDirectionAfterLatch(latchStatus, config);
+  return firstFailure(firstFailure(latchStatus, polarityStatus),
+                      directionStatus);
 }
 
 void reportCheck(const char* label, bool passed, uint32_t* passCount, uint32_t* failCount) {
@@ -730,8 +803,8 @@ void cmdWritePin(const char* args) {
   char confirmedCommand[64] = {};
   snprintf(wouldChange, sizeof(wouldChange),
            "set pin %u (P%u%u) output latch to %u",
-           static_cast<unsigned>(pin), static_cast<unsigned>(physicalPortForPin(pin)),
-           static_cast<unsigned>(physicalBitForPin(pin)), high ? 1U : 0U);
+           static_cast<unsigned>(pin), static_cast<unsigned>(PCA9555::portOf(pin)),
+           static_cast<unsigned>(PCA9555::bitOf(pin)), high ? 1U : 0U);
   snprintf(confirmedCommand, sizeof(confirmedCommand), "write pin %u %u confirm",
            static_cast<unsigned>(pin), high ? 1U : 0U);
   if (!requireConfirmation(confirmed, wouldChange, CONFIRM_REASON_OUTPUT, confirmedCommand)) {
@@ -752,8 +825,8 @@ void cmdTogglePin(const char* args) {
   char wouldChange[96] = {};
   char confirmedCommand[64] = {};
   snprintf(wouldChange, sizeof(wouldChange), "toggle pin %u (P%u%u) output latch",
-           static_cast<unsigned>(pin), static_cast<unsigned>(physicalPortForPin(pin)),
-           static_cast<unsigned>(physicalBitForPin(pin)));
+           static_cast<unsigned>(pin), static_cast<unsigned>(PCA9555::portOf(pin)),
+           static_cast<unsigned>(PCA9555::bitOf(pin)));
   snprintf(confirmedCommand, sizeof(confirmedCommand), "toggle %u confirm",
            static_cast<unsigned>(pin));
   if (!requireConfirmation(confirmed, wouldChange, CONFIRM_REASON_OUTPUT, confirmedCommand)) {
@@ -776,8 +849,8 @@ void cmdSetDirection(const char* args) {
   char wouldChange[112] = {};
   char confirmedCommand[72] = {};
   snprintf(wouldChange, sizeof(wouldChange), "configure pin %u (P%u%u) as %s",
-           static_cast<unsigned>(pin), static_cast<unsigned>(physicalPortForPin(pin)),
-           static_cast<unsigned>(physicalBitForPin(pin)), input ? "input" : "output");
+           static_cast<unsigned>(pin), static_cast<unsigned>(PCA9555::portOf(pin)),
+           static_cast<unsigned>(PCA9555::bitOf(pin)), input ? "input" : "output");
   snprintf(confirmedCommand, sizeof(confirmedCommand), "dir pin %u %s confirm",
            static_cast<unsigned>(pin), input ? "in" : "out");
   if (!requireConfirmation(confirmed, wouldChange, CONFIRM_REASON_DIRECTION, confirmedCommand)) {
@@ -847,8 +920,8 @@ void cmdSetPinPolarity(const char* args) {
   char wouldChange[112] = {};
   char confirmedCommand[72] = {};
   snprintf(wouldChange, sizeof(wouldChange), "set pin %u (P%u%u) polarity to %s",
-           static_cast<unsigned>(pin), static_cast<unsigned>(physicalPortForPin(pin)),
-           static_cast<unsigned>(physicalBitForPin(pin)),
+           static_cast<unsigned>(pin), static_cast<unsigned>(PCA9555::portOf(pin)),
+           static_cast<unsigned>(PCA9555::bitOf(pin)),
            inverted ? "inverted" : "normal");
   snprintf(confirmedCommand, sizeof(confirmedCommand), "polarity pin %u %u confirm",
            static_cast<unsigned>(pin), inverted ? 1U : 0U);
@@ -1152,6 +1225,8 @@ void cmdSweep(const char* args) {
   st = gDev.writeOutputs(portsFrom(PORTS_ALL_LOW));
   printStatus("sweep clear output latches", st);
   if (!st.ok()) {
+    (void)restoreOutputAfterFailedPreload(
+        savedOut, portsFrom(PORTS_ALL_LOW), savedCfg);
     return;
   }
   st = gDev.setConfiguration(portsFrom(PORTS_ALL_LOW));
@@ -1235,6 +1310,8 @@ void cmdWalk(const char* args) {
   st = gDev.writeOutputs(portsFrom(PORTS_ALL_LOW));
   printStatus("walk clear output latches", st);
   if (!st.ok()) {
+    (void)restoreOutputAfterFailedPreload(
+        savedOut, portsFrom(PORTS_ALL_LOW), savedCfg);
     return;
   }
   st = gDev.setConfiguration(portsFrom(PORTS_ALL_LOW));
@@ -1323,12 +1400,21 @@ void cmdSelfTest(const char* args) {
   reportCheck("readRegisters", st.ok(), &pass, &fail);
 
   st = gDev.writeOutputs(portsFrom(PORTS_ALL_LOW));
-  if (st.ok()) {
-    st = gDev.setConfiguration(portsFrom(PORTS_ALL_LOW));
-  }
   reportCheck("force outputs low", st.ok(), &pass, &fail);
   if (!st.ok()) {
-    const PCA9555::Status restore = restoreState(savedOut, savedPol, savedCfg);
+    const PCA9555::Status restore = restoreOutputAfterFailedPreload(
+        savedOut, portsFrom(PORTS_ALL_LOW), savedCfg);
+    reportCheck("restore after setup failure", restore.ok(), &pass, &fail);
+    printf("Selftest result: pass=%lu fail=%lu\n",
+           static_cast<unsigned long>(pass),
+           static_cast<unsigned long>(fail));
+    return;
+  }
+  st = gDev.setConfiguration(portsFrom(PORTS_ALL_LOW));
+  if (!st.ok()) {
+    reportCheck("force outputs low direction", false, &pass, &fail);
+    const PCA9555::Status restore =
+        restoreOutputAndDirection(savedOut, savedCfg);
     reportCheck("restore after setup failure", restore.ok(), &pass, &fail);
     printf("Selftest result: pass=%lu fail=%lu\n",
            static_cast<unsigned long>(pass),
@@ -1435,20 +1521,11 @@ void runStress(uint32_t count) {
 
 void cmdStress(const char* args) {
   uint32_t count = DEFAULT_STRESS_COUNT;
-  bool confirmed = false;
-  if (!parseOptionalU32Confirm(args, DEFAULT_STRESS_COUNT, 1U, MAX_STRESS_COUNT,
-                               &count, &confirmed)) {
-    printUsage("stress [1..10000] [confirm]");
-    return;
-  }
-
-  char wouldChange[112] = {};
-  char confirmedCommand[48] = {};
-  snprintf(wouldChange, sizeof(wouldChange), "run %u readInputs stress cycles",
-           static_cast<unsigned>(count));
-  snprintf(confirmedCommand, sizeof(confirmedCommand), "stress %u confirm",
-           static_cast<unsigned>(count));
-  if (!requireConfirmation(confirmed, wouldChange, CONFIRM_REASON_STRESS, confirmedCommand)) {
+  const char* cursor = skipWhitespace(args);
+  if (*cursor != '\0' &&
+      (!parseU32Token(cursor, &count) || hasTrailingArgs(cursor) ||
+       count == 0U || count > MAX_STRESS_COUNT)) {
+    printUsage("stress [1..10000]");
     return;
   }
   runStress(count);
@@ -1496,13 +1573,20 @@ void runStressMix(uint32_t count) {
   }
 
   st = gDev.writeOutputs(portsFrom(PORTS_ALL_LOW));
-  if (st.ok()) {
-    st = gDev.setPolarity(portsFrom(PORTS_ALL_LOW));
+  printStatus("stress_mix prepare output latches", st);
+  if (!st.ok()) {
+    (void)restoreOutputAfterFailedPreload(
+        savedOut, portsFrom(PORTS_ALL_LOW), savedCfg);
+    return;
   }
-  if (st.ok()) {
-    st = gDev.setConfiguration(portsFrom(PORTS_ALL_LOW));
+  st = gDev.setPolarity(portsFrom(PORTS_ALL_LOW));
+  printStatus("stress_mix prepare polarity", st);
+  if (!st.ok()) {
+    (void)restoreOutputAndPolarity(savedOut, savedPol, savedCfg);
+    return;
   }
-  printStatus("stress_mix prepare", st);
+  st = gDev.setConfiguration(portsFrom(PORTS_ALL_LOW));
+  printStatus("stress_mix prepare direction", st);
   if (!st.ok()) {
     (void)restoreState(savedOut, savedPol, savedCfg);
     return;
@@ -1617,7 +1701,7 @@ void handleCommand(char* line) {
   } else if (strcmp(full, "scan") == 0) {
     scanBus();
   } else if (strcmp(full, "probe") == 0) {
-    printStatus("probe", gDev.probe());
+    printStatus("probe", probeTargetAddress());
   } else if (strcmp(full, "recover") == 0 || strncmp(full, "recover ", 8) == 0) {
     cmdRecover(full + 7);
   } else if (strcmp(full, "drv") == 0 || strcmp(full, "health") == 0 ||
@@ -1824,7 +1908,7 @@ void handleCommand(char* line) {
   } else if (strcmp(full, "stress") == 0 || strncmp(full, "stress ", 7) == 0) {
     cmdStress(full + 6);
   } else if (strncmp(full, "rreg ", 5) == 0 || strncmp(full, "read reg ", 9) == 0) {
-    const char* arg = full[0] == 'r' ? full + 5 : full + 9;
+    const char* arg = full[1] == 'r' ? full + 5 : full + 9;
     uint32_t reg = 0;
     uint8_t value = 0;
     PCA9555::Status st = (parseU32(arg, &reg) && reg < PCA9555::cmd::NUM_REGISTERS)

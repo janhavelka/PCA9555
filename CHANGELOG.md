@@ -18,16 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Re-establishing a protocol-shadow pair now clears that pair's stale
   `ObservedState::mismatchPairs` bit, so a snapshot can no longer report the same
   pair as both shadow-valid and mismatched.
-- The native ESP-IDF scanner now uses `i2c_master_probe()` for exact address
-  presence. Phase-ambiguous master-transmit errors remain `BUS_ERROR` instead
-  of being misreported as address NACKs.
+- Native ESP-IDF startup, `probe`, and `scan` now use `i2c_master_probe()` for
+  exact address presence. Phase-ambiguous data transactions remain conservative
+  `BUS_ERROR` or `IO_ERROR` results instead of being misreported as address NACKs.
 - The native ESP-IDF `rregs` command labelled the second byte of an odd-start
   pair read with the next register instead of the pair partner the chip actually
   returns.
-- Example restore helpers always attempt the direction restore even when an
-  earlier restore step fails, and the Arduino self-test can no longer return
-  from its all-outputs section before restoring direction. Both could leave all
-  sixteen pins configured as driven outputs.
+- Example restore helpers restore saved directions only after the saved output
+  latches are established; a failed latch restore instead forces all pins to
+  inputs, and a failed saved-direction restore gets one all-input fallback.
+  Arduino self-test and both examples' mutating diagnostics now run bounded
+  phase-aware cleanup after ambiguous setup failures. Failed initial latch-
+  setup writes do not retry a byte-identical saved latch or rewrite untouched
+  polarity/direction; cleanup expands only as setup phases complete, avoiding
+  wrong-latch output enable and early exits that could leave the fixture driven.
 - The native ESP-IDF `pins` command builds its summary from four complete pair
   reads instead of sixteen per-pin queries, cutting roughly 80 transfers to 5 and
   clearing the interrupt once instead of sixteen times.
@@ -45,13 +49,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skipped.
 - Nonzero cached update requests now reassert their complete register pair and
   report the real transport outcome even when the requested value already
-  matches the shadow. Empty masks remain bus-silent no-ops after ownership and
-  shadow guards.
+  matches the shadow. Empty masks remain bus-silent no-ops after binding and
+  cooperative-ownership guards, without requiring a shadow.
 - Empty output/preload requests no longer bypass cooperative ownership checks,
   and the Wire result mapper no longer contains an impossible success branch
   that the core would reject for missing byte counts.
 - Native ESP-IDF `verbose` parsing now rejects trailing garbage and reports the
   current mode when no argument is supplied instead of toggling implicitly.
+- Native ESP-IDF `read reg` now parses its long form from the correct offset.
+  Read-only `stress` no longer requires mutation confirmation, and grouped help
+  text marks every mutating mask command explicitly.
 
 ### Changed
 
@@ -61,7 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repeated register/pair and per-port bookkeeping now uses shared private
   helpers; operation-deadline handling has one entry decision while retaining
   the minimum-time callback-count bound.
-- Example pin labels now delegate to the public `portOf()` and `bitOf()` helpers.
+- Example pin labels now use the public `portOf()` and `bitOf()` helpers
+  directly; the redundant local wrappers were removed.
 - Documentation: the README synchronous example now shows a cold start that
   actually works (the previous one returned `SHADOW_INVALID` on its first call);
   the error table lists `CONFIG_REG_MISMATCH` and `UNSUPPORTED`;

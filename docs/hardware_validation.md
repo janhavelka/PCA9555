@@ -14,6 +14,7 @@ PCA9555 has no documented chip-ID register, so no run can claim chip identity.
 
 | Date | Target | Result |
 | --- | --- | --- |
+| 2026-09-09 | Native ESP-IDF ESP32-S2 / ESP32-S3 console follow-up for v3.0.3 | NOT RUN — no board was flashed; local ESP-IDF tooling (`idf.py`) was unavailable. Typed-command handling, idle prompt behavior, and line endings remain unverified on UART, USB CDC, and USB Serial/JTAG. The console gate remains OPEN. |
 | 2026-07-31 | ESP32-S3 on COM4, pioarduino `55.03.311` (Arduino-ESP32 `3.3.11`, ESP-IDF `v5.5.5`), PCA9555 at `0x20`, 400 kHz, SDA GPIO8 / SCL GPIO9 | Release-candidate full and fault plan 46/46; extended command plan 72/72 including all four odd-start paired-register wrap cases, all eight scalar register reads, a 32/32 sweep, a 16/16 walking-one test and 24 complete-image recoveries; the 22 bus-silent CLI guard/rejection cases left every reported health and settings field unchanged. Final health READY with 2,604 tracked successes and zero failures. |
 | 2026-07-22 | ESP32-S3 on COM7 | 73-minute device-side input-read/pointer-park stress, 15,000,000 operations, zero failures. |
 
@@ -109,6 +110,7 @@ generated file.
 
 | Gate | Required evidence | Status |
 | --- | --- | --- |
+| Native ESP-IDF interactive console | ESP32-S2 and ESP32-S3 runs recording the board, commit, ESP-IDF version, and sdkconfig-selected primary console; typed `help` and `version` commands accepted, no repeated prompt while idle, and correct input/output line endings on that console | OPEN — no native ESP-IDF board was flashed or tested; Arduino HIL and CI builds do not establish console runtime behavior |
 | Address, POR, and pin map | Intended addresses `0x20`-`0x27`; true-POR writable defaults; released/high and pulled-low observations for all 16 inputs | PARTIAL — `0x20` ACK/read evidence only |
 | Output safety | Current-limited all-pin output observations, masked writes, and logic-analyzer proof that latches are preloaded before direction changes | PARTIAL — API/readback and sweep/walk only |
 | Polarity and INT | Polarity observations; Port 0, Port 1, and both-port INT assertion/clear captures; application re-read/debounce behavior | PARTIAL — register/read stress only |

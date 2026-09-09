@@ -7,6 +7,7 @@ and API contracts live in Doxygen comments under `include/PCA9555/`.
 
 ## Documents
 
+- [Code audit](https://github.com/janhavelka/PCA9555/blob/main/docs/CODE_AUDIT.md): internal engineering record, excluded from the shipped package and Doxygen.
 - [Register reference](register_reference.md): PCA9555 register map, pair
   auto-increment behavior, direct access rules, interrupt notes, and errata
   summary.

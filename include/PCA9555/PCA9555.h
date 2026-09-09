@@ -438,6 +438,9 @@ class PCA9555 {
   uint8_t uncertainPairs() const { return _uncertainPairs; }
 
  private:
+  // Native regression access for internal preconditions unreachable via the API.
+  friend struct PCA9555TestAccess;
+
   struct OperationSlot {
     bool active = false;
     bool resultPending = false;

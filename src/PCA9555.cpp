@@ -22,6 +22,12 @@ bool validDirection(Direction direction) {
 
 bool validRegister(uint8_t reg) { return reg <= cmd::REG_CONFIG_PORT_1; }
 
+// Field-selecting helpers require exactly one known pair, never a pair mask.
+constexpr bool singleWritablePair(uint8_t pair) {
+  return pair == PAIR_OUTPUTS || pair == PAIR_POLARITY ||
+         pair == PAIR_DIRECTIONS;
+}
+
 bool inputRegister(uint8_t reg) {
   return reg == cmd::REG_INPUT_PORT_0 || reg == cmd::REG_INPUT_PORT_1;
 }
@@ -265,6 +271,7 @@ void PCA9555::_invalidateShadowPair(uint8_t pair) {
 }
 
 void PCA9555::_establishShadowPair(uint8_t pair, uint16_t value) {
+  if (!singleWritablePair(pair)) return;
   if (pair == PAIR_OUTPUTS) _shadow.outputs = value;
   if (pair == PAIR_POLARITY) _shadow.polarity = value;
   if (pair == PAIR_DIRECTIONS) _shadow.directions = value;
@@ -277,6 +284,7 @@ void PCA9555::_establishShadowPair(uint8_t pair, uint16_t value) {
 }
 
 uint16_t PCA9555::_shadowValue(uint8_t pair) const {
+  if (!singleWritablePair(pair)) return 0U;
   if (pair == PAIR_OUTPUTS) return _shadow.outputs;
   if (pair == PAIR_POLARITY) return _shadow.polarity;
   if (pair == PAIR_DIRECTIONS) return _shadow.directions;
@@ -285,6 +293,7 @@ uint16_t PCA9555::_shadowValue(uint8_t pair) const {
 
 void PCA9555::_recordPairObservation(uint8_t pair, uint16_t value,
                                      uint32_t nowMs) {
+  if (pair != PAIR_INPUTS && !singleWritablePair(pair)) return;
   if (pair == PAIR_INPUTS) _observed.inputs = value;
   if (pair == PAIR_OUTPUTS) _observed.registers.outputs = value;
   if (pair == PAIR_POLARITY) _observed.registers.polarity = value;

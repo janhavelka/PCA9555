@@ -11,6 +11,32 @@
 #include "PCA9555/PCA9555.h"
 #include "common/I2cTransport.h"
 
+namespace PCA9555 {
+
+struct PCA9555TestAccess {
+  static void checkInvalidPair(uint8_t pair) {
+    PCA9555 device;
+    device._invalidateShadowPair(PAIR_ALL_WRITABLE);
+    device._observed.mismatchPairs = PAIR_ALL_WRITABLE;
+    const RegisterImage before = device._shadow;
+    device._establishShadowPair(pair, 0x1234U);
+    TEST_ASSERT_EQUAL_HEX8(PAIR_NONE, device.shadowValidPairs());
+    TEST_ASSERT_EQUAL_HEX8(PAIR_ALL_WRITABLE, device.uncertainPairs());
+    TEST_ASSERT_EQUAL_HEX16(before.outputs, device._shadow.outputs);
+    TEST_ASSERT_EQUAL_HEX16(before.polarity, device._shadow.polarity);
+    TEST_ASSERT_EQUAL_HEX16(before.directions, device._shadow.directions);
+    TEST_ASSERT_EQUAL_HEX16(0U, device._shadowValue(pair));
+
+    device._recordPairObservation(pair, 0x1234U, 100U);
+    TEST_ASSERT_EQUAL_HEX8(PAIR_NONE, device._observed.validPairs);
+    TEST_ASSERT_EQUAL_HEX8(PAIR_ALL_WRITABLE, device._observed.mismatchPairs);
+    TEST_ASSERT_EQUAL_HEX8(PAIR_ALL_WRITABLE, device._observed.uncertainPairs);
+    TEST_ASSERT_EQUAL_UINT32(0U, device._observed.observedAtMs);
+  }
+};
+
+}  // namespace PCA9555
+
 using namespace PCA9555;
 
 namespace {
@@ -339,6 +365,14 @@ uint8_t allWritableExcept(uint8_t pair) {
 
 void setUp() {}
 void tearDown() {}
+
+void test_single_pair_helpers_reject_masks_without_changing_evidence() {
+  const uint8_t invalidPairs[] = {PAIR_ALL_WRITABLE, PAIR_ALL,
+                                PAIR_OUTPUTS | PAIR_POLARITY, PAIR_NONE, 0x80U};
+  for (uint8_t pair : invalidPairs) {
+    PCA9555TestAccess::checkInvalidPair(pair);
+  }
+}
 
 void test_status_and_typed_value_helpers() {
   constexpr PortData ports = PortData::fromCombined(0xA55AU);
@@ -2639,6 +2673,7 @@ void test_wire_init_reports_begin_failure() {
 int main() {
   UNITY_BEGIN();
 
+  RUN_TEST(test_single_pair_helpers_reject_masks_without_changing_evidence);
   RUN_TEST(test_status_and_typed_value_helpers);
   RUN_TEST(test_bind_and_begin_are_passive_for_all_valid_addresses);
   RUN_TEST(test_invalid_rebind_preserves_live_binding_without_io);

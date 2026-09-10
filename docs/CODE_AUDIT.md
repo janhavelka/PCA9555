@@ -1,8 +1,10 @@
 # PCA9555 Code Audit Resolution Report
 
-Date: 2026-08-30
+Date: 2026-09-09
 
 Branch reviewed: `main`
+
+Release tree reflected: `29632b2` (`v3.0.3`)
 
 Original audit baseline: `b6ed943` (`v3.0.2`)
 
@@ -197,7 +199,7 @@ cleanup, near-deadline call count, and retained-result discovery.
 
 | Proposal | Decision |
 | --- | --- |
-| R1 | **Deferred.** Replacing explicit internal field selection with nullable pointer accessors adds indirection without a current caller needing mask-generic behavior. The existing internal callers pass one pair bit. |
+| R1 | **Partially addressed in v3.0.3.** `singleWritablePair()` guards the field-selecting helpers against multi-bit masks and unknown pair bits; `test_single_pair_helpers_reject_masks_without_changing_evidence` covers rejection without corrupting validity or reconciliation evidence. The accessor refactor remains deferred: nullable pointer accessors add indirection without a current caller needing mask-generic behavior. The existing internal callers pass one pair bit. |
 | R2 | **Applied in the safer direction.** `_readPair()` and `_writePair()` now derive the pair from the register using the existing register owner, rather than introducing a second pair-to-register map. This removes contradictory arguments without duplicating register knowledge. |
 | R3 | **Deferred.** The six operation phases have materially different evidence and terminal transitions. A compact table would reduce lines but obscure safety sequencing and cleanup behavior. |
 | R4 | **Applied.** Shared `portRegister()`, `withPort()`, and `portValue()` helpers replace repeated byte splices and register ternaries. |
@@ -220,9 +222,25 @@ cleanup, near-deadline call count, and retained-result discovery.
   read-only and bounded, so neither requires mutation confirmation. The
   mutating `stress_mix` command remains guarded.
 
+## v3.0.3 release
+
+Released on 2026-09-09 at `29632b2`, after the audit follow-up:
+
+- Added the single-pair guard and native regression coverage described in R1.
+- Updated `library.json` to 3.0.3 and synchronized `idf_component.yml`,
+  `include/PCA9555/Version.h`, and `Doxyfile` through
+  `scripts/generate_version.py`; updated the README version and install pin.
+- Indexed `docs/CODE_AUDIT.md` in `docs/README.md` as an internal engineering
+  record, excluded from the shipped package and Doxygen.
+- Added the native ESP-IDF interactive console gate and a **NOT RUN** evidence
+  row in `docs/hardware_validation.md`. The gate remains **OPEN** for ESP32-S2
+  and ESP32-S3; no board was flashed and no console hardware validation was
+  performed.
+
 ## Validation
 
-- Native PlatformIO/Unity suite: **73/73 passed**.
+- Native PlatformIO/Unity suite: **74/74 passed**, rerun on 2026-09-09 with
+  `.\scripts\pio.cmd test -e native`.
 - Version generation consistency: passed.
 - Core framework/timing guard: passed.
 - Arduino CLI contract: passed.
@@ -234,7 +252,7 @@ cleanup, near-deadline call count, and retained-result discovery.
 - Arduino ESP32-S2 and ESP32-S3 builds through `scripts/pio.cmd`: passed.
 - Strict host C++17 syntax/warning compile, including conversion and shadow
   warnings: passed in the independent core review.
-- Synchronized implementation commit `9cf1b22`: [GitHub CI run 33321769399](https://github.com/janhavelka/PCA9555/actions/runs/33321769399)
+- Release commit `29632b2`: [GitHub CI run 34326224229](https://github.com/janhavelka/PCA9555/actions/runs/34326224229)
   passed all six jobs, including native ESP-IDF example builds for ESP32-S2 and
   ESP32-S3.
 - Native ESP-IDF target build was not available locally because `idf.py` is not

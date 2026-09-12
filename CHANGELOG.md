@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Clarified the published release status and corrected changelog comparisons
+  to use the latest published release as their baseline.
+
 ## [3.0.3] - 2026-09-09
 
 ### Fixed
@@ -394,7 +401,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Overlong CLI input lines are discarded instead of executing truncated commands.
 - Example helper parsers reject malformed numeric input and zero-length destination buffers instead of coercing invalid values.
 
-[Unreleased]: https://github.com/janhavelka/PCA9555/compare/v3.0.2...HEAD
+[Unreleased]: https://github.com/janhavelka/PCA9555/compare/v3.0.3...HEAD
+[3.0.3]: https://github.com/janhavelka/PCA9555/compare/v3.0.2...v3.0.3
 [3.0.2]: https://github.com/janhavelka/PCA9555/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/janhavelka/PCA9555/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/janhavelka/PCA9555/compare/v2.0.0...v3.0.0

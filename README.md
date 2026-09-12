@@ -5,7 +5,8 @@ library owns the chip register protocol. The application owns the I2C bus,
 serialization, scheduling, retry policy, bus recovery, and device health
 policy.
 
-Version 3.0.3 is a pre-production candidate. Native tests and compile checks are
+The latest published release is **v3.0.3**. Subsequent changes belong to
+[Unreleased](CHANGELOG.md#unreleased). Native tests and compile checks are
 necessary, but real-board electrical, interrupt, brownout, and shared-bus
 validation are still required before a field-readiness claim.
 

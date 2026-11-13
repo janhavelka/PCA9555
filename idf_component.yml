@@ -6,7 +6,7 @@ repository: "https://github.com/janhavelka/PCA9555.git"
 documentation: "https://github.com/janhavelka/PCA9555#readme"
 issues: "https://github.com/janhavelka/PCA9555/issues"
 maintainers:
-  - "Jan Havelka <info@thymos.cz>"
+  - "Jan Havelka (THYMOS Solution s.r.o.) <info@thymos.cz>"
 tags:
   - pca9555
   - io-expander

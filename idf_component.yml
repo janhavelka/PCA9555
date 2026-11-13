@@ -1,7 +1,7 @@
 version: "3.0.3"
 description: "Production-oriented, framework-neutral PCA9555 16-bit I/O expander driver."
 license: "MIT"
-url: "https://www.thymos.cz"
+url: "https://github.com/janhavelka/PCA9555"
 repository: "https://github.com/janhavelka/PCA9555.git"
 documentation: "https://github.com/janhavelka/PCA9555#readme"
 issues: "https://github.com/janhavelka/PCA9555/issues"
